@@ -16,6 +16,8 @@ public class NewsRefreshSettings
 {
     public int IntervalMinutes { get; set; } = 30;
     public bool Enabled { get; set; } = true;
+    public bool EnableTianApiNews { get; set; } = true;  // 是否启用天行数据新闻
+    public int TianApiNewsInterval { get; set; } = 15;   // 天行数据新闻刷新间隔（分钟）
 }
 
 public class NewsConfigService
@@ -84,6 +86,9 @@ public class NewsBackgroundService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("新闻定时任务开始执行");
+        
+        // 记录上次天行数据新闻刷新时间
+        DateTime lastTianApiNewsRefreshTime = DateTime.MinValue;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -94,14 +99,36 @@ public class NewsBackgroundService : BackgroundService
             {
                 try
                 {
-                    _logger.LogInformation("开始定时刷新金融消息...");
+                    var settings = await GetCurrentSettings();
+                    var now = DateTime.Now;
+                    bool shouldRefreshTianApi = settings.EnableTianApiNews && 
+                        (now - lastTianApiNewsRefreshTime).TotalMinutes >= settings.TianApiNewsInterval;
                     
-                    using var scope = _serviceProvider.CreateScope();
-                    var newsService = scope.ServiceProvider.GetRequiredService<INewsService>();
+                    if (shouldRefreshTianApi)
+                    {
+                        _logger.LogInformation("开始定时刷新天行数据财经新闻...");
+                        
+                        using var scope = _serviceProvider.CreateScope();
+                        var newsService = scope.ServiceProvider.GetRequiredService<INewsService>();
+                        
+                        // 只调用天行数据API
+                        await ((NewsService)newsService).FetchTianApiNewsOnlyAsync();
+                        
+                        lastTianApiNewsRefreshTime = now;
+                        _logger.LogInformation("天行数据财经新闻定时刷新完成，下次刷新将在 {Interval} 分钟后", 
+                            settings.TianApiNewsInterval);
+                    }
                     
-                    await newsService.FetchNewsAsync();
+                    // 常规新闻刷新
+                    _logger.LogInformation("开始定时刷新所有金融消息...");
                     
-                    _logger.LogInformation("金融消息定时刷新完成，下次刷新将在 {Interval} 分钟后", _refreshInterval.TotalMinutes);
+                    using (var scope = _serviceProvider.CreateScope())
+                    {
+                        var newsService = scope.ServiceProvider.GetRequiredService<INewsService>();
+                        await newsService.FetchNewsAsync();
+                    }
+                    
+                    _logger.LogInformation("所有金融消息定时刷新完成，下次刷新将在 {Interval} 分钟后", _refreshInterval.TotalMinutes);
                 }
                 catch (Exception ex)
                 {
@@ -116,6 +143,13 @@ public class NewsBackgroundService : BackgroundService
             // 等待指定的时间间隔
             await Task.Delay(_refreshInterval, stoppingToken);
         }
+    }
+    
+    private async Task<NewsRefreshSettings> GetCurrentSettings()
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var configService = scope.ServiceProvider.GetRequiredService<NewsConfigService>();
+        return await configService.GetSettingsAsync();
     }
     
     private async Task UpdateSettingsFromConfigService()
@@ -169,16 +203,229 @@ public class NewsService : INewsService{
     {
         try
         {
+            _logger.LogInformation("开始抓取金融消息");
+            
+            // 从天行数据抓取财经新闻
+            await FetchTianApiNewsAsync();
+            
             // 从财联社抓取新闻（示例）
             await FetchCailianNewsAsync();
             
             // 从新浪财经抓取新闻
             await FetchSinaNewsAsync();
+            
+            _logger.LogInformation("金融消息抓取完成");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "抓取新闻失败");
         }
+    }
+    
+    // 只从天行数据抓取财经新闻（用于定时任务）
+    public async Task FetchTianApiNewsOnlyAsync()
+    {
+        try
+        {
+            _logger.LogInformation("开始单独抓取天行数据财经新闻");
+            await FetchTianApiNewsAsync();
+            _logger.LogInformation("天行数据财经新闻抓取完成");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "单独抓取天行数据财经新闻失败: {Message}", ex.Message);
+        }
+    }
+    
+    // 保存新闻到数据库
+    private async Task SaveNewsToDatabase(List<FinancialNews> newsList)
+    {
+        int addedCount = 0;
+        foreach (var news in newsList)
+        {
+            var existing = await _context.FinancialNews
+                .FirstOrDefaultAsync(n => n.Title == news.Title && n.Source == news.Source);
+                
+            if (existing == null)
+            {
+                await _context.FinancialNews.AddAsync(news);
+                addedCount++;
+            }
+        }
+        
+        if (addedCount > 0)
+        {
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("成功保存 {Count} 条新闻到数据库", addedCount);
+        }
+        else
+        {
+            _logger.LogInformation("没有新的新闻需要保存到数据库");
+        }
+    }
+    
+    // 从天行数据抓取财经新闻
+    private async Task FetchTianApiNewsAsync()
+    {
+        try
+        {
+            _logger.LogInformation("从天行数据抓取财经新闻");
+            
+            // 天行数据API接口地址和密钥（使用已申请的key）
+            var apiUrl = "https://apis.tianapi.com/caijing/index";
+            var apiKey = "4b5b0d8e6f0c3e9a2d1b8c7f6e5d4c3b"; // 更新为新的key
+            
+            // 构建请求参数
+            var requestUrl = $"{apiUrl}?key={apiKey}&num=50";
+            
+            _logger.LogInformation("正在请求天行数据API: {Url}", requestUrl);
+            
+            var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            
+            // 设置30秒超时
+            _httpClient.Timeout = TimeSpan.FromSeconds(30);
+            var response = await _httpClient.SendAsync(request);
+            
+            // 记录响应状态码
+            _logger.LogInformation("天行数据API响应状态码: {StatusCode}", response.StatusCode);
+            
+            // 不抛出异常，而是记录错误响应
+            var jsonContent = await response.Content.ReadAsStringAsync();
+            
+            // 记录响应内容长度和预览
+            _logger.LogInformation("天行数据API响应内容长度: {Length}字节", jsonContent?.Length ?? 0);
+            if (!string.IsNullOrEmpty(jsonContent) && jsonContent.Length > 0)
+            {
+                var previewLength = Math.Min(jsonContent.Length, 100);
+                _logger.LogInformation("天行数据API响应预览: {Preview}...", jsonContent.Substring(0, previewLength));
+            }
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("天行数据API请求失败: {StatusCode}, 错误内容: {Content}", response.StatusCode, jsonContent);
+                return;
+            }
+            
+            var newsList = ParseTianApiNewsJson(jsonContent);
+            
+            _logger.LogInformation("从天行数据获取到 {Count} 条财经新闻", newsList.Count);
+            
+            await SaveNewsToDatabase(newsList);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "从天行数据抓取财经新闻失败");
+        }
+    }
+    
+    // 解析天行数据API返回的JSON
+    private List<FinancialNews> ParseTianApiNewsJson(string jsonContent)
+    {
+        var newsList = new List<FinancialNews>();
+        
+        try
+        {
+            _logger.LogInformation("开始解析天行数据JSON: {Length}字节", jsonContent?.Length ?? 0);
+            
+            using var document = JsonDocument.Parse(jsonContent);
+            var root = document.RootElement;
+            
+            // 记录API返回的状态码
+            if (root.TryGetProperty("code", out var codeElement))
+            {
+                _logger.LogInformation("天行数据API返回状态码: {Code}", codeElement.GetInt32());
+            }
+            
+            // 记录API返回的消息
+            if (root.TryGetProperty("msg", out var msgElement))
+            {
+                _logger.LogInformation("天行数据API返回消息: {Message}", msgElement.GetString());
+            }
+            
+            if (root.TryGetProperty("code", out var code) && 
+                code.GetInt32() == 200 &&
+                root.TryGetProperty("result", out var result) && 
+                result.TryGetProperty("list", out var list))
+            {
+                _logger.LogInformation("成功获取天行数据新闻列表");
+                
+                foreach (var item in list.EnumerateArray())
+                {
+                    try
+                    {
+                        string title = "";
+                        string url = "";
+                        string timeStr = "";
+                        string source = "天行数据";
+                        string description = "";
+                        
+                        if (item.TryGetProperty("title", out var titleElement))
+                            title = titleElement.GetString()?.Trim() ?? "";
+                            
+                        if (item.TryGetProperty("url", out var urlElement))
+                            url = urlElement.GetString() ?? "";
+                            
+                        if (item.TryGetProperty("ctime", out var timeElement))
+                            timeStr = timeElement.GetString() ?? "";
+                            
+                        if (item.TryGetProperty("source", out var sourceElement))
+                            source = sourceElement.GetString() ?? "天行数据";
+                            
+                        if (item.TryGetProperty("description", out var descElement))
+                            description = descElement.GetString() ?? "";
+                        
+                        if (!string.IsNullOrEmpty(title))
+                        {
+                            // 解析时间
+                            var publishTime = DateTime.Now;
+                            if (!string.IsNullOrEmpty(timeStr))
+                            {
+                                try
+                                {
+                                    publishTime = DateTime.Parse(timeStr);
+                                }
+                                catch
+                                {
+                                    _logger.LogWarning("无法解析时间: {TimeStr}", timeStr);
+                                }
+                            }
+                            
+                            var content = !string.IsNullOrEmpty(description) ? description : title;
+                            
+                            var news = new FinancialNews
+                            {
+                                Title = title,
+                                Content = content,
+                                Source = source,
+                                Url = url,
+                                PublishTime = publishTime,
+                                FetchTime = DateTime.Now,
+                                StockCodes = ExtractStockCodesFromTitle(title)
+                            };
+                            
+                            newsList.Add(news);
+                        }
+                    }
+                    catch (Exception itemEx)
+                    {
+                        _logger.LogError(itemEx, "处理单条天行数据新闻时出错");
+                    }
+                }
+                
+                _logger.LogInformation("成功解析 {Count} 条天行数据新闻", newsList.Count);
+            }
+            else
+            {
+                _logger.LogWarning("天行数据API返回格式不符合预期");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "解析天行数据JSON数据失败");
+        }
+        
+        return newsList;
     }
 
     public async Task<List<FinancialNews>> SearchNewsAsync(string keyword)

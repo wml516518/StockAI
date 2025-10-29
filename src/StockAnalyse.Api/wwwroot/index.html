@@ -865,10 +865,16 @@
         // 加载新闻
         async function loadNews() {
             try {
-                const response = await fetch(`${API_BASE}/api/news/latest?count=20`);
+                document.getElementById('newsList').innerHTML = '<div class="loading">加载中...</div>';
+                const response = await fetch(`${API_BASE}/api/news/latest?count=50`);
                 const news = await response.json();
                 
-                displayNews(news);
+                if (news && news.length > 0) {
+                    displayNews(news);
+                } else {
+                    // 如果没有新闻数据，尝试自动抓取
+                    await fetchLatestNews();
+                }
             } catch (error) {
                 document.getElementById('newsList').innerHTML = '<p>加载失败：' + error.message + '</p>';
             }
@@ -880,10 +886,11 @@
             if (news && news.length > 0) {
                 news.forEach(item => {
                     const stockCodes = item.stockCodes ? item.stockCodes.join(', ') : '';
+                    const content = item.content || item.title;
                     html += `
                         <div style="padding: 15px; border-bottom: 1px solid #eee; cursor: pointer;" onclick="openNewsDetail('${item.id}')">
                             <strong style="color: #667eea; font-size: 1.1em;">${item.title}</strong>
-                            <p style="color: #666; margin-top: 8px; font-size: 0.9em; line-height: 1.4;">${item.content.substring(0, 120)}...</p>
+                            <p style="color: #666; margin-top: 8px; font-size: 0.9em; line-height: 1.4;">${content.substring(0, 120)}${content.length > 120 ? '...' : ''}</p>
                             <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
                                 <span style="color: #999; font-size: 0.8em;">
                                     📰 ${item.source} · ${new Date(item.publishTime).toLocaleString()}
@@ -923,7 +930,7 @@
         // 抓取最新新闻
         async function fetchLatestNews() {
             try {
-                document.getElementById('newsList').innerHTML = '<div class="loading">正在从新浪财经抓取最新新闻...</div>';
+                document.getElementById('newsList').innerHTML = '<div class="loading">正在从天行数据和新浪财经抓取最新新闻...</div>';
                 
                 const response = await fetch(`${API_BASE}/api/news/fetch`, {
                     method: 'POST'
