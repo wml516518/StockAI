@@ -273,7 +273,7 @@ public class NewsService : INewsService{
             
             // 天行数据API接口地址和密钥（使用已申请的key）
             var apiUrl = "https://apis.tianapi.com/caijing/index";
-            var apiKey = "4b5b0d8e6f0c3e9a2d1b8c7f6e5d4c3b"; // 更新为新的key
+            var apiKey = "267b24bc0090305f6dcc6634e4e17fd4"; // 更新为新的key
             
             // 构建请求参数
             var requestUrl = $"{apiUrl}?key={apiKey}&num=50";
