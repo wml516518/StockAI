@@ -1208,7 +1208,7 @@
                                     }
                                     
                                     const profitPercent = costInfoEl.textContent.match(/\(([^)]+)\)$/);
-                                    if (stock.profitLossPercent !== undefined) {
+                                    if (stock.profitLossPercent !== undefined && profitStrong) {
                                         const parent = profitStrong.parentElement;
                                         if (parent) {
                                             parent.textContent = parent.textContent.replace(/\([^)]+\)/, `(${stock.profitLossPercent.toFixed(2)}%)`);
