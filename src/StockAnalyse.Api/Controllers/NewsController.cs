@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
+using Microsoft.Extensions.Logging;
+using System;
+using StockAnalyse.Api.Services;
 
 namespace StockAnalyse.Api.Controllers;
 
@@ -10,11 +13,13 @@ public class NewsController : ControllerBase
 {
     private readonly INewsService _newsService;
     private readonly ILogger<NewsController> _logger;
+    private readonly IServiceProvider _serviceProvider;
 
-    public NewsController(INewsService newsService, ILogger<NewsController> logger)
+    public NewsController(INewsService newsService, ILogger<NewsController> logger, IServiceProvider serviceProvider)
     {
         _newsService = newsService;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     /// <summary>
@@ -60,6 +65,36 @@ public class NewsController : ControllerBase
     {
         await _newsService.FetchNewsAsync();
         return Ok(new { message = "新闻抓取任务已启动" });
+    }
+
+    /// <summary>
+    /// 获取新闻刷新设置
+    /// </summary>
+    [HttpGet("refresh-settings")]
+    public async Task<ActionResult<NewsRefreshSettings>> GetRefreshSettings()
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var configService = scope.ServiceProvider.GetRequiredService<NewsConfigService>();
+        
+        var settings = await configService.GetSettingsAsync();
+        return Ok(settings);
+    }
+
+    /// <summary>
+    /// 更新新闻刷新设置
+    /// </summary>
+    [HttpPost("refresh-settings")]
+    public async Task<ActionResult> UpdateRefreshSettings([FromBody] NewsRefreshSettings settings)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var configService = scope.ServiceProvider.GetRequiredService<NewsConfigService>();
+        
+        await configService.SaveSettingsAsync(settings);
+        
+        _logger.LogInformation("新闻刷新设置已更新: 间隔={IntervalMinutes}分钟, 启用={Enabled}", 
+            settings.IntervalMinutes, settings.Enabled);
+        
+        return Ok(new { message = "设置已保存" });
     }
 }
 

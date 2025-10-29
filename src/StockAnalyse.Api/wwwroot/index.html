@@ -433,6 +433,26 @@
                         <input type="number" id="minPE" placeholder="最低PE">
                         <input type="number" id="maxPE" placeholder="最高PE" style="margin-top: 5px;">
                     </div>
+                    <div class="form-group">
+                        <label>市净率（PB）</label>
+                        <input type="number" id="minPB" placeholder="最低PB">
+                        <input type="number" id="maxPB" placeholder="最高PB" style="margin-top: 5px;">
+                    </div>
+                    <div class="form-group">
+                        <label>成交量（手）</label>
+                        <input type="number" id="minVolume" placeholder="最低成交量">
+                        <input type="number" id="maxVolume" placeholder="最高成交量" style="margin-top: 5px;">
+                    </div>
+                    <div class="form-group">
+                        <label>市值区间（亿元）</label>
+                        <input type="number" id="minMarketValue" placeholder="最低市值">
+                        <input type="number" id="maxMarketValue" placeholder="最高市值" style="margin-top: 5px;">
+                    </div>
+                    <div class="form-group">
+                        <label>股息率（%）</label>
+                        <input type="number" id="minDividendYield" placeholder="最低股息率">
+                        <input type="number" id="maxDividendYield" placeholder="最高股息率" style="margin-top: 5px;">
+                    </div>
                 </div>
                 <button class="btn" onclick="screenStocks()">开始选股</button>
             </div>
@@ -447,6 +467,11 @@
         <div id="news" class="content">
             <div class="card">
                 <h3>最新金融新闻</h3>
+                <div class="form-group" style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <input type="text" id="newsSearch" placeholder="搜索新闻关键词" style="flex: 1;">
+                    <button class="btn" onclick="searchNews()">🔍 搜索</button>
+                    <button class="btn" onclick="fetchLatestNews()">🔄 抓取最新新闻</button>
+                </div>
                 <div id="newsList" class="loading">加载中...</div>
             </div>
         </div>
@@ -496,7 +521,7 @@
         <!-- 设置 -->
         <div id="settings" class="content">
             <div class="card">
-                <h3>自动刷新设置</h3>
+                <h3>股票行情自动刷新设置</h3>
                 <div class="form-group">
                     <label>刷新间隔（秒）</label>
                     <input type="number" id="autoRefreshInterval" min="0.5" max="60" step="0.5" value="3">
@@ -511,6 +536,27 @@
                     </label>
                 </div>
                 <button class="btn" onclick="saveSettings()">💾 保存设置</button>
+            </div>
+            
+            <div class="card">
+                <h3>金融消息定时刷新设置</h3>
+                <div class="form-group">
+                    <label>新闻刷新间隔（分钟）</label>
+                    <input type="number" id="newsRefreshInterval" min="5" max="1440" step="5" value="30">
+                    <p style="font-size: 0.85em; color: #666; margin-top: 5px;">
+                        推荐设置：5-15分钟（高频） | 30-60分钟（常规） | 120分钟以上（低频）
+                    </p>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enableNewsAutoRefresh" checked>
+                        启用新闻自动刷新
+                    </label>
+                </div>
+                <div class="form-group">
+                    <button class="btn" onclick="updateNewsRefreshSettings()">💾 更新新闻刷新设置</button>
+                    <button class="btn" onclick="forceRefreshNews()" style="margin-left: 10px;">🔄 立即刷新新闻</button>
+                </div>
             </div>
             
             <div class="card">
@@ -615,6 +661,9 @@
                     break;
                 case 'alert':
                     loadAlerts();
+                    break;
+                case 'settings':
+                    loadNewsRefreshSettings();
                     break;
             }
         }
@@ -766,7 +815,15 @@
                 maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
                 minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
                 minPE: parseFloat(document.getElementById('minPE').value) || null,
-                maxPE: parseFloat(document.getElementById('maxPE').value) || null
+                maxPE: parseFloat(document.getElementById('maxPE').value) || null,
+                minPB: parseFloat(document.getElementById('minPB').value) || null,
+                maxPB: parseFloat(document.getElementById('maxPB').value) || null,
+                minVolume: parseFloat(document.getElementById('minVolume').value) || null,
+                maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
+                minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
+                maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
+                minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
+                maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null
             };
             
             try {
@@ -779,7 +836,7 @@
                 
                 const stocks = await response.json();
                 
-                let html = `<p>找到 ${stocks.length} 只股票</p><table><thead><tr><th>代码</th><th>名称</th><th>当前价</th><th>涨跌幅</th><th>换手率</th><th>PE</th></tr></thead><tbody>`;
+                let html = `<p>找到 ${stocks.length} 只股票</p><table><thead><tr><th>代码</th><th>名称</th><th>当前价</th><th>涨跌幅</th><th>换手率</th><th>PE</th><th>PB</th><th>成交量</th></tr></thead><tbody>`;
                 
                 stocks.forEach(stock => {
                     html += `
@@ -791,7 +848,9 @@
                                 ${stock.changePercent.toFixed(2)}%
                             </td>
                             <td>${stock.turnoverRate.toFixed(2)}%</td>
-                            <td>${stock.pe.toFixed(2)}</td>
+                            <td>${stock.pe?.toFixed(2) || '-'}</td>
+                            <td>${stock.pb?.toFixed(2) || '-'}</td>
+                            <td>${(stock.volume / 10000).toFixed(2)}万手</td>
                         </tr>
                     `;
                 });
@@ -809,20 +868,149 @@
                 const response = await fetch(`${API_BASE}/api/news/latest?count=20`);
                 const news = await response.json();
                 
-                let html = '';
+                displayNews(news);
+            } catch (error) {
+                document.getElementById('newsList').innerHTML = '<p>加载失败：' + error.message + '</p>';
+            }
+        }
+        
+        // 显示新闻列表
+        function displayNews(news) {
+            let html = '';
+            if (news && news.length > 0) {
                 news.forEach(item => {
+                    const stockCodes = item.stockCodes ? item.stockCodes.join(', ') : '';
                     html += `
-                        <div style="padding: 15px; border-bottom: 1px solid #eee; cursor: pointer;">
-                            <strong style="color: #667eea;">${item.title}</strong>
-                            <p style="color: #666; margin-top: 5px; font-size: 0.9em;">${item.content.substring(0, 100)}...</p>
-                            <span style="color: #999; font-size: 0.8em;">${item.source} · ${new Date(item.publishTime).toLocaleString()}</span>
+                        <div style="padding: 15px; border-bottom: 1px solid #eee; cursor: pointer;" onclick="openNewsDetail('${item.id}')">
+                            <strong style="color: #667eea; font-size: 1.1em;">${item.title}</strong>
+                            <p style="color: #666; margin-top: 8px; font-size: 0.9em; line-height: 1.4;">${item.content.substring(0, 120)}...</p>
+                            <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
+                                <span style="color: #999; font-size: 0.8em;">
+                                    📰 ${item.source} · ${new Date(item.publishTime).toLocaleString()}
+                                    ${stockCodes ? ' · 📈 ' + stockCodes : ''}
+                                </span>
+                                <span style="color: #999; font-size: 0.8em;">👁️ ${item.viewCount || 0}</span>
+                            </div>
                         </div>
                     `;
                 });
+            } else {
+                html = '<p style="padding: 20px; text-align: center; color: #999;">暂无新闻数据，请点击"抓取最新新闻"按钮获取最新金融消息</p>';
+            }
+            
+            document.getElementById('newsList').innerHTML = html;
+        }
+        
+        // 搜索新闻
+        async function searchNews() {
+            const keyword = document.getElementById('newsSearch').value.trim();
+            if (!keyword) {
+                alert('请输入搜索关键词');
+                return;
+            }
+            
+            try {
+                document.getElementById('newsList').innerHTML = '<div class="loading">搜索中...</div>';
+                const response = await fetch(`${API_BASE}/api/news/search?keyword=${encodeURIComponent(keyword)}`);
+                const news = await response.json();
                 
-                document.getElementById('newsList').innerHTML = html || '<p>暂无新闻</p>';
+                displayNews(news);
             } catch (error) {
-                document.getElementById('newsList').innerHTML = '<p>加载失败：' + error.message + '</p>';
+                document.getElementById('newsList').innerHTML = '<p>搜索失败：' + error.message + '</p>';
+            }
+        }
+        
+        // 抓取最新新闻
+        async function fetchLatestNews() {
+            try {
+                document.getElementById('newsList').innerHTML = '<div class="loading">正在从新浪财经抓取最新新闻...</div>';
+                
+                const response = await fetch(`${API_BASE}/api/news/fetch`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    alert(result.message || '新闻抓取任务已启动，请稍后刷新查看');
+                    
+                    // 等待2秒后刷新新闻列表
+                    setTimeout(() => {
+                        loadNews();
+                    }, 2000);
+                } else {
+                    throw new Error(await response.text());
+                }
+            } catch (error) {
+                document.getElementById('newsList').innerHTML = '<p>抓取失败：' + error.message + '</p>';
+            }
+        }
+        
+        // 打开新闻详情（占位函数，可根据需要扩展）
+        function openNewsDetail(newsId) {
+            alert('新闻详情功能待开发，新闻ID: ' + newsId);
+            // 这里可以扩展为打开模态框显示完整新闻内容
+        }
+        
+        // 更新新闻刷新设置
+        async function updateNewsRefreshSettings() {
+            const intervalMinutes = document.getElementById('newsRefreshInterval').value;
+            const enabled = document.getElementById('enableNewsAutoRefresh').checked;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/news/refresh-settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        intervalMinutes: parseInt(intervalMinutes),
+                        enabled: enabled
+                    })
+                });
+                
+                if (response.ok) {
+                    alert('新闻刷新设置已更新！');
+                } else {
+                    throw new Error(await response.text());
+                }
+            } catch (error) {
+                alert('更新失败：' + error.message);
+            }
+        }
+        
+        // 强制立即刷新新闻
+        async function forceRefreshNews() {
+            try {
+                const response = await fetch(`${API_BASE}/api/news/fetch`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    alert('新闻刷新任务已启动，请稍后查看新闻页面');
+                    
+                    // 等待3秒后刷新新闻列表
+                    setTimeout(() => {
+                        if (document.getElementById('news').classList.contains('active')) {
+                            loadNews();
+                        }
+                    }, 3000);
+                } else {
+                    throw new Error(await response.text());
+                }
+            } catch (error) {
+                alert('刷新失败：' + error.message);
+            }
+        }
+        
+        // 加载新闻刷新设置
+        async function loadNewsRefreshSettings() {
+            try {
+                const response = await fetch(`${API_BASE}/api/news/refresh-settings`);
+                if (response.ok) {
+                    const settings = await response.json();
+                    document.getElementById('newsRefreshInterval').value = settings.intervalMinutes || 30;
+                    document.getElementById('enableNewsAutoRefresh').checked = settings.enabled !== false;
+                }
+            } catch (error) {
+                console.error('加载新闻刷新设置失败：', error);
             }
         }
         

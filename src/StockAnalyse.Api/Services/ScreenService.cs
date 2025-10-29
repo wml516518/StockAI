@@ -56,6 +56,16 @@ public class ScreenService : IScreenService
             query = query.Where(s => s.TurnoverRate <= criteria.MaxTurnoverRate.Value);
         }
         
+        // 成交量条件
+        if (criteria.MinVolume.HasValue)
+        {
+            query = query.Where(s => s.Volume >= criteria.MinVolume.Value);
+        }
+        if (criteria.MaxVolume.HasValue)
+        {
+            query = query.Where(s => s.Volume <= criteria.MaxVolume.Value);
+        }
+        
         // PE条件
         if (criteria.MinPE.HasValue)
         {
@@ -87,6 +97,23 @@ public class ScreenService : IScreenService
         // }
         
         var results = await query.ToListAsync();
+        
+        // 后置过滤条件（需要计算的指标）
+        results = results.Where(stock => {
+            // 市值条件（假设股价*总股本=市值，单位：万元）
+            if (criteria.MinMarketValue.HasValue || criteria.MaxMarketValue.HasValue)
+            {
+                // 这里需要根据实际情况调整计算方式
+                // 暂时使用一个近似计算：当前价格 * 10000（假设总股本为10000万股）
+                decimal marketValue = stock.CurrentPrice * 10000;
+                if (criteria.MinMarketValue.HasValue && marketValue < criteria.MinMarketValue.Value)
+                    return false;
+                if (criteria.MaxMarketValue.HasValue && marketValue > criteria.MaxMarketValue.Value)
+                    return false;
+            }
+            
+            return true;
+        }).ToList();
         
         _logger.LogInformation("条件选股查询返回 {Count} 条结果", results.Count);
         
