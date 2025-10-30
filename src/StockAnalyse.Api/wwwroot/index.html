@@ -484,6 +484,13 @@
                     <label>股票代码</label>
                     <input type="text" id="aiStockCode" placeholder="输入要分析的股票代码">
                 </div>
+                <!-- 新增：选择提示词 -->
+                <div class="form-group">
+                    <label>选择提示词</label>
+                    <select id="aiPromptSelect">
+                        <option value="">（使用默认或JSON配置）</option>
+                    </select>
+                </div>
                 <button class="btn" onclick="analyzeStock()">开始分析</button>
                 <div id="aiResult" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; white-space: pre-wrap;"></div>
             </div>
@@ -520,6 +527,44 @@
         
         <!-- 设置 -->
         <div id="settings" class="content">
+            <!-- AI提示词配置 -->
+            <div class="card">
+                <h3>AI提示词配置</h3>
+                <div class="form-group">
+                    <button class="btn" onclick="aiPromptManager.loadPrompts()">🔄 刷新提示词列表</button>
+                    <button class="btn" onclick="aiPromptManager.showCreateForm()" style="margin-left: 10px;">➕ 添加提示词</button>
+                </div>
+                <div id="aiPromptList" class="loading">加载中...</div>
+
+                <!-- 添加/编辑表单 -->
+                <div id="aiPromptForm" style="display: none; margin-top: 20px; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
+                    <h4 id="promptFormTitle">添加新提示词</h4>
+                    <input type="hidden" id="promptId">
+                    <div class="form-group">
+                        <label>名称 *</label>
+                        <input type="text" id="promptName" class="form-control" placeholder="例如：基本面分析">
+                    </div>
+                    <div class="form-group">
+                        <label>系统提示词 *</label>
+                        <textarea id="promptText" class="form-control" rows="6" placeholder="输入系统提示词"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>温度（0-2）</label>
+                        <input type="number" id="promptTemp" class="form-control" step="0.1" min="0" max="2" value="0.7">
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="promptIsDefault"> 设为默认提示词</label>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="promptIsActive" checked> 启用</label>
+                    </div>
+                    <div class="form-group">
+                        <button class="btn" onclick="aiPromptManager.savePrompt()">💾 保存提示词</button>
+                        <button class="btn btn-secondary" onclick="aiPromptManager.cancelEdit()">取消</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <h3>股票行情自动刷新设置</h3>
                 <div class="form-group">
@@ -1024,17 +1069,20 @@
         // AI分析
         async function analyzeStock() {
             const stockCode = document.getElementById('aiStockCode').value.trim();
+            const promptIdVal = document.getElementById('aiPromptSelect').value;
+            const promptId = promptIdVal ? parseInt(promptIdVal) : null;
+
             if (!stockCode) {
                 alert('请输入股票代码');
                 return;
             }
-            
+
             try {
                 document.getElementById('aiResult').textContent = '分析中...';
                 const response = await fetch(`${API_BASE}/api/ai/analyze/${stockCode}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify("")
+                    body: JSON.stringify({ promptId, context: "" })
                 });
                 const result = await response.text();
                 document.getElementById('aiResult').textContent = result;
@@ -1250,6 +1298,9 @@
             
             // 设置股票代码
             document.getElementById('aiStockCode').value = stockCode;
+            
+            // 刷新提示词列表（防止未初始化）
+            aiPromptManager.fillPromptSelect();
             
             // 自动分析
             analyzeStock();
@@ -1763,6 +1814,163 @@
         // 初始化AI配置管理器
         const aiConfigManager = new AIConfigManager();
 
+        // 提示词管理
+        class AIPromptManager {
+            constructor() {
+                this.prompts = [];
+                this.apiBase = window.location.origin;
+            }
+
+            async init() {
+                await this.loadPrompts();
+                this.renderPromptList();
+                // 初始化AI分析下拉
+                this.fillPromptSelect();
+            }
+
+            async loadPrompts() {
+                try {
+                    const res = await fetch(`${this.apiBase}/api/aiprompts`);
+                    this.prompts = res.ok ? await res.json() : [];
+                    const container = document.getElementById('aiPromptList');
+                    if (!container) return;
+                    this.renderPromptList();
+                } catch (e) {
+                    console.error('加载提示词失败:', e);
+                }
+            }
+
+            renderPromptList() {
+                const container = document.getElementById('aiPromptList');
+                if (!container) return;
+                if (!this.prompts || this.prompts.length === 0) {
+                    container.innerHTML = '<p style="padding: 20px; color: #999; text-align: center;">暂无提示词，请添加</p>';
+                    return;
+                }
+                let html = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>温度</th>
+                                <th>默认</th>
+                                <th>启用</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                this.prompts.forEach(p => {
+                    html += `
+                        <tr>
+                            <td>${p.name}</td>
+                            <td>${p.temperature}</td>
+                            <td>${p.isDefault ? '✓' : ''}</td>
+                            <td>${p.isActive ? '✓' : ''}</td>
+                            <td>
+                                <button class="btn btn-small" onclick="aiPromptManager.editPrompt(${p.id})">编辑</button>
+                                <button class="btn btn-danger btn-small" onclick="aiPromptManager.deletePrompt(${p.id})">删除</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                html += `</tbody></table>`;
+                container.innerHTML = html;
+            }
+
+            showCreateForm() {
+                this.showPromptForm({
+                    id: 0, name: '', systemPrompt: '', temperature: 0.7, isDefault: false, isActive: true
+                });
+            }
+
+            showPromptForm(p) {
+                document.getElementById('promptId').value = p.id;
+                document.getElementById('promptName').value = p.name;
+                document.getElementById('promptText').value = p.systemPrompt;
+                document.getElementById('promptTemp').value = p.temperature;
+                document.getElementById('promptIsDefault').checked = !!p.isDefault;
+                document.getElementById('promptIsActive').checked = !!p.isActive;
+                document.getElementById('promptFormTitle').textContent = p.id === 0 ? '添加新提示词' : '编辑提示词';
+                document.getElementById('aiPromptForm').style.display = 'block';
+            }
+
+            async savePrompt() {
+                const payload = {
+                    id: parseInt(document.getElementById('promptId').value),
+                    name: document.getElementById('promptName').value.trim(),
+                    systemPrompt: document.getElementById('promptText').value.trim(),
+                    temperature: parseFloat(document.getElementById('promptTemp').value),
+                    isDefault: document.getElementById('promptIsDefault').checked,
+                    isActive: document.getElementById('promptIsActive').checked
+                };
+                if (!payload.name || !payload.systemPrompt) {
+                    alert('请填写名称和系统提示词');
+                    return;
+                }
+                try {
+                    let res;
+                    if (payload.id === 0) {
+                        res = await fetch(`${this.apiBase}/api/aiprompts`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                        });
+                    } else {
+                        res = await fetch(`${this.apiBase}/api/aiprompts/${payload.id}`, {
+                            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                        });
+                    }
+                    if (res.ok) {
+                        await this.loadPrompts();
+                        this.fillPromptSelect();
+                        this.hidePromptForm();
+                        alert('保存成功！');
+                    } else {
+                        alert('保存失败：' + await res.text());
+                    }
+                } catch (e) {
+                    alert('保存失败：' + e.message);
+                }
+            }
+
+            async editPrompt(id) {
+                const p = this.prompts.find(x => x.id === id);
+                if (p) this.showPromptForm(p);
+            }
+
+            async deletePrompt(id) {
+                if (!confirm('确定要删除这个提示词吗？')) return;
+                try {
+                    const res = await fetch(`${this.apiBase}/api/aiprompts/${id}`, { method: 'DELETE' });
+                    if (res.ok) {
+                        await this.loadPrompts();
+                        this.fillPromptSelect();
+                        alert('删除成功！');
+                    } else {
+                        alert('删除失败：' + await res.text());
+                    }
+                } catch (e) {
+                    alert('删除失败：' + e.message);
+                }
+            }
+
+            cancelEdit() { this.hidePromptForm(); }
+            hidePromptForm() { document.getElementById('aiPromptForm').style.display = 'none'; }
+
+            // 填充AI分析下拉
+            fillPromptSelect() {
+                const sel = document.getElementById('aiPromptSelect');
+                if (!sel) return;
+                let html = '<option value="">（使用默认或JSON配置）</option>';
+                this.prompts.filter(p => p.isActive).forEach(p => {
+                    html += `<option value="${p.id}" ${p.isDefault ? 'selected' : ''}>${p.name}</option>`;
+                });
+                sel.innerHTML = html;
+            }
+        }
+
+        // 初始化管理器
+        const aiPromptManager = new AIPromptManager();
+
         // 页面加载时初始化
         window.onload = function() {
             loadSettings();
@@ -1773,6 +1981,7 @@
             
             // 初始化AI配置管理器
             aiConfigManager.init();
+            aiPromptManager.init();
         };
     </script>
 </body>

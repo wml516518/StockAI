@@ -17,12 +17,12 @@ public class AIController : ControllerBase
     }
 
     /// <summary>
-    /// 分析股票
+    /// 分析股票（可指定提示词）
     /// </summary>
     [HttpPost("analyze/{stockCode}")]
-    public async Task<ActionResult<string>> AnalyzeStock(string stockCode, [FromBody] string? context = null)
+    public async Task<ActionResult<string>> AnalyzeStock(string stockCode, [FromBody] AnalyzeRequest request)
     {
-        var result = await _aiService.AnalyzeStockAsync(stockCode, context);
+        var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, request?.Context);
         return Ok(result);
     }
 
@@ -50,6 +50,12 @@ public class AIController : ControllerBase
 public class ChatRequest
 {
     public string Message { get; set; } = string.Empty;
+    public string? Context { get; set; }
+}
+
+public class AnalyzeRequest
+{
+    public int? PromptId { get; set; }
     public string? Context { get; set; }
 }
 

@@ -205,14 +205,8 @@ public class NewsService : INewsService{
         {
             _logger.LogInformation("开始抓取金融消息");
             
-            // 从天行数据抓取财经新闻
+            // 仅使用天行数据
             await FetchTianApiNewsAsync();
-            
-            // 从财联社抓取新闻（示例）
-            await FetchCailianNewsAsync();
-            
-            // 从新浪财经抓取新闻
-            await FetchSinaNewsAsync();
             
             _logger.LogInformation("金融消息抓取完成");
         }
@@ -345,71 +339,147 @@ public class NewsService : INewsService{
             
             if (root.TryGetProperty("code", out var code) && 
                 code.GetInt32() == 200 &&
-                root.TryGetProperty("result", out var result) && 
-                result.TryGetProperty("list", out var list))
+                root.TryGetProperty("result", out var result))
             {
                 _logger.LogInformation("成功获取天行数据新闻列表");
                 
-                foreach (var item in list.EnumerateArray())
+                // 检查是否有newslist属性
+                if (result.TryGetProperty("newslist", out var newslist))
                 {
-                    try
+                    foreach (var item in newslist.EnumerateArray())
                     {
-                        string title = "";
-                        string url = "";
-                        string timeStr = "";
-                        string source = "天行数据";
-                        string description = "";
-                        
-                        if (item.TryGetProperty("title", out var titleElement))
-                            title = titleElement.GetString()?.Trim() ?? "";
-                            
-                        if (item.TryGetProperty("url", out var urlElement))
-                            url = urlElement.GetString() ?? "";
-                            
-                        if (item.TryGetProperty("ctime", out var timeElement))
-                            timeStr = timeElement.GetString() ?? "";
-                            
-                        if (item.TryGetProperty("source", out var sourceElement))
-                            source = sourceElement.GetString() ?? "天行数据";
-                            
-                        if (item.TryGetProperty("description", out var descElement))
-                            description = descElement.GetString() ?? "";
-                        
-                        if (!string.IsNullOrEmpty(title))
+                        try
                         {
-                            // 解析时间
-                            var publishTime = DateTime.Now;
-                            if (!string.IsNullOrEmpty(timeStr))
+                            string title = "";
+                            string url = "";
+                            string timeStr = "";
+                            string source = "天行数据";
+                            string description = "";
+                            string content = "";
+                            
+                            if (item.TryGetProperty("title", out var titleElement))
+                                title = titleElement.GetString()?.Trim() ?? "";
+                                
+                            if (item.TryGetProperty("url", out var urlElement))
+                                url = urlElement.GetString() ?? "";
+                                
+                            if (item.TryGetProperty("ctime", out var timeElement))
+                                timeStr = timeElement.GetString() ?? "";
+                                
+                            if (item.TryGetProperty("source", out var sourceElement))
+                                source = sourceElement.GetString() ?? "天行数据";
+                                
+                            if (item.TryGetProperty("description", out var descElement))
+                                description = descElement.GetString() ?? "";
+                                
+                            // 尝试获取详细内容
+                            if (item.TryGetProperty("content", out var contentElement))
+                                content = contentElement.GetString() ?? "";
+                            
+                            if (!string.IsNullOrEmpty(title))
                             {
-                                try
+                                // 解析时间
+                                var publishTime = DateTime.Now;
+                                if (!string.IsNullOrEmpty(timeStr))
                                 {
-                                    publishTime = DateTime.Parse(timeStr);
+                                    try
+                                    {
+                                        publishTime = DateTime.Parse(timeStr);
+                                    }
+                                    catch
+                                    {
+                                        _logger.LogWarning("无法解析时间: {TimeStr}", timeStr);
+                                    }
                                 }
-                                catch
+                                
+                                // 优先使用content，其次是description，最后是title
+                                var finalContent = !string.IsNullOrEmpty(content) ? content : 
+                                                  (!string.IsNullOrEmpty(description) ? description : title);
+                                
+                                var news = new FinancialNews
                                 {
-                                    _logger.LogWarning("无法解析时间: {TimeStr}", timeStr);
-                                }
+                                    Title = title,
+                                    Content = content,
+                                    Source = source,
+                                    Url = url,
+                                    PublishTime = publishTime,
+                                    FetchTime = DateTime.Now,
+                                    StockCodes = ExtractStockCodesFromTitle(title)
+                                };
+                                
+                                newsList.Add(news);
                             }
-                            
-                            var content = !string.IsNullOrEmpty(description) ? description : title;
-                            
-                            var news = new FinancialNews
-                            {
-                                Title = title,
-                                Content = content,
-                                Source = source,
-                                Url = url,
-                                PublishTime = publishTime,
-                                FetchTime = DateTime.Now,
-                                StockCodes = ExtractStockCodesFromTitle(title)
-                            };
-                            
-                            newsList.Add(news);
+                        }
+                        catch (Exception itemEx)
+                        {
+                            _logger.LogError(itemEx, "处理单条天行数据新闻时出错");
                         }
                     }
-                    catch (Exception itemEx)
+                }
+                // 尝试旧的格式（list属性）
+                else if (result.TryGetProperty("list", out var list))
+                {
+                    foreach (var item in list.EnumerateArray())
                     {
-                        _logger.LogError(itemEx, "处理单条天行数据新闻时出错");
+                        try
+                        {
+                            string title = "";
+                            string url = "";
+                            string timeStr = "";
+                            string source = "天行数据";
+                            string description = "";
+                            
+                            if (item.TryGetProperty("title", out var titleElement))
+                                title = titleElement.GetString()?.Trim() ?? "";
+                                
+                            if (item.TryGetProperty("url", out var urlElement))
+                                url = urlElement.GetString() ?? "";
+                                
+                            if (item.TryGetProperty("ctime", out var timeElement))
+                                timeStr = timeElement.GetString() ?? "";
+                                
+                            if (item.TryGetProperty("source", out var sourceElement))
+                                source = sourceElement.GetString() ?? "天行数据";
+                                
+                            if (item.TryGetProperty("description", out var descElement))
+                                description = descElement.GetString() ?? "";
+                            
+                            if (!string.IsNullOrEmpty(title))
+                            {
+                                // 解析时间
+                                var publishTime = DateTime.Now;
+                                if (!string.IsNullOrEmpty(timeStr))
+                                {
+                                    try
+                                    {
+                                        publishTime = DateTime.Parse(timeStr);
+                                    }
+                                    catch
+                                    {
+                                        _logger.LogWarning("无法解析时间: {TimeStr}", timeStr);
+                                    }
+                                }
+                                
+                                var content = !string.IsNullOrEmpty(description) ? description : title;
+                                
+                                var news = new FinancialNews
+                                {
+                                    Title = title,
+                                    Content = content,
+                                    Source = source,
+                                    Url = url,
+                                    PublishTime = publishTime,
+                                    FetchTime = DateTime.Now,
+                                    StockCodes = ExtractStockCodesFromTitle(title)
+                                };
+                                
+                                newsList.Add(news);
+                            }
+                        }
+                        catch (Exception itemEx)
+                        {
+                            _logger.LogError(itemEx, "处理单条天行数据新闻时出错");
+                        }
                     }
                 }
                 
@@ -448,19 +518,8 @@ public class NewsService : INewsService{
             // var response = await _httpClient.GetStringAsync(url);
             // var news = ParseCailianData(response);
             
-            // 示例数据
-            var news = new List<FinancialNews>
-            {
-                new FinancialNews
-                {
-                    Title = "示例新闻标题",
-                    Content = "新闻内容...",
-                    Source = "财联社",
-                    PublishTime = DateTime.Now,
-                    FetchTime = DateTime.Now,
-                    StockCodes = new List<string> { "000001" }
-                }
-            };
+            // 实际从API获取数据，这里暂时不添加示例数据
+            var news = new List<FinancialNews>();
             
             foreach (var item in news)
             {

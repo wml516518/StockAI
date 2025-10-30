@@ -143,6 +143,21 @@ public class AIModelConfig
 }
 
 /// <summary>
+/// AI提示词（支持多条，便于在分析时选择）
+/// </summary>
+[Table("AIPrompts")]
+public class AIPrompt
+{
+    [Key]
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;          // 提示词名称，如“基本面分析”
+    public string SystemPrompt { get; set; } = string.Empty;  // 系统提示词
+    public double Temperature { get; set; } = 0.7;            // 采样温度
+    public bool IsDefault { get; set; }                       // 是否默认提示词
+    public bool IsActive { get; set; } = true;                // 是否启用
+}
+
+/// <summary>
 /// 涨跌幅提醒通知
 /// </summary>
 [Table("PriceAlerts")]
