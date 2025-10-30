@@ -5,7 +5,7 @@ public interface IAIService
     /// <summary>
     /// 分析股票（可指定提示词）
     /// </summary>
-    Task<string> AnalyzeStockAsync(string stockCode, int? promptId = null, string? additionalContext = null);
+    Task<string> AnalyzeStockAsync(string stockCode, int? promptId = null, string? additionalContext = null, int? modelId = null);
     
     /// <summary>
     /// 问询大模型

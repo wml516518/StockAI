@@ -3460,24 +3460,77 @@
                     .catch(error => {
                         loadingDiv.style.display = 'none';
                         resultDiv.style.display = 'block';
-                        contentDiv.textContent = '分析失败: ' + error.message;
+                        
+                        // 检查是否是配置相关错误
+                        if (error.message.includes('请先配置AI模型')) {
+                            contentDiv.innerHTML = `
+                                <div style="color: #721c24; background-color: #f8d7da; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                    <h4 style="margin-top: 0;">需要配置AI模型</h4>
+                                    <p>您需要先配置AI模型才能使用AI分析功能。请按照以下步骤操作：</p>
+                                    <ol>
+                                        <li>点击顶部的"设置"选项卡</li>
+                                        <li>在"AI模型配置"部分，点击"添加配置"按钮</li>
+                                        <li>填写您的AI模型信息（如OpenAI、DeepSeek等）</li>
+                                        <li>保存配置并设置为"激活"状态</li>
+                                        <li>返回此页面重新尝试分析</li>
+                                    </ol>
+                                    <button class="btn" onclick="switchTab('settings'); document.getElementById('aiAnalysisModal').style.display='none';">
+                                        前往设置页面
+                                    </button>
+                                </div>
+                            `;
+                        } else {
+                            contentDiv.textContent = '分析失败: ' + error.message;
+                        }
                     });
             },
             
             // 新增：调用AI分析接口
             async analyzeBacktestResult(stockCode, context) {
                 try {
+                    // 使用用户选择的提示词ID，如果没有选择则获取默认提示词
+                    let promptId = selectedAIPromptId;
+                    
+                    if (!promptId) {
+                        try {
+                            const promptsResponse = await fetch(`${API_BASE}/api/aiprompts/default`);
+                            if (promptsResponse.ok) {
+                                const defaultPrompt = await promptsResponse.json();
+                                if (defaultPrompt && defaultPrompt.id) {
+                                    promptId = defaultPrompt.id;
+                                    console.log('使用默认提示词:', defaultPrompt.name);
+                                    // 更新显示
+                                    document.getElementById('aiPromptName').textContent = defaultPrompt.name || '默认';
+                                }
+                            }
+                        } catch (promptError) {
+                            console.warn('获取默认提示词失败，将使用系统默认提示词', promptError);
+                        }
+                    }
+                    
+                    // 构建请求体
+                    const requestBody = { 
+                        context: context,
+                        promptId: promptId
+                    };
+                    
+                    // 如果选择了特定的AI模型，添加到请求中
+                    if (selectedAIModelId) {
+                        requestBody.modelId = selectedAIModelId;
+                    }
+                    
                     const response = await fetch(`${API_BASE}/api/ai/analyze/${stockCode}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                            context: context,
-                            promptId: null
-                        })
+                        body: JSON.stringify(requestBody)
                     });
                     
                     if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
+                        const errorText = await response.text();
+                        if (errorText.includes('请先配置AI模型API')) {
+                            throw new Error('请先在"设置"选项卡中配置AI模型，添加API Key和模型信息');
+                        }
+                        throw new Error(`HTTP error! Status: ${response.status}, ${errorText}`);
                     }
                     
                     return await response.text();
@@ -3584,7 +3637,102 @@
                     break;
                 case 'settings':
                     loadNewsRefreshSettings();
+                    // 加载AI配置
+                    if (typeof aiConfigManager !== 'undefined') {
+                        aiConfigManager.loadConfigs();
+                    }
                     break;
+            }
+        }
+        
+        // AI分析设置相关变量和函数
+        let selectedAIModelId = null;
+        let selectedAIPromptId = null;
+        
+        // 显示AI设置选择对话框
+        async function showAISettingsModal() {
+            // 显示对话框
+            document.getElementById('aiSettingsModal').style.display = 'block';
+            
+            try {
+                // 加载AI模型配置
+                const modelResponse = await fetch(`${API_BASE}/api/aimodelconfig`);
+                if (modelResponse.ok) {
+                    const models = await modelResponse.json();
+                    const modelSelect = document.getElementById('aiModelSelect');
+                    modelSelect.innerHTML = '<option value="">使用默认配置</option>';
+                    
+                    models.forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = model.id;
+                        option.textContent = `${model.name} (${model.modelName})`;
+                        if (model.isActive) {
+                            option.textContent += ' [激活]';
+                            option.selected = true;
+                            selectedAIModelId = model.id;
+                        }
+                        if (model.isDefault) {
+                            option.textContent += ' [默认]';
+                        }
+                        modelSelect.appendChild(option);
+                    });
+                }
+                
+                // 加载提示词
+                const promptResponse = await fetch(`${API_BASE}/api/aiprompts`);
+                if (promptResponse.ok) {
+                    const prompts = await promptResponse.json();
+                    const promptSelect = document.getElementById('aiPromptSelect');
+                    promptSelect.innerHTML = '<option value="">使用默认提示词</option>';
+                    
+                    prompts.forEach(prompt => {
+                        const option = document.createElement('option');
+                        option.value = prompt.id;
+                        option.textContent = prompt.name;
+                        if (prompt.isDefault) {
+                            option.textContent += ' [默认]';
+                            option.selected = true;
+                            selectedAIPromptId = prompt.id;
+                        }
+                        promptSelect.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('加载AI设置失败:', error);
+            }
+        }
+        
+        // 应用AI设置
+        function applyAISettings() {
+            const modelSelect = document.getElementById('aiModelSelect');
+            const promptSelect = document.getElementById('aiPromptSelect');
+            
+            selectedAIModelId = modelSelect.value || null;
+            selectedAIPromptId = promptSelect.value || null;
+            
+            // 更新显示
+            document.getElementById('aiModelName').textContent = 
+                modelSelect.options[modelSelect.selectedIndex].textContent.replace(' [激活]', '').replace(' [默认]', '') || '自动选择';
+            document.getElementById('aiPromptName').textContent = 
+                promptSelect.options[promptSelect.selectedIndex].textContent.replace(' [默认]', '') || '默认';
+            
+            // 关闭对话框
+            document.getElementById('aiSettingsModal').style.display = 'none';
+            
+            // 如果正在分析，重新分析
+            if (document.getElementById('aiAnalysisResult').style.display === 'block') {
+                // 获取当前选中的回测结果索引
+                const items = document.querySelectorAll('.batch-backtest-item');
+                let selectedIndex = -1;
+                items.forEach((item, index) => {
+                    if (item.style.backgroundColor === '#f0f7ff') {
+                        selectedIndex = index;
+                    }
+                });
+                
+                if (selectedIndex >= 0) {
+                    quantTrading.showAIAnalysis(selectedIndex);
+                }
             }
         }
     </script>
@@ -3637,8 +3785,43 @@
                             <span id="aiAnalysisStrategyName"></span>
                             <span id="aiAnalysisDateRange"></span>
                         </div>
+                        <div class="ai-settings-info" style="margin-top: 5px; font-size: 0.9em; color: #666;">
+                            <span id="aiModelInfo">使用模型: <span id="aiModelName">自动选择</span></span>
+                            <span style="margin-left: 15px;">提示词: <span id="aiPromptName">默认</span></span>
+                            <button class="btn btn-small" onclick="showAISettingsModal()" style="margin-left: 10px;">更改设置</button>
+                        </div>
                     </div>
                     <div class="analysis-content" style="line-height: 1.6; white-space: pre-wrap;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- AI设置选择对话框 -->
+    <div id="aiSettingsModal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>AI分析设置</h3>
+                <span class="close" onclick="document.getElementById('aiSettingsModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <div class="form-group">
+                    <label>选择AI模型配置</label>
+                    <select id="aiModelSelect" class="form-control">
+                        <option value="">使用默认配置</option>
+                        <!-- 动态填充 -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>选择提示词</label>
+                    <select id="aiPromptSelect" class="form-control">
+                        <option value="">使用默认提示词</option>
+                        <!-- 动态填充 -->
+                    </select>
+                </div>
+                <div class="form-actions" style="margin-top: 20px; text-align: right;">
+                    <button class="btn" onclick="applyAISettings()">应用设置</button>
+                    <button class="btn" style="background: #6c757d;" onclick="document.getElementById('aiSettingsModal').style.display='none'">取消</button>
                 </div>
             </div>
         </div>

@@ -22,7 +22,7 @@ public class AIController : ControllerBase
     [HttpPost("analyze/{stockCode}")]
     public async Task<ActionResult<string>> AnalyzeStock(string stockCode, [FromBody] AnalyzeRequest request)
     {
-        var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, request?.Context);
+        var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, request?.Context, request?.ModelId);
         return Ok(result);
     }
 
@@ -57,5 +57,6 @@ public class AnalyzeRequest
 {
     public int? PromptId { get; set; }
     public string? Context { get; set; }
+    public int? ModelId { get; set; }
 }
 
