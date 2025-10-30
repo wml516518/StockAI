@@ -623,6 +623,9 @@
                 <div class="form-group">
                     <label>选择股票进行回测</label>
                     <div style="display: flex; gap: 10px;">
+                        <select id="backtestStockSelect" onchange="quantTrading.onBacktestStockChange()" style="min-width: 160px;">
+                            <option value="">从自选股选择...</option>
+                        </select>
                         <input type="text" id="backtestStock" placeholder="输入股票代码，如：000001" style="flex: 1;">
                         <input type="date" id="backtestStartDate" title="开始日期">
                         <input type="date" id="backtestEndDate" title="结束日期">
@@ -1089,6 +1092,23 @@
                 }
                 
                 document.getElementById('watchlistList').innerHTML = html;
+                
+                // 新增：填充回测下拉框
+                try {
+                    const codes = Object.values(data || {})
+                        .flatMap(arr => (Array.isArray(arr) ? arr : []))
+                        .map(s => s.stockCode)
+                        .filter(Boolean);
+
+                    const uniqueCodes = Array.from(new Set(codes));
+                    const sel = document.getElementById('backtestStockSelect');
+                    if (sel) {
+                        sel.innerHTML = '<option value="">从自选股选择...</option>' + 
+                            uniqueCodes.map(c => `<option value="${c}">${c}</option>`).join('');
+                    }
+                } catch (e) {
+                    console.warn('填充回测股票下拉失败:', e);
+                }
             } catch (error) {
                 document.getElementById('watchlistList').innerHTML = '<p>加载失败：' + error.message + '</p>';
             }
@@ -2621,64 +2641,63 @@
             // 加载策略列表
             async loadStrategies() {
                 try {
-                    const response = await fetch(`${API_BASE}/api/StrategyConfig/list`);
+                    // 修复：从量化交易控制器读取数据库中的策略
+                    const response = await fetch(`${API_BASE}/api/QuantTrading/strategies`);
                     const strategies = await response.json();
-                    
+
+                    // 缓存以便后续根据名称查找ID
+                    this._strategies = Array.isArray(strategies) ? strategies : [];
+
                     const strategyList = document.getElementById('strategyList');
                     const strategySelect = document.getElementById('strategySelect');
                     
-                    if (strategies.length === 0) {
+                    if (!Array.isArray(strategies) || strategies.length === 0) {
                         strategyList.innerHTML = '<p style="text-align: center; color: #666;">暂无策略，请先导入默认策略</p>';
                         strategySelect.innerHTML = '<option value="">暂无策略</option>';
                         return;
                     }
                     
-                    // 更新策略列表显示
-                    strategyList.innerHTML = strategies.map(strategy => `
-                        <div class="stock-card" style="margin-bottom: 15px;">
-                            <div class="stock-header">
-                                <div class="stock-name-section">
-                                    <div class="stock-name">${strategy.name}</div>
-                                    <div class="stock-code">${strategy.type} | 资金: ¥${strategy.currentCapital.toLocaleString()}</div>
-                                </div>
-                                <div class="stock-actions">
-                                    <button class="btn btn-small ${strategy.isActive ? 'btn-success' : ''}" 
-                                            onclick="quantTrading.toggleStrategy('${strategy.id}', ${!strategy.isActive})">
-                                        ${strategy.isActive ? '✅ 已启用' : '⏸️ 已停用'}
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="price-section">
-                                <div style="font-size: 0.9em; color: #666;">${strategy.description || '暂无描述'}</div>
-                                <div class="price-info-row" style="margin-top: 10px;">
-                                    <div class="price-item">
-                                        <span class="price-label">初始资金</span>
-                                        <span class="price-value">¥${strategy.initialCapital.toLocaleString()}</span>
+                    // 防御式资金显示：优先currentCapital，回退initialCapital，格式化失败显示-
+                    strategyList.innerHTML = strategies.map(strategy => {
+                        const cap = typeof strategy.currentCapital === 'number'
+                            ? strategy.currentCapital
+                            : (typeof strategy.initialCapital === 'number' ? strategy.initialCapital : undefined);
+                        const capStr = typeof cap === 'number' ? `¥${cap.toLocaleString()}` : '¥-';
+
+                        return `
+                            <div class="stock-card" style="margin-bottom: 15px;">
+                                <div class="stock-header">
+                                    <div class="stock-name-section">
+                                        <div class="stock-name">${strategy.name}</div>
+                                        <div class="stock-code">${strategy.type} | 资金: ${capStr}</div>
                                     </div>
-                                    <div class="price-item">
-                                        <span class="price-label">当前资金</span>
-                                        <span class="price-value ${strategy.currentCapital >= strategy.initialCapital ? 'price-up' : 'price-down'}">
-                                            ¥${strategy.currentCapital.toLocaleString()}
-                                        </span>
+                                    <div class="stock-actions">
+                                        <button class="btn btn-small ${strategy.isActive ? 'btn-success' : ''}" 
+                                                onclick="quantTrading.toggleStrategy('${strategy.id}', ${!strategy.isActive})">
+                                            ${strategy.isActive ? '✅ 已启用' : '⏸️ 已停用'}
+                                        </button>
+                                        <button class="btn btn-danger btn-small" 
+                                                onclick="quantTrading.deleteStrategyById(${strategy.id}, '${strategy.name.replace(/'/g, "\\'")}')">🗑️ 删除</button>
                                     </div>
-                                    <div class="price-item">
-                                        <span class="price-label">收益率</span>
-                                        <span class="price-value ${strategy.currentCapital >= strategy.initialCapital ? 'price-up' : 'price-down'}">
-                                            ${((strategy.currentCapital - strategy.initialCapital) / strategy.initialCapital * 100).toFixed(2)}%
-                                        </span>
+                                </div>
+                                <div class="price-section">
+                                    <div style="font-size: 0.9em; color: #666;">${strategy.description || '暂无描述'}</div>
+                                    <div class="price-info-row" style="margin-top: 10px;">
+                                        <div class="price-item">
+                                            <span class="price-label">初始资金</span>
+                                            <span class="price-value">¥${(typeof strategy.initialCapital === 'number' ? strategy.initialCapital.toLocaleString() : '-')}</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                            <div class="market-info">
-                                <span>创建时间: ${new Date(strategy.createdAt).toLocaleDateString()}</span>
-                                <span>更新时间: ${new Date(strategy.updatedAt).toLocaleDateString()}</span>
-                            </div>
-                        </div>
-                    `).join('');
-                    
-                    // 更新策略选择下拉框
+                        `;
+                    }).join('');
+
+                    // 下拉框以现有策略名填充，便于加载对应配置文件
                     strategySelect.innerHTML = '<option value="">请选择策略...</option>' + 
                         strategies.map(s => `<option value="${s.name}">${s.name} (${s.type})</option>`).join('');
+                    
+                    // 回测股票选择下拉框已在loadWatchlist中自动填充
                         
                 } catch (error) {
                     console.error('加载策略失败:', error);
@@ -2692,13 +2711,18 @@
                     const response = await fetch(`${API_BASE}/api/StrategyConfig/import`, {
                         method: 'POST'
                     });
-                    const result = await response.json();
-                    
+
+                    const contentType = response.headers.get('content-type') || '';
+                    const isJson = contentType.includes('application/json');
+                    const result = isJson ? await response.json() : await response.text();
+
                     if (response.ok) {
-                        alert(`成功导入 ${result.importedCount} 个策略`);
-                        this.loadStrategies();
+                        const imported = isJson ? (result.importedCount ?? result.count ?? 0) : 0;
+                        alert(`成功导入 ${imported} 个策略`);
+                        await this.loadStrategies();
                     } else {
-                        alert('导入失败: ' + result.message);
+                        const msg = isJson ? (result.message || '导入失败') : result;
+                        alert('导入失败: ' + msg);
                     }
                 } catch (error) {
                     console.error('导入策略失败:', error);
@@ -2717,7 +2741,7 @@
                 }
                 
                 try {
-                    const response = await fetch(`${API_BASE}/api/StrategyConfig/${encodeURIComponent(strategyName)}`);
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig/configs/${encodeURIComponent(strategyName)}`);
                     const config = await response.json();
                     
                     if (response.ok) {
@@ -2815,7 +2839,7 @@
                 };
                 
                 try {
-                    const response = await fetch(`${API_BASE}/api/StrategyConfig`, {
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig/configs`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -2946,12 +2970,8 @@
             // 切换策略状态
             async toggleStrategy(strategyId, isActive) {
                 try {
-                    const response = await fetch(`${API_BASE}/api/QuantStrategy/${strategyId}/toggle`, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ isActive })
+                    const response = await fetch(`${API_BASE}/api/QuantTrading/strategies/${strategyId}/toggle`, {
+                        method: 'POST'
                     });
                     
                     if (response.ok) {
@@ -2978,29 +2998,61 @@
                 document.getElementById('strategyConfigForm').style.display = 'block';
             },
 
-            // 删除策略
+            // 删除策略（按选择的策略名称 -> 映射到ID再删除）
             async deleteStrategy() {
                 const strategyName = document.getElementById('strategySelect').value;
                 if (!strategyName) {
                     alert('请先选择要删除的策略');
                     return;
                 }
-                
+
+                const match = (this._strategies || []).find(s => s.name === strategyName);
+                if (!match) {
+                    alert('未找到该策略，请先刷新策略列表');
+                    return;
+                }
+
                 if (!confirm(`确定要删除策略 "${strategyName}" 吗？`)) {
                     return;
                 }
-                
+
                 try {
-                    const response = await fetch(`${API_BASE}/api/StrategyConfig/${encodeURIComponent(strategyName)}`, {
+                    const response = await fetch(`${API_BASE}/api/QuantTrading/strategies/${match.id}`, {
                         method: 'DELETE'
                     });
-                    
                     if (response.ok) {
                         alert('策略删除成功');
                         document.getElementById('strategyConfigForm').style.display = 'none';
                         this.loadStrategies();
                     } else {
-                        alert('删除策略失败');
+                        const txt = await response.text();
+                        alert('删除策略失败：' + txt);
+                    }
+                } catch (error) {
+                    console.error('删除策略失败:', error);
+                    alert('删除策略失败');
+                }
+            },
+
+            // 新增：按ID删除（卡片上的删除按钮调用）
+            async deleteStrategyById(id, name) {
+                if (!id) {
+                    alert('策略ID缺失');
+                    return;
+                }
+                if (!confirm(`确定要删除策略 "${name}" 吗？`)) {
+                    return;
+                }
+                try {
+                    const response = await fetch(`${API_BASE}/api/QuantTrading/strategies/${id}`, {
+                        method: 'DELETE'
+                    });
+                    if (response.ok) {
+                        alert('策略删除成功');
+                        this.loadStrategies();
+                    } else {
+                        const txt = await response.text();
+                        alert('删除策略失败：' + txt);
                     }
                 } catch (error) {
                     console.error('删除策略失败:', error);
@@ -3027,7 +3079,7 @@
             // 加载活跃策略
             async loadActiveStrategies() {
                 try {
-                    const response = await fetch(`${API_BASE}/api/QuantStrategy/active`);
+                    const response = await fetch(`${API_BASE}/api/QuantTrading/strategies/active`);
                     const strategies = await response.json();
                     
                     const container = document.getElementById('activeStrategies');
@@ -3069,6 +3121,21 @@
                 } catch (error) {
                     console.error('加载活跃策略失败:', error);
                     document.getElementById('activeStrategies').innerHTML = '<p style="color: red;">加载失败</p>';
+                }
+            },
+
+            // 加载自选股到回测股票选择下拉框（已整合到loadWatchlist中）
+            async loadWatchlistForBacktest() {
+                // 此方法已整合到loadWatchlist中，保留以兼容现有调用
+                console.log('loadWatchlistForBacktest已整合到loadWatchlist中');
+            },
+
+            // 新增：当选择下拉框回测股票时，同步到输入框
+            onBacktestStockChange() {
+                const sel = document.getElementById('backtestStockSelect');
+                const input = document.getElementById('backtestStock');
+                if (sel && input) {
+                    input.value = sel.value || '';
                 }
             }
         };

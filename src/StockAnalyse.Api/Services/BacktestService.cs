@@ -11,17 +11,20 @@ public class BacktestService : IBacktestService
     private readonly StockDbContext _context;
     private readonly IQuantTradingService _quantTradingService;
     private readonly ITechnicalIndicatorService _technicalIndicatorService;
+    private readonly IStockDataService _stockDataService;
     private readonly ILogger<BacktestService> _logger;
 
     public BacktestService(
         StockDbContext context,
         IQuantTradingService quantTradingService,
         ITechnicalIndicatorService technicalIndicatorService,
+        IStockDataService stockDataService,
         ILogger<BacktestService> logger)
     {
         _context = context;
         _quantTradingService = quantTradingService;
         _technicalIndicatorService = technicalIndicatorService;
+        _stockDataService = stockDataService;
         _logger = logger;
     }
 
@@ -33,7 +36,6 @@ public class BacktestService : IBacktestService
 
         _logger.LogInformation("开始回测策略 {StrategyName}，时间范围：{StartDate} - {EndDate}", strategy.Name, startDate, endDate);
 
-        // 获取回测期间的股票列表（使用自选股）
         var stockCodes = await _context.WatchlistStocks
             .Select(w => w.StockCode)
             .Distinct()
@@ -45,10 +47,28 @@ public class BacktestService : IBacktestService
             throw new InvalidOperationException("没有找到可用的股票进行回测");
         }
 
+        // 确保历史数据充足
+        var parameters = JsonSerializer.Deserialize<TechnicalIndicatorParameters>(strategy.Parameters) 
+                        ?? new TechnicalIndicatorParameters();
+        var lookbackDays = Math.Max(parameters.LongPeriod, parameters.SlowPeriod) + 50;
+        var fetchStart = startDate.AddDays(-lookbackDays);
+
+        foreach (var code in stockCodes)
+        {
+            try
+            {
+                await _stockDataService.FetchAndStoreDailyHistoryAsync(code, fetchStart, endDate);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "拉取 {Code} 历史数据失败，可能影响回测信号生成", code);
+            }
+        }
+
         var trades = new List<SimulatedTrade>();
         var currentCapital = initialCapital;
         var positions = new Dictionary<string, decimal>(); // 持仓数量
-        var parameters = JsonSerializer.Deserialize<TechnicalIndicatorParameters>(strategy.Parameters) 
+        var paras = JsonSerializer.Deserialize<TechnicalIndicatorParameters>(strategy.Parameters)
                         ?? new TechnicalIndicatorParameters();
 
         // 按日期遍历回测
@@ -60,7 +80,7 @@ public class BacktestService : IBacktestService
                 // 为每个股票生成信号
                 foreach (var stockCode in stockCodes)
                 {
-                    var signal = await GenerateHistoricalSignalAsync(stockCode, currentDate, parameters, strategy.Type, strategy.Name);
+                    var signal = await GenerateHistoricalSignalAsync(stockCode, currentDate, paras, strategy.Type, strategy.Name);
                     if (signal != null)
                     {
                         var (trade, newCapital) = await ExecuteBacktestTradeAsync(signal, currentCapital, positions, strategyId);
@@ -284,14 +304,157 @@ public class BacktestService : IBacktestService
 
     private async Task<TradingSignal?> GenerateHistoricalMACDSignalAsync(string stockCode, DateTime date, TechnicalIndicatorParameters parameters)
     {
-        // 简化实现，实际应该基于历史数据计算MACD
-        return null;
+        // 获取到指定日期的历史数据（按日期升序）
+        var histories = await _context.StockHistories
+            .Where(h => h.StockCode == stockCode && h.TradeDate <= date)
+            .OrderBy(h => h.TradeDate)
+            .ToListAsync();
+
+        if (histories.Count < Math.Max(parameters.SlowPeriod, parameters.SignalPeriod) + 2)
+            return null;
+
+        var closes = histories.Select(h => h.Close).ToList();
+        var fast = Math.Max(2, parameters.FastPeriod);
+        var slow = Math.Max(2, parameters.SlowPeriod);
+        var sig = Math.Max(2, parameters.SignalPeriod);
+
+        // 计算全序列 EMA（初始化为首值，标准做法可接受）
+        List<decimal> ComputeEmaFull(List<decimal> prices, int period)
+        {
+            var result = new List<decimal>(prices.Count);
+            var k = 2m / (period + 1);
+            decimal emaPrev = prices[0];
+            result.Add(emaPrev);
+            for (int i = 1; i < prices.Count; i++)
+            {
+                emaPrev = (prices[i] - emaPrev) * k + emaPrev;
+                result.Add(emaPrev);
+            }
+            return result;
+        }
+
+        var emaFast = ComputeEmaFull(closes, fast);
+        var emaSlow = ComputeEmaFull(closes, slow);
+
+        // MACD 线与 Signal 线
+        var macdLine = new List<decimal>(closes.Count);
+        for (int i = 0; i < closes.Count; i++)
+        {
+            macdLine.Add(emaFast[i] - emaSlow[i]);
+        }
+        var signalLine = ComputeEmaFull(macdLine, sig);
+
+        // 直方图
+        var histogram = new List<decimal>(closes.Count);
+        for (int i = 0; i < closes.Count; i++)
+        {
+            histogram.Add(macdLine[i] - signalLine[i]);
+        }
+
+        // 使用最近两天的直方图变号判定金叉/死叉
+        var last = histogram.Count - 1;
+        if (last < 1)
+            return null;
+
+        var prevHist = histogram[last - 1];
+        var currHist = histogram[last];
+
+        var isGoldenCross = prevHist <= 0 && currHist > 0;
+        var isDeathCross = prevHist >= 0 && currHist < 0;
+
+        if (!isGoldenCross && !isDeathCross)
+            return null;
+
+        var currentPrice = histories.Last().Close;
+
+        return new TradingSignal
+        {
+            StockCode = stockCode,
+            Type = isGoldenCross ? SignalType.Buy : SignalType.Sell,
+            Price = currentPrice,
+            Confidence = 0.65m,
+            Reason = isGoldenCross ? "MACD金叉（直方图由负转正）" : "MACD死叉（直方图由正转负）",
+            GeneratedAt = date
+        };
     }
 
     private async Task<TradingSignal?> GenerateHistoricalRSISignalAsync(string stockCode, DateTime date, TechnicalIndicatorParameters parameters)
     {
-        // 简化实现，实际应该基于历史数据计算RSI
-        return null;
+        // 获取到指定日期的历史数据，确保足够长度
+        var histories = await _context.StockHistories
+            .Where(h => h.StockCode == stockCode && h.TradeDate <= date)
+            .OrderBy(h => h.TradeDate)
+            .ToListAsync();
+
+        if (histories.Count < parameters.RSIPeriod + 1)
+            return null;
+
+        var closes = histories.Select(h => h.Close).ToList();
+        var period = Math.Max(2, parameters.RSIPeriod);
+
+        // 初始化 Wilder 平滑平均
+        decimal sumGain = 0, sumLoss = 0;
+        for (int i = 1; i <= period; i++)
+        {
+            var change = closes[i] - closes[i - 1];
+            if (change > 0) sumGain += change;
+            else sumLoss += -change;
+        }
+        decimal avgGain = sumGain / period;
+        decimal avgLoss = sumLoss / period;
+
+        // 持续平滑到最后一个数据点
+        for (int i = period + 1; i < closes.Count; i++)
+        {
+            var change = closes[i] - closes[i - 1];
+            var gain = change > 0 ? change : 0;
+            var loss = change < 0 ? -change : 0;
+
+            avgGain = (avgGain * (period - 1) + gain) / period;
+            avgLoss = (avgLoss * (period - 1) + loss) / period;
+        }
+
+        // 计算最终 RSI
+        decimal rsi;
+        if (avgLoss == 0)
+        {
+            rsi = 100;
+        }
+        else
+        {
+            var rs = avgGain / avgLoss;
+            rsi = 100 - (100 / (1 + rs));
+        }
+
+        // 阈值判定生成信号
+        SignalType? signalType = null;
+        string? reason = null;
+
+        if (rsi <= parameters.RSIOverSold)
+        {
+            signalType = SignalType.Buy;
+            reason = $"RSI超卖({rsi:F2}) ≤ {parameters.RSIOverSold}";
+        }
+        else if (rsi >= parameters.RSIOverBought)
+        {
+            signalType = SignalType.Sell;
+            reason = $"RSI超买({rsi:F2}) ≥ {parameters.RSIOverBought}";
+        }
+
+        if (signalType == null)
+            return null;
+
+        var currentPrice = histories.Last().Close;
+
+        return new TradingSignal
+        {
+            StockCode = stockCode,
+            Type = signalType.Value,
+            Price = currentPrice,
+            Confidence = 0.6m,
+            Reason = reason,
+            GeneratedAt = date
+        };
     }
 
     private async Task<(SimulatedTrade? trade, decimal newCapital)> ExecuteBacktestTradeAsync(TradingSignal signal, decimal currentCapital, 

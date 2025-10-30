@@ -38,6 +38,11 @@ public interface IStockDataService
     /// 获取股票排名列表
     /// </summary>
     Task<List<Stock>> GetRankingListAsync(string market, int top = 100);
+
+    /// <summary>
+    /// 从东方财富拉取日线历史并保存到数据库（存在则更新）
+    /// </summary>
+    Task<int> FetchAndStoreDailyHistoryAsync(string stockCode, DateTime startDate, DateTime endDate);
 }
 
 

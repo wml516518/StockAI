@@ -1,5 +1,5 @@
 {
-  "name": "MACD金叉死叉策略",
+  "name": "macd-strategy",
   "description": "基于MACD指标的金叉死叉策略。当MACD线上穿信号线时买入，下穿时卖出。",
   "type": "TechnicalIndicator",
   "parameters": {

@@ -344,6 +344,83 @@ public class StockDataService : IStockDataService
             return null;
         }
     }
+
+    public async Task<int> FetchAndStoreDailyHistoryAsync(string stockCode, DateTime startDate, DateTime endDate)
+    {
+        int saved = 0;
+        try
+        {
+            var market = stockCode.StartsWith("6") ? "1" : "0";
+            var secid = $"{market}.{stockCode}";
+            var beg = startDate.ToString("yyyyMMdd");
+            var end = endDate.ToString("yyyyMMdd");
+
+            var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={end}";
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+
+            var response = await _httpClient.GetStringAsync(url);
+            dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
+            if (data?.data?.klines == null)
+            {
+                _logger.LogWarning("东方财富日线数据为空: {Code}", stockCode);
+                return 0;
+            }
+
+            foreach (var k in data.data.klines)
+            {
+                string line = k.ToString(); // "YYYY-MM-DD,open,close,high,low,volume,amount"
+                var parts = line.Split(',');
+                if (parts.Length < 7) continue;
+
+                var tradeDate = DateTime.Parse(parts[0]);
+                var open = decimal.Parse(parts[1]);
+                var close = decimal.Parse(parts[2]);
+                var high = decimal.Parse(parts[3]);
+                var low = decimal.Parse(parts[4]);
+                var volume = decimal.Parse(parts[5]);
+                var amount = decimal.Parse(parts[6]);
+
+                var existing = await _context.StockHistories
+                    .FirstOrDefaultAsync(h => h.StockCode == stockCode && h.TradeDate == tradeDate);
+
+                if (existing != null)
+                {
+                    existing.Open = open;
+                    existing.Close = close;
+                    existing.High = high;
+                    existing.Low = low;
+                    existing.Volume = volume;
+                    existing.Turnover = amount;
+                }
+                else
+                {
+                    await _context.StockHistories.AddAsync(new StockHistory
+                    {
+                        StockCode = stockCode,
+                        TradeDate = tradeDate,
+                        Open = open,
+                        Close = close,
+                        High = high,
+                        Low = low,
+                        Volume = volume,
+                        Turnover = amount
+                    });
+                }
+                saved++;
+            }
+
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("保存{Count}条 {Code} 日线历史", saved, stockCode);
+            return saved;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "拉取并保存东方财富日线失败: {Code}", stockCode);
+            return 0;
+        }
+    }
 }
 
 

@@ -63,14 +63,23 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// 初始化数据库
+// 初始化数据库（将 EnsureCreated 替换为 Migrate）
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     var context = services.GetRequiredService<StockDbContext>();
-    context.Database.EnsureCreated();
-    
-    // 初始化默认数据
+    var logger = services.GetRequiredService<ILogger<Program>>();
+
+    try
+    {
+        context.Database.Migrate();
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "应用迁移失败，回退到 EnsureCreated");
+        context.Database.EnsureCreated();
+    }
+
     DatabaseSeeder.Seed(context);
 }
 

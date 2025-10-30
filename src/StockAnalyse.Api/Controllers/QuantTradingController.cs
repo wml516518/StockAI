@@ -267,6 +267,50 @@ public class QuantTradingController : ControllerBase
             return StatusCode(500, "获取RSI数据失败");
         }
     }
+
+    /// <summary>
+    /// 获取激活的策略列表
+    /// </summary>
+    [HttpGet("strategies/active")]
+    public async Task<IActionResult> GetActiveStrategies()
+    {
+        try
+        {
+            var strategies = await _quantTradingService.GetAllStrategiesAsync();
+            var actives = strategies.Where(s => s.IsActive).ToList();
+            return Ok(actives);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取激活策略列表失败");
+            return StatusCode(500, "获取激活策略列表失败");
+        }
+    }
+
+    /// <summary>
+    /// 切换策略激活状态
+    /// </summary>
+    [HttpPost("strategies/{id}/toggle")]
+    public async Task<IActionResult> ToggleStrategy(int id)
+    {
+        try
+        {
+            var strategy = await _quantTradingService.GetStrategyByIdAsync(id);
+            if (strategy == null)
+                return NotFound("策略不存在");
+
+            strategy.IsActive = !strategy.IsActive;
+            strategy.UpdatedAt = DateTime.Now;
+
+            var updatedStrategy = await _quantTradingService.UpdateStrategyAsync(strategy);
+            return Ok(updatedStrategy);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "切换策略激活状态失败: {Id}", id);
+            return StatusCode(500, "切换策略激活状态失败");
+        }
+    }
 }
 
 /// <summary>

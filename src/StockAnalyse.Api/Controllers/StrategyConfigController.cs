@@ -136,7 +136,7 @@ public class StrategyConfigController : ControllerBase
         try
         {
             var importedCount = await _strategyConfigService.ImportStrategiesToDatabaseAsync();
-            return Ok(new { message = $"成功导入 {importedCount} 个策略", count = importedCount });
+            return Ok(new { message = $"成功导入 {importedCount} 个策略", count = importedCount, importedCount = importedCount });
         }
         catch (Exception ex)
         {

@@ -1,5 +1,5 @@
 {
-  "name": "MA5-MA20交叉策略",
+  "name": "ma-cross-strategy",
   "description": "基于5日均线和20日均线的金叉死叉策略。当短期均线上穿长期均线时买入，下穿时卖出。适合趋势性较强的市场环境。",
   "type": "TechnicalIndicator",
   "parameters": {
