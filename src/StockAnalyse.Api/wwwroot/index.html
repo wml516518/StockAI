@@ -416,6 +416,7 @@
         <div class="tabs">
             <div class="tab active" onclick="switchTab('watchlist')">自选股</div>
             <div class="tab" onclick="switchTab('screen')">条件选股</div>
+            <div class="tab" onclick="switchTab('quant')">📊 量化交易</div>
             <div class="tab" onclick="switchTab('news')">金融新闻</div>
             <div class="tab" onclick="switchTab('ai')">AI分析</div>
             <div class="tab" onclick="switchTab('alert')">价格提醒</div>
@@ -556,6 +557,122 @@
             <div class="card">
                 <h3>选股结果</h3>
                 <div id="screenResults" class="loading">等待查询...</div>
+            </div>
+        </div>
+        
+        <!-- 量化交易 -->
+        <div id="quant" class="content">
+            <!-- 策略管理 -->
+            <div class="card">
+                <h3>📊 策略管理</h3>
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <button class="btn" onclick="quantTrading.loadStrategies()">🔄 刷新策略</button>
+                    <button class="btn" onclick="quantTrading.importDefaultStrategies()" style="background: #28a745;">📥 导入默认策略</button>
+                    <button class="btn" onclick="quantTrading.showCreateStrategy()" style="background: #17a2b8;">➕ 创建策略</button>
+                </div>
+                <div id="strategyList" class="loading">加载中...</div>
+            </div>
+
+            <!-- 策略配置 -->
+            <div class="card">
+                <h3>⚙️ 策略配置</h3>
+                <div class="form-group">
+                    <label>选择策略</label>
+                    <select id="strategySelect" onchange="quantTrading.loadStrategyConfig()">
+                        <option value="">请选择策略...</option>
+                    </select>
+                </div>
+                <div id="strategyConfigForm" style="display: none;">
+                    <div class="form-group">
+                        <label>策略名称</label>
+                        <input type="text" id="strategyName" placeholder="策略名称">
+                    </div>
+                    <div class="form-group">
+                        <label>策略描述</label>
+                        <textarea id="strategyDescription" rows="3" placeholder="策略描述"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>初始资金（元）</label>
+                        <input type="number" id="initialCapital" value="100000" min="1000">
+                    </div>
+                    <div class="form-group">
+                        <label>策略类型</label>
+                        <select id="strategyType">
+                            <option value="MA_CROSS">MA交叉策略</option>
+                            <option value="RSI">RSI策略</option>
+                            <option value="BOLLINGER">布林带策略</option>
+                        </select>
+                    </div>
+                    <div id="strategyParameters">
+                        <!-- 动态加载策略参数 -->
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="isActive" checked> 启用策略</label>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button class="btn" onclick="quantTrading.saveStrategy()">💾 保存策略</button>
+                        <button class="btn" onclick="quantTrading.testStrategy()" style="background: #ffc107; color: #000;">🧪 测试策略</button>
+                        <button class="btn" onclick="quantTrading.deleteStrategy()" style="background: #dc3545;">🗑️ 删除策略</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 回测结果 -->
+            <div class="card">
+                <h3>📈 回测分析</h3>
+                <div class="form-group">
+                    <label>选择股票进行回测</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="backtestStock" placeholder="输入股票代码，如：000001" style="flex: 1;">
+                        <input type="date" id="backtestStartDate" title="开始日期">
+                        <input type="date" id="backtestEndDate" title="结束日期">
+                        <button class="btn" onclick="quantTrading.runBacktest()">🚀 开始回测</button>
+                    </div>
+                </div>
+                <div id="backtestResults" style="display: none;">
+                    <div class="stats">
+                        <div class="stat-card">
+                            <h4>总收益率</h4>
+                            <div class="value" id="totalReturn">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>年化收益率</h4>
+                            <div class="value" id="annualReturn">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>最大回撤</h4>
+                            <div class="value" id="maxDrawdown">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>夏普比率</h4>
+                            <div class="value" id="sharpeRatio">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>交易次数</h4>
+                            <div class="value" id="tradeCount">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>胜率</h4>
+                            <div class="value" id="winRate">-</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 20px;">
+                        <h4>交易记录</h4>
+                        <div id="tradeHistory" style="max-height: 400px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 实时监控 -->
+            <div class="card">
+                <h3>📡 实时监控</h3>
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <button class="btn" onclick="quantTrading.startMonitoring()" id="startMonitorBtn">▶️ 开始监控</button>
+                    <button class="btn" onclick="quantTrading.stopMonitoring()" id="stopMonitorBtn" style="background: #dc3545;">⏹️ 停止监控</button>
+                    <button class="btn" onclick="quantTrading.loadActiveStrategies()">🔄 刷新活跃策略</button>
+                </div>
+                <div id="monitoringStatus" class="loading">监控已停止</div>
+                <div id="activeStrategies"></div>
             </div>
         </div>
         
@@ -2498,6 +2615,495 @@
             // 初始化选股模板管理器
             screenTemplateManager.init();
         };
+
+        // 量化交易管理
+        const quantTrading = {
+            // 加载策略列表
+            async loadStrategies() {
+                try {
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig/list`);
+                    const strategies = await response.json();
+                    
+                    const strategyList = document.getElementById('strategyList');
+                    const strategySelect = document.getElementById('strategySelect');
+                    
+                    if (strategies.length === 0) {
+                        strategyList.innerHTML = '<p style="text-align: center; color: #666;">暂无策略，请先导入默认策略</p>';
+                        strategySelect.innerHTML = '<option value="">暂无策略</option>';
+                        return;
+                    }
+                    
+                    // 更新策略列表显示
+                    strategyList.innerHTML = strategies.map(strategy => `
+                        <div class="stock-card" style="margin-bottom: 15px;">
+                            <div class="stock-header">
+                                <div class="stock-name-section">
+                                    <div class="stock-name">${strategy.name}</div>
+                                    <div class="stock-code">${strategy.type} | 资金: ¥${strategy.currentCapital.toLocaleString()}</div>
+                                </div>
+                                <div class="stock-actions">
+                                    <button class="btn btn-small ${strategy.isActive ? 'btn-success' : ''}" 
+                                            onclick="quantTrading.toggleStrategy('${strategy.id}', ${!strategy.isActive})">
+                                        ${strategy.isActive ? '✅ 已启用' : '⏸️ 已停用'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="price-section">
+                                <div style="font-size: 0.9em; color: #666;">${strategy.description || '暂无描述'}</div>
+                                <div class="price-info-row" style="margin-top: 10px;">
+                                    <div class="price-item">
+                                        <span class="price-label">初始资金</span>
+                                        <span class="price-value">¥${strategy.initialCapital.toLocaleString()}</span>
+                                    </div>
+                                    <div class="price-item">
+                                        <span class="price-label">当前资金</span>
+                                        <span class="price-value ${strategy.currentCapital >= strategy.initialCapital ? 'price-up' : 'price-down'}">
+                                            ¥${strategy.currentCapital.toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <div class="price-item">
+                                        <span class="price-label">收益率</span>
+                                        <span class="price-value ${strategy.currentCapital >= strategy.initialCapital ? 'price-up' : 'price-down'}">
+                                            ${((strategy.currentCapital - strategy.initialCapital) / strategy.initialCapital * 100).toFixed(2)}%
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="market-info">
+                                <span>创建时间: ${new Date(strategy.createdAt).toLocaleDateString()}</span>
+                                <span>更新时间: ${new Date(strategy.updatedAt).toLocaleDateString()}</span>
+                            </div>
+                        </div>
+                    `).join('');
+                    
+                    // 更新策略选择下拉框
+                    strategySelect.innerHTML = '<option value="">请选择策略...</option>' + 
+                        strategies.map(s => `<option value="${s.name}">${s.name} (${s.type})</option>`).join('');
+                        
+                } catch (error) {
+                    console.error('加载策略失败:', error);
+                    document.getElementById('strategyList').innerHTML = '<p style="color: red;">加载策略失败</p>';
+                }
+            },
+
+            // 导入默认策略
+            async importDefaultStrategies() {
+                try {
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig/import`, {
+                        method: 'POST'
+                    });
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        alert(`成功导入 ${result.importedCount} 个策略`);
+                        this.loadStrategies();
+                    } else {
+                        alert('导入失败: ' + result.message);
+                    }
+                } catch (error) {
+                    console.error('导入策略失败:', error);
+                    alert('导入策略失败');
+                }
+            },
+
+            // 加载策略配置
+            async loadStrategyConfig() {
+                const strategyName = document.getElementById('strategySelect').value;
+                const configForm = document.getElementById('strategyConfigForm');
+                
+                if (!strategyName) {
+                    configForm.style.display = 'none';
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig/${encodeURIComponent(strategyName)}`);
+                    const config = await response.json();
+                    
+                    if (response.ok) {
+                        // 填充表单
+                        document.getElementById('strategyName').value = config.name;
+                        document.getElementById('strategyDescription').value = config.description || '';
+                        document.getElementById('initialCapital').value = config.initialCapital;
+                        document.getElementById('strategyType').value = config.type;
+                        document.getElementById('isActive').checked = config.isActive;
+                        
+                        // 加载策略参数
+                        this.loadStrategyParameters(config.type, config.parameters);
+                        
+                        configForm.style.display = 'block';
+                    } else {
+                        alert('加载策略配置失败');
+                    }
+                } catch (error) {
+                    console.error('加载策略配置失败:', error);
+                    alert('加载策略配置失败');
+                }
+            },
+
+            // 加载策略参数表单
+            loadStrategyParameters(strategyType, parameters = {}) {
+                const container = document.getElementById('strategyParameters');
+                let html = '<h4>策略参数</h4>';
+                
+                switch (strategyType) {
+                    case 'MA_CROSS':
+                        html += `
+                            <div class="form-group">
+                                <label>短期均线周期</label>
+                                <input type="number" id="shortPeriod" value="${parameters.shortPeriod || 5}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>长期均线周期</label>
+                                <input type="number" id="longPeriod" value="${parameters.longPeriod || 20}" min="1">
+                            </div>
+                        `;
+                        break;
+                    case 'RSI':
+                        html += `
+                            <div class="form-group">
+                                <label>RSI周期</label>
+                                <input type="number" id="rsiPeriod" value="${parameters.rsiPeriod || 14}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>超买阈值</label>
+                                <input type="number" id="overboughtThreshold" value="${parameters.overboughtThreshold || 70}" min="50" max="100">
+                            </div>
+                            <div class="form-group">
+                                <label>超卖阈值</label>
+                                <input type="number" id="oversoldThreshold" value="${parameters.oversoldThreshold || 30}" min="0" max="50">
+                            </div>
+                        `;
+                        break;
+                    case 'BOLLINGER':
+                        html += `
+                            <div class="form-group">
+                                <label>布林带周期</label>
+                                <input type="number" id="bollingerPeriod" value="${parameters.bollingerPeriod || 20}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>标准差倍数</label>
+                                <input type="number" id="standardDeviation" value="${parameters.standardDeviation || 2}" min="0.1" step="0.1">
+                            </div>
+                        `;
+                        break;
+                }
+                
+                container.innerHTML = html;
+            },
+
+            // 保存策略
+            async saveStrategy() {
+                const strategyName = document.getElementById('strategyName').value.trim();
+                const strategyType = document.getElementById('strategyType').value;
+                
+                if (!strategyName) {
+                    alert('请输入策略名称');
+                    return;
+                }
+                
+                // 收集策略参数
+                const parameters = this.collectStrategyParameters(strategyType);
+                
+                const config = {
+                    name: strategyName,
+                    description: document.getElementById('strategyDescription').value,
+                    type: strategyType,
+                    parameters: parameters,
+                    initialCapital: parseFloat(document.getElementById('initialCapital').value),
+                    isActive: document.getElementById('isActive').checked
+                };
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(config)
+                    });
+                    
+                    if (response.ok) {
+                        alert('策略保存成功');
+                        this.loadStrategies();
+                    } else {
+                        const error = await response.text();
+                        alert('保存失败: ' + error);
+                    }
+                } catch (error) {
+                    console.error('保存策略失败:', error);
+                    alert('保存策略失败');
+                }
+            },
+
+            // 收集策略参数
+            collectStrategyParameters(strategyType) {
+                const parameters = {};
+                
+                switch (strategyType) {
+                    case 'MA_CROSS':
+                        parameters.shortPeriod = parseInt(document.getElementById('shortPeriod').value);
+                        parameters.longPeriod = parseInt(document.getElementById('longPeriod').value);
+                        break;
+                    case 'RSI':
+                        parameters.rsiPeriod = parseInt(document.getElementById('rsiPeriod').value);
+                        parameters.overboughtThreshold = parseFloat(document.getElementById('overboughtThreshold').value);
+                        parameters.oversoldThreshold = parseFloat(document.getElementById('oversoldThreshold').value);
+                        break;
+                    case 'BOLLINGER':
+                        parameters.bollingerPeriod = parseInt(document.getElementById('bollingerPeriod').value);
+                        parameters.standardDeviation = parseFloat(document.getElementById('standardDeviation').value);
+                        break;
+                }
+                
+                return parameters;
+            },
+
+            // 运行回测
+            async runBacktest() {
+                const stockCode = document.getElementById('backtestStock').value.trim();
+                const startDate = document.getElementById('backtestStartDate').value;
+                const endDate = document.getElementById('backtestEndDate').value;
+                const strategyName = document.getElementById('strategySelect').value;
+                
+                if (!stockCode || !startDate || !endDate || !strategyName) {
+                    alert('请填写完整的回测参数');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/Backtest/run`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            stockCode: stockCode,
+                            strategyName: strategyName,
+                            startDate: startDate,
+                            endDate: endDate
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        this.displayBacktestResults(result);
+                    } else {
+                        alert('回测失败: ' + result.message);
+                    }
+                } catch (error) {
+                    console.error('回测失败:', error);
+                    alert('回测失败');
+                }
+            },
+
+            // 显示回测结果
+            displayBacktestResults(result) {
+                document.getElementById('totalReturn').textContent = (result.totalReturn * 100).toFixed(2) + '%';
+                document.getElementById('annualReturn').textContent = (result.annualizedReturn * 100).toFixed(2) + '%';
+                document.getElementById('maxDrawdown').textContent = (result.maxDrawdown * 100).toFixed(2) + '%';
+                document.getElementById('sharpeRatio').textContent = result.sharpeRatio.toFixed(2);
+                document.getElementById('tradeCount').textContent = result.totalTrades;
+                document.getElementById('winRate').textContent = (result.winRate * 100).toFixed(1) + '%';
+                
+                // 显示交易记录
+                const tradeHistory = document.getElementById('tradeHistory');
+                if (result.trades && result.trades.length > 0) {
+                    tradeHistory.innerHTML = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>类型</th>
+                                    <th>价格</th>
+                                    <th>数量</th>
+                                    <th>金额</th>
+                                    <th>收益</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${result.trades.map(trade => `
+                                    <tr>
+                                        <td>${new Date(trade.date).toLocaleDateString()}</td>
+                                        <td style="color: ${trade.type === 'BUY' ? '#f44336' : '#4caf50'}">${trade.type === 'BUY' ? '买入' : '卖出'}</td>
+                                        <td>¥${trade.price.toFixed(2)}</td>
+                                        <td>${trade.quantity}</td>
+                                        <td>¥${(trade.price * trade.quantity).toFixed(2)}</td>
+                                        <td style="color: ${trade.profit >= 0 ? '#f44336' : '#4caf50'}">${trade.profit ? trade.profit.toFixed(2) + '%' : '-'}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    `;
+                } else {
+                    tradeHistory.innerHTML = '<p style="text-align: center; color: #666;">暂无交易记录</p>';
+                }
+                
+                document.getElementById('backtestResults').style.display = 'block';
+            },
+
+            // 切换策略状态
+            async toggleStrategy(strategyId, isActive) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/QuantStrategy/${strategyId}/toggle`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ isActive })
+                    });
+                    
+                    if (response.ok) {
+                        this.loadStrategies();
+                    } else {
+                        alert('切换策略状态失败');
+                    }
+                } catch (error) {
+                    console.error('切换策略状态失败:', error);
+                    alert('切换策略状态失败');
+                }
+            },
+
+            // 显示创建策略表单
+            showCreateStrategy() {
+                document.getElementById('strategySelect').value = '';
+                document.getElementById('strategyName').value = '';
+                document.getElementById('strategyDescription').value = '';
+                document.getElementById('initialCapital').value = '100000';
+                document.getElementById('strategyType').value = 'MA_CROSS';
+                document.getElementById('isActive').checked = true;
+                
+                this.loadStrategyParameters('MA_CROSS');
+                document.getElementById('strategyConfigForm').style.display = 'block';
+            },
+
+            // 删除策略
+            async deleteStrategy() {
+                const strategyName = document.getElementById('strategySelect').value;
+                if (!strategyName) {
+                    alert('请先选择要删除的策略');
+                    return;
+                }
+                
+                if (!confirm(`确定要删除策略 "${strategyName}" 吗？`)) {
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/StrategyConfig/${encodeURIComponent(strategyName)}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        alert('策略删除成功');
+                        document.getElementById('strategyConfigForm').style.display = 'none';
+                        this.loadStrategies();
+                    } else {
+                        alert('删除策略失败');
+                    }
+                } catch (error) {
+                    console.error('删除策略失败:', error);
+                    alert('删除策略失败');
+                }
+            },
+
+            // 测试策略
+            async testStrategy() {
+                alert('策略测试功能开发中...');
+            },
+
+            // 开始监控
+            startMonitoring() {
+                document.getElementById('monitoringStatus').innerHTML = '<span style="color: #28a745;">✅ 监控已启动</span>';
+                alert('实时监控功能开发中...');
+            },
+
+            // 停止监控
+            stopMonitoring() {
+                document.getElementById('monitoringStatus').innerHTML = '<span style="color: #dc3545;">⏹️ 监控已停止</span>';
+            },
+
+            // 加载活跃策略
+            async loadActiveStrategies() {
+                try {
+                    const response = await fetch(`${API_BASE}/api/QuantStrategy/active`);
+                    const strategies = await response.json();
+                    
+                    const container = document.getElementById('activeStrategies');
+                    if (strategies.length === 0) {
+                        container.innerHTML = '<p style="text-align: center; color: #666;">暂无活跃策略</p>';
+                        return;
+                    }
+                    
+                    container.innerHTML = `
+                        <h4>活跃策略 (${strategies.length})</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; margin-top: 15px;">
+                            ${strategies.map(strategy => `
+                                <div class="stock-card">
+                                    <div class="stock-header">
+                                        <div class="stock-name-section">
+                                            <div class="stock-name">${strategy.name}</div>
+                                            <div class="stock-code">${strategy.type}</div>
+                                        </div>
+                                        <div class="category-label cost-positive">运行中</div>
+                                    </div>
+                                    <div class="price-section">
+                                        <div class="price-info-row">
+                                            <div class="price-item">
+                                                <span class="price-label">当前资金</span>
+                                                <span class="price-value">¥${strategy.currentCapital.toLocaleString()}</span>
+                                            </div>
+                                            <div class="price-item">
+                                                <span class="price-label">收益率</span>
+                                                <span class="price-value ${strategy.currentCapital >= strategy.initialCapital ? 'price-up' : 'price-down'}">
+                                                    ${((strategy.currentCapital - strategy.initialCapital) / strategy.initialCapital * 100).toFixed(2)}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('加载活跃策略失败:', error);
+                    document.getElementById('activeStrategies').innerHTML = '<p style="color: red;">加载失败</p>';
+                }
+            }
+        };
+
+        // 修改switchTab函数，添加量化交易选项卡的处理
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(tabName).classList.add('active');
+            
+            // 根据Tab加载数据
+            switch(tabName) {
+                case 'watchlist':
+                    loadWatchlist();
+                    break;
+                case 'quant':
+                    quantTrading.loadStrategies();
+                    // 设置默认日期
+                    const today = new Date();
+                    const oneMonthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+                    document.getElementById('backtestStartDate').value = oneMonthAgo.toISOString().split('T')[0];
+                    document.getElementById('backtestEndDate').value = today.toISOString().split('T')[0];
+                    break;
+                case 'news':
+                    loadNews();
+                    break;
+                case 'alert':
+                    loadAlerts();
+                    break;
+                case 'settings':
+                    loadNewsRefreshSettings();
+                    break;
+            }
+        }
     </script>
     
     <!-- 保存选股模板对话框 -->
