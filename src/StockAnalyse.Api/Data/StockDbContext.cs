@@ -18,6 +18,12 @@ public class StockDbContext : DbContext
     public DbSet<AIPrompt> AIPrompts { get; set; }
     public DbSet<PriceAlert> PriceAlerts { get; set; }
     public DbSet<ScreenTemplate> ScreenTemplates { get; set; } // 新增选股模板
+    
+    // 量化交易相关表
+    public DbSet<QuantStrategy> QuantStrategies { get; set; }
+    public DbSet<TradingSignal> TradingSignals { get; set; }
+    public DbSet<SimulatedTrade> SimulatedTrades { get; set; }
+    public DbSet<BacktestResult> BacktestResults { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -48,6 +54,35 @@ public class StockDbContext : DbContext
 
         modelBuilder.Entity<StockHistory>()
             .HasIndex(h => new { h.StockCode, h.TradeDate });
+
+        // 量化交易相关关系配置
+        modelBuilder.Entity<TradingSignal>()
+            .HasOne(ts => ts.Strategy)
+            .WithMany(s => s.TradingSignals)
+            .HasForeignKey(ts => ts.StrategyId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<SimulatedTrade>()
+            .HasOne(st => st.Strategy)
+            .WithMany(s => s.SimulatedTrades)
+            .HasForeignKey(st => st.StrategyId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<BacktestResult>()
+            .HasOne(br => br.Strategy)
+            .WithMany(s => s.BacktestResults)
+            .HasForeignKey(br => br.StrategyId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // 量化交易相关索引
+        modelBuilder.Entity<TradingSignal>()
+            .HasIndex(ts => new { ts.StrategyId, ts.StockCode, ts.GeneratedAt });
+
+        modelBuilder.Entity<SimulatedTrade>()
+            .HasIndex(st => new { st.StrategyId, st.StockCode, st.ExecutedAt });
+
+        modelBuilder.Entity<BacktestResult>()
+            .HasIndex(br => new { br.StrategyId, br.StartDate, br.EndDate });
     }
 }
 

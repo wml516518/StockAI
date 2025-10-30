@@ -38,6 +38,12 @@ builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
 builder.Services.AddSingleton<NewsConfigService>();
 builder.Services.AddSingleton<AIPromptConfigService>();
 
+// 量化交易服务
+builder.Services.AddScoped<IQuantTradingService, QuantTradingService>();
+builder.Services.AddScoped<ITechnicalIndicatorService, TechnicalIndicatorService>();
+builder.Services.AddScoped<IBacktestService, BacktestService>();
+builder.Services.AddScoped<IStrategyConfigService, StrategyConfigService>();
+
 // 注册定时任务服务
 builder.Services.AddHostedService<NewsBackgroundService>();
 

@@ -301,3 +301,207 @@ public class ScreenCriteria
     public decimal? MaxTotalShares { get; set; }
 }
 
+/// <summary>
+/// 策略类型枚举
+/// </summary>
+public enum StrategyType
+{
+    TechnicalIndicator, // 技术指标策略
+    Fundamental, // 基本面策略
+    Arbitrage, // 套利策略
+    MachineLearning, // 机器学习策略
+    Custom // 自定义策略
+}
+
+/// <summary>
+/// 信号类型枚举
+/// </summary>
+public enum SignalType
+{
+    Buy, // 买入信号
+    Sell, // 卖出信号
+    Hold // 持有信号
+}
+
+/// <summary>
+/// 交易类型枚举
+/// </summary>
+public enum TradeType
+{
+    Buy, // 买入
+    Sell // 卖出
+}
+
+/// <summary>
+/// 量化策略模型
+/// </summary>
+[Table("QuantStrategies")]
+public class QuantStrategy
+{
+    [Key]
+    public int Id { get; set; }
+    
+    [Required]
+    [MaxLength(100)]
+    public string Name { get; set; } = string.Empty; // 策略名称
+    
+    [MaxLength(500)]
+    public string? Description { get; set; } // 策略描述
+    
+    public StrategyType Type { get; set; } // 策略类型
+    
+    [Column(TypeName = "TEXT")]
+    public string Parameters { get; set; } = "{}"; // JSON格式存储参数
+    
+    public bool IsActive { get; set; } = true; // 是否激活
+    
+    public decimal InitialCapital { get; set; } = 100000; // 初始资金
+    
+    public decimal CurrentCapital { get; set; } = 100000; // 当前资金
+    
+    public DateTime CreatedAt { get; set; } = DateTime.Now; // 创建时间
+    
+    public DateTime UpdatedAt { get; set; } = DateTime.Now; // 更新时间
+    
+    public DateTime? LastRunAt { get; set; } // 最后运行时间
+    
+    // 导航属性
+    public virtual List<TradingSignal> TradingSignals { get; set; } = new();
+    public virtual List<SimulatedTrade> SimulatedTrades { get; set; } = new();
+    public virtual List<BacktestResult> BacktestResults { get; set; } = new();
+}
+
+/// <summary>
+/// 交易信号模型
+/// </summary>
+[Table("TradingSignals")]
+public class TradingSignal
+{
+    [Key]
+    public int Id { get; set; }
+    
+    public int StrategyId { get; set; } // 策略ID
+    
+    [Required]
+    [MaxLength(10)]
+    public string StockCode { get; set; } = string.Empty; // 股票代码
+    
+    public SignalType Type { get; set; } // 信号类型
+    
+    public decimal Price { get; set; } // 信号价格
+    
+    public decimal Confidence { get; set; } = 0.5m; // 信号置信度 (0-1)
+    
+    [MaxLength(500)]
+    public string? Reason { get; set; } // 信号原因
+    
+    public DateTime GeneratedAt { get; set; } = DateTime.Now; // 生成时间
+    
+    public bool IsExecuted { get; set; } = false; // 是否已执行
+    
+    public DateTime? ExecutedAt { get; set; } // 执行时间
+    
+    // 导航属性
+    public virtual QuantStrategy Strategy { get; set; } = null!;
+}
+
+/// <summary>
+/// 模拟交易记录模型
+/// </summary>
+[Table("SimulatedTrades")]
+public class SimulatedTrade
+{
+    [Key]
+    public int Id { get; set; }
+    
+    public int StrategyId { get; set; } // 策略ID
+    
+    [Required]
+    [MaxLength(10)]
+    public string StockCode { get; set; } = string.Empty; // 股票代码
+    
+    public TradeType Type { get; set; } // 交易类型
+    
+    public decimal Quantity { get; set; } // 交易数量
+    
+    public decimal Price { get; set; } // 交易价格
+    
+    public decimal Commission { get; set; } = 0; // 手续费
+    
+    public decimal Amount { get; set; } // 交易金额
+    
+    public DateTime ExecutedAt { get; set; } = DateTime.Now; // 执行时间
+    
+    [MaxLength(200)]
+    public string? Notes { get; set; } // 备注
+    
+    // 导航属性
+    public virtual QuantStrategy Strategy { get; set; } = null!;
+}
+
+/// <summary>
+/// 回测结果模型
+/// </summary>
+[Table("BacktestResults")]
+public class BacktestResult
+{
+    [Key]
+    public int Id { get; set; }
+    
+    public int StrategyId { get; set; } // 策略ID
+    
+    public DateTime StartDate { get; set; } // 回测开始日期
+    
+    public DateTime EndDate { get; set; } // 回测结束日期
+    
+    public decimal InitialCapital { get; set; } // 初始资金
+    
+    public decimal FinalCapital { get; set; } // 最终资金
+    
+    public decimal TotalReturn { get; set; } // 总收益率
+    
+    public decimal AnnualizedReturn { get; set; } // 年化收益率
+    
+    public decimal SharpeRatio { get; set; } // 夏普比率
+    
+    public decimal MaxDrawdown { get; set; } // 最大回撤
+    
+    public int TotalTrades { get; set; } // 总交易次数
+    
+    public int WinningTrades { get; set; } // 盈利交易次数
+    
+    public decimal WinRate { get; set; } // 胜率
+    
+    public DateTime CreatedAt { get; set; } = DateTime.Now; // 创建时间
+    
+    [Column(TypeName = "TEXT")]
+    public string? DetailedResults { get; set; } // JSON格式存储详细结果
+    
+    // 导航属性
+    public virtual QuantStrategy Strategy { get; set; } = null!;
+}
+
+/// <summary>
+/// 技术指标参数模型
+/// </summary>
+public class TechnicalIndicatorParameters
+{
+    // 移动平均线参数
+    public int ShortPeriod { get; set; } = 5; // 短期周期
+    public int LongPeriod { get; set; } = 20; // 长期周期
+    
+    // MACD参数
+    public int FastPeriod { get; set; } = 12; // 快线周期
+    public int SlowPeriod { get; set; } = 26; // 慢线周期
+    public int SignalPeriod { get; set; } = 9; // 信号线周期
+    
+    // RSI参数
+    public int RSIPeriod { get; set; } = 14; // RSI周期
+    public decimal RSIOverBought { get; set; } = 70; // 超买线
+    public decimal RSIOverSold { get; set; } = 30; // 超卖线
+    
+    // 布林带参数
+    public int BollingerPeriod { get; set; } = 20; // 布林带周期
+    public decimal BollingerStdDev { get; set; } = 2; // 标准差倍数
+}
+

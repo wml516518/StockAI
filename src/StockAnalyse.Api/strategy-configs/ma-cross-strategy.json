@@ -1,0 +1,30 @@
+{
+  "name": "MA5-MA20交叉策略",
+  "description": "基于5日均线和20日均线的金叉死叉策略。当短期均线上穿长期均线时买入，下穿时卖出。适合趋势性较强的市场环境。",
+  "type": "TechnicalIndicator",
+  "parameters": {
+    "shortPeriod": 5,
+    "longPeriod": 20,
+    "fastPeriod": 12,
+    "slowPeriod": 26,
+    "signalPeriod": 9,
+    "rsiPeriod": 14,
+    "rsiOverBought": 70,
+    "rsiOverSold": 30,
+    "bollingerPeriod": 20,
+    "bollingerStdDev": 2.0
+  },
+  "initialCapital": 100000,
+  "isActive": true,
+  "riskSettings": {
+    "maxPositionPercent": 10,
+    "stopLossPercent": 5,
+    "takeProfitPercent": 15
+  },
+  "metadata": {
+    "author": "系统默认",
+    "version": "1.0",
+    "createdDate": "2024-01-01",
+    "tags": ["技术指标", "趋势跟踪", "移动平均"]
+  }
+}
