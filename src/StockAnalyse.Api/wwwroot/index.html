@@ -450,6 +450,22 @@
             background-color: #f0f7ff;
             color: #1976d2;
         }
+        
+        /* AI分析加载动画 */
+        .loading-spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 10px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
         </style>
 </head>
 <body>
@@ -643,7 +659,7 @@
                     </div>
                     <div class="form-group">
                         <label>策略类型</label>
-                        <select id="strategyType">
+                        <select id="strategyType" onchange="quantTrading.loadStrategyParameters(this.value)">
                             <option value="MA_CROSS">MA交叉策略</option>
                             <option value="RSI">RSI策略</option>
                             <option value="BOLLINGER">布林带策略</option>
@@ -3266,6 +3282,13 @@
                 }
                 
                 try {
+                    console.log('开始批量回测，参数：', {
+                        stockCodes,
+                        strategyName,
+                        startDate,
+                        endDate
+                    });
+                    
                     const response = await fetch(`${API_BASE}/api/Backtest/run-batch`, {
                         method: 'POST',
                         headers: {
@@ -3280,16 +3303,23 @@
                         })
                     });
                     
-                    const results = await response.json();
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('批量回测API错误:', response.status, errorText);
+                        throw new Error(`服务器错误 (${response.status}): ${errorText}`);
+                    }
                     
-                    if (response.ok) {
+                    const results = await response.json();
+                    console.log('批量回测结果:', results);
+                    
+                    if (results && Array.isArray(results)) {
                         this.displayBatchBacktestResults(results);
                     } else {
-                        alert('批量回测失败: ' + (results.message || '未知错误'));
+                        alert('批量回测返回了无效的结果格式');
                     }
                 } catch (error) {
                     console.error('批量回测失败:', error);
-                    alert('批量回测失败');
+                    alert('批量回测失败: ' + error.message);
                 }
             },
             
@@ -3315,6 +3345,9 @@
                                 ${(result.totalReturn * 100).toFixed(2)}%
                             </div>
                             <div class="trade-count">交易: ${result.totalTrades}次</div>
+                            <div class="backtest-actions">
+                                <button class="btn btn-small" onclick="event.stopPropagation(); const self = quantTrading; self.showAIAnalysis(${index})">AI分析</button>
+                            </div>
                         </div>
                     `;
                 });
@@ -3351,6 +3384,14 @@
                         font-size: 1.2em;
                         margin: 5px 0;
                     }
+                    .backtest-actions {
+                        margin-top: 8px;
+                        text-align: right;
+                    }
+                    .backtest-actions .btn-small {
+                        padding: 3px 8px;
+                        font-size: 0.8em;
+                    }
                 `;
                 document.head.appendChild(style);
                 
@@ -3359,70 +3400,159 @@
                 
                 // 默认显示第一个结果的详情
                 if (results.length > 0) {
-                    this.showBacktestDetail(0);
+                    const self = this;
+                    setTimeout(() => self.showBacktestDetail(0), 100);
                 }
                 
                 document.getElementById('backtestResults').style.display = 'block';
             },
             
-            // 新增：显示单个回测详情
-            showBacktestDetail(index) {
+            // 新增：显示AI分析对话框
+            showAIAnalysis(index) {
                 if (!this.batchBacktestResults || !this.batchBacktestResults[index]) return;
                 
                 const result = this.batchBacktestResults[index];
-                const detailPanel = document.getElementById('backtestDetailPanel');
+                const modal = document.getElementById('aiAnalysisModal');
+                const loadingDiv = document.getElementById('aiAnalysisLoading');
+                const resultDiv = document.getElementById('aiAnalysisResult');
+                const contentDiv = resultDiv.querySelector('.analysis-content');
                 
-                // 更新详情面板数据
-                document.getElementById('totalReturn').textContent = (result.totalReturn * 100).toFixed(2) + '%';
-                document.getElementById('annualReturn').textContent = (result.annualizedReturn * 100).toFixed(2) + '%';
-                document.getElementById('maxDrawdown').textContent = (result.maxDrawdown * 100).toFixed(2) + '%';
-                document.getElementById('sharpeRatio').textContent = result.sharpeRatio.toFixed(2);
-                document.getElementById('tradeCount').textContent = result.totalTrades;
-                document.getElementById('winRate').textContent = (result.winRate * 100).toFixed(1) + '%';
+                // 显示对话框和加载状态
+                modal.style.display = 'block';
+                loadingDiv.style.display = 'block';
+                resultDiv.style.display = 'none';
                 
-                // 显示交易记录
-                const tradeHistory = document.getElementById('tradeHistory');
-                if (result.trades && result.trades.length > 0) {
-                    tradeHistory.innerHTML = `
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>日期</th>
-                                    <th>类型</th>
-                                    <th>价格</th>
-                                    <th>数量</th>
-                                    <th>金额</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${result.trades.map(trade => `
-                                    <tr>
-                                        <td>${new Date(trade.executedAt).toLocaleDateString()}</td>
-                                        <td style="color: ${trade.type === 'BUY' ? '#f44336' : '#4caf50'}">${trade.type === 'BUY' ? '买入' : '卖出'}</td>
-                                        <td>¥${trade.price.toFixed(2)}</td>
-                                        <td>${trade.quantity}</td>
-                                        <td>¥${trade.amount.toFixed(2)}</td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    `;
-                } else {
-                    tradeHistory.innerHTML = '<p style="text-align: center; color: #666;">暂无交易记录</p>';
-                }
+                // 设置基本信息
+                document.getElementById('aiAnalysisStockCode').textContent = `股票代码: ${result.stockCode}`;
+                document.getElementById('aiAnalysisStrategyName').textContent = `策略: ${document.getElementById('strategySelect').value}`;
+                document.getElementById('aiAnalysisDateRange').textContent = 
+                    `时间范围: ${document.getElementById('backtestStartDate').value} 至 ${document.getElementById('backtestEndDate').value}`;
                 
-                // 高亮选中的结果项
-                document.querySelectorAll('.batch-backtest-item').forEach((item, i) => {
-                    if (i === index) {
-                        item.style.backgroundColor = '#f0f7ff';
-                        item.style.borderColor = '#1976d2';
-                    } else {
-                        item.style.backgroundColor = '';
-                        item.style.borderColor = '#ddd';
+                // 构建分析请求的上下文
+                const context = `请对这只股票的回测结果进行全面客观的分析，包括：
+1. 回测结果数据解读（总收益率、年化收益率、最大回撤、夏普比率、交易次数、胜率等）
+2. 该股票的基本面分析（行业、主营业务、市场地位等）
+3. 所用策略的适用性分析
+4. 投资建议（是否适合持有，适合短期还是长期）
+5. 风险提示
+
+回测数据：
+- 股票代码: ${result.stockCode}
+- 策略名称: ${document.getElementById('strategySelect').value}
+- 策略类型: ${document.getElementById('strategyType').value || '未知'}
+- 回测时间: ${document.getElementById('backtestStartDate').value} 至 ${document.getElementById('backtestEndDate').value}
+- 总收益率: ${(result.totalReturn * 100).toFixed(2)}%
+- 年化收益率: ${(result.annualizedReturn * 100).toFixed(2)}%
+- 最大回撤: ${(result.maxDrawdown * 100).toFixed(2)}%
+- 夏普比率: ${result.sharpeRatio.toFixed(2)}
+- 交易次数: ${result.totalTrades}
+- 胜率: ${(result.winRate * 100).toFixed(1)}%
+
+请确保分析全面客观，内容详实有深度。`;
+                
+                // 调用AI分析接口
+                this.analyzeBacktestResult(result.stockCode, context)
+                    .then(analysisResult => {
+                        loadingDiv.style.display = 'none';
+                        resultDiv.style.display = 'block';
+                        contentDiv.textContent = analysisResult;
+                    })
+                    .catch(error => {
+                        loadingDiv.style.display = 'none';
+                        resultDiv.style.display = 'block';
+                        contentDiv.textContent = '分析失败: ' + error.message;
+                    });
+            },
+            
+            // 新增：调用AI分析接口
+            async analyzeBacktestResult(stockCode, context) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/ai/analyze/${stockCode}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            context: context,
+                            promptId: null
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
                     }
-                });
-                
-                detailPanel.style.display = 'block';
+                    
+                    return await response.text();
+                } catch (error) {
+                    console.error('AI分析失败:', error);
+                    throw error;
+                }
+            },
+            
+            // 新增：显示单个回测详情
+            showBacktestDetail(index) {
+                try {
+                    if (!this.batchBacktestResults || !this.batchBacktestResults[index]) {
+                        console.error('无法显示回测详情：结果数据不存在或索引无效', index);
+                        return;
+                    }
+                    
+                    const result = this.batchBacktestResults[index];
+                    const detailPanel = document.getElementById('backtestDetailPanel');
+                    
+                    // 更新详情面板数据
+                    document.getElementById('totalReturn').textContent = (result.totalReturn * 100).toFixed(2) + '%';
+                    document.getElementById('annualReturn').textContent = (result.annualizedReturn * 100).toFixed(2) + '%';
+                    document.getElementById('maxDrawdown').textContent = (result.maxDrawdown * 100).toFixed(2) + '%';
+                    document.getElementById('sharpeRatio').textContent = result.sharpeRatio.toFixed(2);
+                    document.getElementById('tradeCount').textContent = result.totalTrades;
+                    document.getElementById('winRate').textContent = (result.winRate * 100).toFixed(1) + '%';
+                    
+                    // 显示交易记录
+                    const tradeHistory = document.getElementById('tradeHistory');
+                    if (result.trades && result.trades.length > 0) {
+                        tradeHistory.innerHTML = `
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>日期</th>
+                                        <th>类型</th>
+                                        <th>价格</th>
+                                        <th>数量</th>
+                                        <th>金额</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${result.trades.map(trade => `
+                                        <tr>
+                                            <td>${new Date(trade.executedAt).toLocaleDateString()}</td>
+                                            <td style="color: ${trade.type === 'BUY' ? '#f44336' : '#4caf50'}">${trade.type === 'BUY' ? '买入' : '卖出'}</td>
+                                            <td>¥${trade.price.toFixed(2)}</td>
+                                            <td>${trade.quantity}</td>
+                                            <td>¥${trade.amount.toFixed(2)}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        `;
+                    } else {
+                        tradeHistory.innerHTML = '<p style="text-align: center; color: #666;">暂无交易记录</p>';
+                    }
+                    
+                    // 高亮选中的结果项
+                    document.querySelectorAll('.batch-backtest-item').forEach((item, i) => {
+                        if (i === index) {
+                            item.style.backgroundColor = '#f0f7ff';
+                            item.style.borderColor = '#1976d2';
+                        } else {
+                            item.style.backgroundColor = '';
+                            item.style.borderColor = '#ddd';
+                        }
+                    });
+                    
+                    detailPanel.style.display = 'block';
+                } catch (error) {
+                    console.error('显示回测详情失败:', error);
+                    alert('显示回测详情失败: ' + error.message);
+                }
             },
         };
 
@@ -3484,6 +3614,32 @@
             <div class="modal-footer">
                 <button class="btn" onclick="saveTemplate()">💾 保存</button>
                 <button class="btn" style="background: #6c757d;" onclick="hideSaveTemplateDialog()">取消</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- AI分析回测结果对话框 -->
+    <div id="aiAnalysisModal" class="modal">
+        <div class="modal-content" style="max-width: 800px; width: 90%;">
+            <div class="modal-header">
+                <h3>AI分析回测结果</h3>
+                <span class="close" onclick="document.getElementById('aiAnalysisModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <div id="aiAnalysisLoading" style="text-align: center; padding: 20px;">
+                    <div class="loading-spinner"></div>
+                    <p>AI正在分析中，请稍候...</p>
+                </div>
+                <div id="aiAnalysisResult" style="display: none;">
+                    <div class="stock-info" style="margin-bottom: 15px;">
+                        <h4 id="aiAnalysisStockCode"></h4>
+                        <div class="strategy-info">
+                            <span id="aiAnalysisStrategyName"></span>
+                            <span id="aiAnalysisDateRange"></span>
+                        </div>
+                    </div>
+                    <div class="analysis-content" style="line-height: 1.6; white-space: pre-wrap;"></div>
+                </div>
             </div>
         </div>
     </div>
