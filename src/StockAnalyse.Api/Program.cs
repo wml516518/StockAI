@@ -36,7 +36,7 @@ builder.Services.AddScoped<INewsService, NewsService>();
 builder.Services.AddScoped<IAIService, AIService>();
 builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
 builder.Services.AddSingleton<NewsConfigService>();
-builder.Services.AddSingleton<AIPromptConfigService>(); // 新增
+builder.Services.AddSingleton<AIPromptConfigService>();
 
 // 注册定时任务服务
 builder.Services.AddHostedService<NewsBackgroundService>();

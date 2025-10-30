@@ -567,7 +567,34 @@
                     <input type="text" id="newsSearch" placeholder="搜索新闻关键词" style="flex: 1;">
                     <button class="btn" onclick="searchNews()">🔍 搜索</button>
                     <button class="btn" onclick="fetchLatestNews()">🔄 抓取最新新闻</button>
+                    <button class="btn" onclick="analyzeBatchNews()">🤖 批量AI分析</button>
                 </div>
+                <div id="batchAnalysisResult" style="display: none; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; border-left: 4px solid #667eea;">
+                    <h4 style="margin-top: 0; color: #667eea;">📊 市场综合分析</h4>
+                    <div id="batchAnalysisContent" style="white-space: pre-wrap; line-height: 1.6;"></div>
+                    <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                        <span id="batchAnalysisStats"></span>
+                        <button onclick="hideBatchAnalysis()" style="float: right; background: none; border: none; color: #999; cursor: pointer;">✕ 关闭</button>
+                    </div>
+                </div>
+                
+                <!-- 提示词选择对话框 -->
+                <div id="promptSelectionModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; width: 90%; max-width: 500px; max-height: 80%; overflow-y: auto;">
+                        <h3 style="margin-top: 0; color: #667eea;">🤖 选择AI分析提示词</h3>
+                        <p style="color: #666; margin-bottom: 20px;">请选择一个提示词来指导AI分析新闻内容：</p>
+                        
+                        <div id="promptList" style="margin-bottom: 20px;">
+                            <!-- 提示词列表将在这里动态加载 -->
+                        </div>
+                        
+                        <div style="text-align: right;">
+                            <button onclick="closePromptModal()" style="margin-right: 10px; padding: 8px 16px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">取消</button>
+                            <button id="confirmPromptBtn" onclick="confirmPromptSelection()" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;" disabled>开始分析</button>
+                        </div>
+                    </div>
+                </div>
+                
                 <div id="newsList" class="loading">加载中...</div>
             </div>
         </div>
@@ -779,6 +806,9 @@
     
     <script>
         const API_BASE = window.location.origin;
+        
+        // 全局变量
+        let currentNewsData = []; // 存储当前页面的新闻数据
         
         // 自动刷新相关变量
         let autoRefreshTimer = null;
@@ -1013,12 +1043,15 @@
                 const news = await response.json();
                 
                 if (news && news.length > 0) {
+                    currentNewsData = news; // 存储新闻数据
                     displayNews(news);
                 } else {
+                    currentNewsData = []; // 清空数据
                     // 如果没有新闻数据，尝试自动抓取
                     await fetchLatestNews();
                 }
             } catch (error) {
+                currentNewsData = []; // 清空数据
                 document.getElementById('newsList').innerHTML = '<p>加载失败：' + error.message + '</p>';
             }
         }
@@ -1039,7 +1072,9 @@
                                     📰 ${item.source} · ${new Date(item.publishTime).toLocaleString()}
                                     ${stockCodes ? ' · 📈 ' + stockCodes : ''}
                                 </span>
-                                <span style="color: #999; font-size: 0.8em;">👁️ ${item.viewCount || 0}</span>
+                                <div>
+                                    <span style="color: #999; font-size: 0.8em;">👁️ ${item.viewCount || 0}</span>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -1064,8 +1099,10 @@
                 const response = await fetch(`${API_BASE}/api/news/search?keyword=${encodeURIComponent(keyword)}`);
                 const news = await response.json();
                 
+                currentNewsData = news || []; // 更新当前新闻数据
                 displayNews(news);
             } catch (error) {
+                currentNewsData = []; // 清空数据
                 document.getElementById('newsList').innerHTML = '<p>搜索失败：' + error.message + '</p>';
             }
         }
@@ -1093,6 +1130,159 @@
             } catch (error) {
                 document.getElementById('newsList').innerHTML = '<p>抓取失败：' + error.message + '</p>';
             }
+        }
+
+        // 批量AI分析新闻 - 显示提示词选择对话框
+        async function analyzeBatchNews() {
+            try {
+                // 首先加载提示词列表
+                await loadPrompts();
+                
+                // 显示提示词选择对话框
+                document.getElementById('promptSelectionModal').style.display = 'block';
+                
+            } catch (error) {
+                alert('加载提示词失败：' + error.message);
+            }
+        }
+
+        // 加载提示词列表
+        async function loadPrompts() {
+            try {
+                const response = await fetch(`${API_BASE}/api/news/prompts`);
+                if (!response.ok) {
+                    throw new Error('获取提示词列表失败');
+                }
+                
+                const prompts = await response.json();
+                const promptList = document.getElementById('promptList');
+                
+                let html = '';
+                
+                // 添加默认选项
+                html += `
+                    <div style="margin-bottom: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; cursor: pointer;" onclick="selectPrompt(null, '默认分析', '使用系统默认的金融新闻分析提示词')">
+                        <input type="radio" name="promptSelection" value="" style="margin-right: 8px;">
+                        <strong>默认分析</strong>
+                        <p style="margin: 5px 0 0 20px; color: #666; font-size: 0.9em;">使用系统默认的金融新闻分析提示词</p>
+                    </div>
+                `;
+                
+                // 添加自定义提示词
+                prompts.forEach(prompt => {
+                    html += `
+                        <div style="margin-bottom: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; cursor: pointer;" onclick="selectPrompt(${prompt.id}, '${prompt.name}', '${prompt.description}')">
+                            <input type="radio" name="promptSelection" value="${prompt.id}" style="margin-right: 8px;">
+                            <strong>${prompt.name}</strong>
+                            <p style="margin: 5px 0 0 20px; color: #666; font-size: 0.9em;">${prompt.description}</p>
+                        </div>
+                    `;
+                });
+                
+                promptList.innerHTML = html;
+                
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        // 选择提示词
+        let selectedPromptId = null;
+        function selectPrompt(promptId, promptName, promptDescription) {
+            selectedPromptId = promptId;
+            
+            // 更新单选按钮状态
+            document.querySelectorAll('input[name="promptSelection"]').forEach(radio => {
+                radio.checked = (radio.value == (promptId || ''));
+            });
+            
+            // 启用确认按钮
+            document.getElementById('confirmPromptBtn').disabled = false;
+        }
+
+        // 关闭提示词选择对话框
+        function closePromptModal() {
+            document.getElementById('promptSelectionModal').style.display = 'none';
+            selectedPromptId = null;
+            document.getElementById('confirmPromptBtn').disabled = true;
+        }
+
+        // 确认提示词选择并开始分析
+        async function confirmPromptSelection() {
+            try {
+                // 关闭对话框
+                closePromptModal();
+                
+                // 获取当前页面的所有新闻ID
+                const newsIds = currentNewsData.map(news => news.id);
+                
+                if (newsIds.length === 0) {
+                    alert('当前页面没有新闻数据，请先加载新闻');
+                    return;
+                }
+
+                // 显示加载状态
+                const resultDiv = document.getElementById('batchAnalysisResult');
+                const contentDiv = document.getElementById('batchAnalysisContent');
+                const statsDiv = document.getElementById('batchAnalysisStats');
+                
+                resultDiv.style.display = 'block';
+                contentDiv.innerHTML = '🤖 正在进行市场综合分析，请稍候...';
+                statsDiv.innerHTML = '';
+
+                // 调用批量分析API
+                const requestBody = {
+                    newsIds: newsIds
+                };
+                
+                if (selectedPromptId) {
+                    requestBody.promptId = selectedPromptId;
+                }
+
+                const response = await fetch(`${API_BASE}/api/news/analyze-batch`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                if (!response.ok) {
+                    throw new Error('批量分析请求失败');
+                }
+
+                const result = await response.json();
+                
+                // 显示分析结果
+                contentDiv.innerHTML = result.analysis || result;
+                
+                // 显示统计信息
+                if (result.newsCount !== undefined) {
+                    const timeRange = result.timeRange;
+                    const hotStocks = result.hotStocks || [];
+                    
+                    let statsHtml = `📊 分析了 ${result.newsCount} 条新闻`;
+                    if (timeRange) {
+                        const fromTime = new Date(timeRange.from).toLocaleString();
+                        const toTime = new Date(timeRange.to).toLocaleString();
+                        statsHtml += ` | ⏰ 时间范围: ${fromTime} ~ ${toTime}`;
+                    }
+                    if (hotStocks.length > 0) {
+                        statsHtml += ` | 🔥 热门股票: ${hotStocks.slice(0, 5).join(', ')}`;
+                    }
+                    
+                    statsDiv.innerHTML = statsHtml;
+                }
+
+            } catch (error) {
+                const contentDiv = document.getElementById('batchAnalysisContent');
+                contentDiv.innerHTML = `❌ 批量分析失败：${error.message}`;
+            }
+        }
+
+        // 隐藏批量分析结果
+        function hideBatchAnalysis() {
+            document.getElementById('batchAnalysisResult').style.display = 'none';
         }
         
         // 打开新闻详情（占位函数，可根据需要扩展）

@@ -27,11 +27,14 @@
 - 自动抓取财联社、新浪财经等新闻
 - 按股票筛选新闻
 - 关键词搜索
+- **🆕 批量AI分析：** 对整个页面的新闻进行综合市场分析
+- **🆕 智能分析：** 提供市场热点、行业板块、投资建议等多维度分析
 
 ### 5. AI分析
 - 集成DeepSeek、OpenAI等大模型
 - 股票分析建议
 - 智能问答
+- **🆕 新闻综合分析：** 基于多条新闻的市场趋势分析
 
 ### 6. 价格提醒
 - 设置涨跌幅触发提醒
@@ -121,6 +124,12 @@ http://hq.sinajs.cn/list={code}
 - `GET /api/news/latest` - 最新新闻
 - `GET /api/news/stock/{code}` - 股票新闻
 - `GET /api/news/search` - 搜索新闻
+- `POST /api/news/analyze-single` - 单条新闻AI分析
+- `POST /api/news/analyze-batch` - 批量新闻AI分析
+- `POST /api/news/analyze-latest` - 最新新闻综合分析
+- `POST /api/news/analyze-single` - 单条新闻AI分析
+- `POST /api/news/analyze-batch` - 批量新闻AI分析
+- `POST /api/news/analyze-latest` - 最新新闻综合分析
 
 ### AI相关
 - `POST /api/ai/analyze/{code}` - 分析股票
@@ -158,6 +167,23 @@ POST /api/screen/search
   "minPE": 10,
   "maxPE": 30,
   "MACD混乱Up": true
+}
+```
+
+### 批量新闻AI分析
+```javascript
+POST /api/news/analyze-batch
+{
+  "newsIds": [1, 2, 3, 4, 5]
+}
+```
+
+### 最新新闻综合分析
+```javascript
+POST /api/news/analyze-latest
+{
+  "count": 30,
+  "hours": 24
 }
 ```
 
