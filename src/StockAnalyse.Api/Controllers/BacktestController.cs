@@ -28,17 +28,17 @@ public class BacktestController : ControllerBase
         _logger = logger;
     }
 
-    public class RunRequest
+    public class RunBatchRequest
     {
-        public string StockCode { get; set; } = string.Empty;
+        public List<string>? StockCodes { get; set; } // 多选或多码输入
         public string StrategyName { get; set; } = string.Empty;
         public DateTime StartDate { get; set; }
         public DateTime EndDate { get; set; }
         public decimal InitialCapital { get; set; } = 100000;
     }
 
-    [HttpPost("run")]
-    public async Task<IActionResult> Run([FromBody] RunRequest request)
+    [HttpPost("run-batch")]
+    public async Task<IActionResult> RunBatch([FromBody] RunBatchRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.StrategyName))
             return BadRequest("策略名称不能为空");
@@ -49,70 +49,21 @@ public class BacktestController : ControllerBase
         if (strategy == null)
             return NotFound($"未找到策略：{request.StrategyName}");
 
-        // 确保回测期间自选股的历史数据充足
-        var watchlistCodes = await _context.WatchlistStocks
-            .Select(w => w.StockCode)
-            .Distinct()
-            .ToListAsync();
+        // 目标股票列表：优先使用请求，否则回退自选股
+        var targetCodes = (request.StockCodes != null && request.StockCodes.Any())
+            ? request.StockCodes.Distinct().ToList()
+            : await _context.WatchlistStocks
+                .Select(w => w.StockCode)
+                .Distinct()
+                .ToListAsync();
 
-        if (!watchlistCodes.Any())
-        {
-            _logger.LogWarning("自选股为空，回测无法进行。请先添加股票到自选股。");
-            return BadRequest("没有自选股可供回测，请先在“自选股”页面添加股票。");
-        }
+        if (!targetCodes.Any())
+            return BadRequest("没有可供回测的股票，请传入股票列表或在“自选股”添加股票。");
 
-        foreach (var code in watchlistCodes)
-        {
-            try
-            {
-                await _stockDataService.FetchAndStoreDailyHistoryAsync(code, request.StartDate.AddDays(-60), request.EndDate);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "拉取 {Code} 历史数据失败，回测可能数据不足", code);
-            }
-        }
+        // 调用批量回测
+        var summaries = await _backtestService.RunBatchBacktestAsync(
+            strategy.Id, request.StartDate, request.EndDate, request.InitialCapital, targetCodes);
 
-        var result = await _backtestService.RunBacktestAsync(strategy.Id, request.StartDate, request.EndDate, request.InitialCapital);
-
-        // 解析详细结果中的交易列表，返回前端期望结构
-        var trades = new List<object>();
-        try
-        {
-            if (!string.IsNullOrEmpty(result.DetailedResults))
-            {
-                using var doc = JsonDocument.Parse(result.DetailedResults);
-                if (doc.RootElement.TryGetProperty("Trades", out var t))
-                {
-                    foreach (var item in t.EnumerateArray())
-                    {
-                        trades.Add(new
-                        {
-                            StockCode = item.GetProperty("StockCode").GetString(),
-                            Type = item.GetProperty("Type").GetString(),
-                            Quantity = item.GetProperty("Quantity").GetDecimal(),
-                            Price = item.GetProperty("Price").GetDecimal(),
-                            Amount = item.GetProperty("Amount").GetDecimal(),
-                            ExecutedAt = item.GetProperty("ExecutedAt").GetDateTime()
-                        });
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "解析回测详情失败");
-        }
-
-        return Ok(new
-        {
-            totalReturn = result.TotalReturn,
-            annualizedReturn = result.AnnualizedReturn,
-            maxDrawdown = result.MaxDrawdown,
-            sharpeRatio = result.SharpeRatio,
-            totalTrades = result.TotalTrades,
-            winRate = result.WinRate,
-            trades = trades
-        });
+        return Ok(summaries);
     }
 }

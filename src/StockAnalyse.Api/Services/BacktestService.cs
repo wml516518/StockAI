@@ -28,7 +28,19 @@ public class BacktestService : IBacktestService
         _logger = logger;
     }
 
+    // 原方法：改为回退到自选股并委托到新重载
     public async Task<BacktestResult> RunBacktestAsync(int strategyId, DateTime startDate, DateTime endDate, decimal initialCapital = 100000)
+    {
+        var watchlistCodes = await _context.WatchlistStocks
+            .Select(w => w.StockCode)
+            .Distinct()
+            .ToListAsync();
+
+        return await RunBacktestAsync(strategyId, startDate, endDate, initialCapital, watchlistCodes);
+    }
+
+    // 新增：批量股票回测（使用传入股票集合）
+    public async Task<BacktestResult> RunBacktestAsync(int strategyId, DateTime startDate, DateTime endDate, decimal initialCapital, List<string> stockCodes)
     {
         var strategy = await _context.QuantStrategies.FindAsync(strategyId);
         if (strategy == null)
@@ -36,18 +48,13 @@ public class BacktestService : IBacktestService
 
         _logger.LogInformation("开始回测策略 {StrategyName}，时间范围：{StartDate} - {EndDate}", strategy.Name, startDate, endDate);
 
-        var stockCodes = await _context.WatchlistStocks
-            .Select(w => w.StockCode)
-            .Distinct()
-            .ToListAsync();
-
+        stockCodes = stockCodes?.Distinct().ToList() ?? new List<string>();
         if (!stockCodes.Any())
         {
-            _logger.LogWarning("没有找到自选股，回测无法进行");
+            _logger.LogWarning("没有找到传入的股票集合，回测无法进行");
             throw new InvalidOperationException("没有找到可用的股票进行回测");
         }
 
-        // 确保历史数据充足
         var parameters = JsonSerializer.Deserialize<TechnicalIndicatorParameters>(strategy.Parameters) 
                         ?? new TechnicalIndicatorParameters();
         var lookbackDays = Math.Max(parameters.LongPeriod, parameters.SlowPeriod) + 50;
@@ -67,17 +74,15 @@ public class BacktestService : IBacktestService
 
         var trades = new List<SimulatedTrade>();
         var currentCapital = initialCapital;
-        var positions = new Dictionary<string, decimal>(); // 持仓数量
+        var positions = new Dictionary<string, decimal>();
         var paras = JsonSerializer.Deserialize<TechnicalIndicatorParameters>(strategy.Parameters)
                         ?? new TechnicalIndicatorParameters();
 
-        // 按日期遍历回测
         var currentDate = startDate;
         while (currentDate <= endDate)
         {
             try
             {
-                // 为每个股票生成信号
                 foreach (var stockCode in stockCodes)
                 {
                     var signal = await GenerateHistoricalSignalAsync(stockCode, currentDate, paras, strategy.Type, strategy.Name);
@@ -99,13 +104,10 @@ public class BacktestService : IBacktestService
             }
 
             currentDate = currentDate.AddDays(1);
-            
-            // 跳过周末
             if (currentDate.DayOfWeek == DayOfWeek.Saturday)
                 currentDate = currentDate.AddDays(2);
         }
 
-        // 计算最终资产价值（包括持仓）
         var finalCapital = currentCapital;
         foreach (var position in positions)
         {
@@ -116,14 +118,12 @@ public class BacktestService : IBacktestService
             }
         }
 
-        // 计算性能指标
         var (totalReturn, annualizedReturn, sharpeRatio, maxDrawdown, winRate) = 
             await CalculatePerformanceMetricsAsync(trades, initialCapital, startDate, endDate);
 
-        // 创建回测结果
         var backtest = new BacktestResult
         {
-            StrategyId = strategyId,
+            StrategyId = strategy.Id,
             StartDate = startDate,
             EndDate = endDate,
             InitialCapital = initialCapital,
@@ -625,5 +625,108 @@ public class BacktestService : IBacktestService
         var variance = sumOfSquares / values.Count;
         
         return (decimal)Math.Sqrt((double)variance);
+    }
+
+    public async Task<List<StockBacktestSummary>> RunBatchBacktestAsync(int strategyId, DateTime startDate, DateTime endDate, decimal initialCapital, List<string> stockCodes)
+    {
+        var strategy = await _context.QuantStrategies.FindAsync(strategyId);
+        if (strategy == null)
+            throw new ArgumentException("策略不存在", nameof(strategyId));
+
+        var parameters = JsonSerializer.Deserialize<TechnicalIndicatorParameters>(strategy.Parameters)
+                        ?? new TechnicalIndicatorParameters();
+
+        var lookbackDays = Math.Max(parameters.LongPeriod, parameters.SlowPeriod) + 50;
+        var fetchStart = startDate.AddDays(-lookbackDays);
+        stockCodes = stockCodes?.Distinct().ToList() ?? new List<string>();
+
+        if (!stockCodes.Any())
+            throw new InvalidOperationException("没有找到可用的股票进行回测");
+
+        foreach (var code in stockCodes)
+        {
+            try
+            {
+                await _stockDataService.FetchAndStoreDailyHistoryAsync(code, fetchStart, endDate);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "拉取 {Code} 历史数据失败，可能影响回测信号生成", code);
+            }
+        }
+
+        var results = new List<StockBacktestSummary>();
+
+        foreach (var stockCode in stockCodes)
+        {
+            var trades = new List<SimulatedTrade>();
+            var positions = new Dictionary<string, decimal>();
+            var currentCapital = initialCapital;
+
+            var date = startDate;
+            while (date <= endDate)
+            {
+                try
+                {
+                    var signal = await GenerateHistoricalSignalAsync(stockCode, date, parameters, strategy.Type, strategy.Name);
+                    if (signal != null)
+                    {
+                        var (trade, newCapital) = await ExecuteBacktestTradeAsync(signal, currentCapital, positions, strategyId);
+                        if (trade != null)
+                        {
+                            trade.ExecutedAt = date;
+                            trades.Add(trade);
+                            currentCapital = newCapital;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "回测股票 {Code} 在 {Date} 处理失败", stockCode, date);
+                }
+
+                date = date.AddDays(1);
+                if (date.DayOfWeek == DayOfWeek.Saturday)
+                    date = date.AddDays(2);
+            }
+
+            var finalCapital = currentCapital;
+            var qty = positions.GetValueOrDefault(stockCode, 0);
+            if (qty > 0)
+            {
+                var latestPrice = await GetLatestPriceAsync(stockCode, endDate);
+                finalCapital += qty * latestPrice;
+            }
+
+            var (totalReturn, annualizedReturn, sharpeRatio, maxDrawdown, winRate) =
+                await CalculatePerformanceMetricsAsync(trades, initialCapital, startDate, endDate);
+
+            var summary = new StockBacktestSummary
+            {
+                StockCode = stockCode,
+                InitialCapital = initialCapital,
+                FinalCapital = finalCapital,
+                TotalReturn = totalReturn,
+                AnnualizedReturn = annualizedReturn,
+                SharpeRatio = sharpeRatio,
+                MaxDrawdown = maxDrawdown,
+                TotalTrades = trades.Count,
+                WinRate = winRate,
+                Trades = trades.Select(t => new SimulatedTradeItem
+                {
+                    StockCode = t.StockCode,
+                    Type = t.Type,
+                    Quantity = t.Quantity,
+                    Price = t.Price,
+                    Commission = t.Commission,
+                    Amount = t.Amount,
+                    ExecutedAt = t.ExecutedAt
+                }).ToList()
+            };
+
+            results.Add(summary);
+        }
+
+        return results;
     }
 }

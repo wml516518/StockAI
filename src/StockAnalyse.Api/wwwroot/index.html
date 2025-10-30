@@ -404,7 +404,53 @@
             font-size: 2em;
             font-weight: bold;
         }
-    </style>
+    /* 批量回测结果样式 */
+        .batch-backtest-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .batch-backtest-item {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background-color: #fff;
+        }
+        .batch-backtest-item:hover {
+            background-color: #f5f5f5;
+            transform: translateY(-2px);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .batch-backtest-item .stock-code {
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        .batch-backtest-item .return-rate {
+            font-size: 1.2em;
+            margin: 5px 0;
+        }
+        .batch-backtest-item.selected {
+            background-color: #f0f7ff;
+            border-color: #1976d2;
+        }
+        
+        /* 多选下拉框样式 */
+        select[multiple] {
+            height: auto;
+            min-height: 100px;
+        }
+        select[multiple] option {
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        select[multiple] option:checked {
+            background-color: #f0f7ff;
+            color: #1976d2;
+        }
+        </style>
 </head>
 <body>
     <div class="container">
@@ -622,46 +668,62 @@
                 <h3>📈 回测分析</h3>
                 <div class="form-group">
                     <label>选择股票进行回测</label>
-                    <div style="display: flex; gap: 10px;">
-                        <select id="backtestStockSelect" onchange="quantTrading.onBacktestStockChange()" style="min-width: 160px;">
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <select id="backtestStockSelect" multiple size="3" style="min-width: 200px; flex: 1;">
                             <option value="">从自选股选择...</option>
                         </select>
-                        <input type="text" id="backtestStock" placeholder="输入股票代码，如：000001" style="flex: 1;">
-                        <input type="date" id="backtestStartDate" title="开始日期">
-                        <input type="date" id="backtestEndDate" title="结束日期">
-                        <button class="btn" onclick="quantTrading.runBacktest()">🚀 开始回测</button>
+                        <div style="display: flex; flex-direction: column; gap: 5px;">
+                            <button class="btn" onclick="quantTrading.addSelectedStockToBacktest()" title="添加选中的股票">➕ 添加</button>
+                            <button class="btn" onclick="quantTrading.clearBacktestStocks()" title="清空已选股票" style="background: #dc3545;">❌ 清空</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <div style="flex: 1;">
+                            <label>已选股票</label>
+                            <textarea id="backtestStock" placeholder="输入多个股票代码，用逗号分隔，如：000001,600000" style="width: 100%; height: 60px;"></textarea>
+                        </div>
+                        <div style="display: flex; flex-direction: column; justify-content: flex-end; gap: 10px;">
+                            <div style="display: flex; gap: 10px;">
+                                <input type="date" id="backtestStartDate" title="开始日期">
+                                <input type="date" id="backtestEndDate" title="结束日期">
+                            </div>
+                            <button class="btn" onclick="quantTrading.runBatchBacktest()" style="width: 100%;">🚀 开始批量回测</button>
+                        </div>
                     </div>
                 </div>
                 <div id="backtestResults" style="display: none;">
-                    <div class="stats">
-                        <div class="stat-card">
-                            <h4>总收益率</h4>
-                            <div class="value" id="totalReturn">-</div>
+                    <div id="backtestSummaryList" style="margin-bottom: 20px;"></div>
+                    <div id="backtestDetailPanel" style="display: none;">
+                        <div class="stats">
+                            <div class="stat-card">
+                                <h4>总收益率</h4>
+                                <div class="value" id="totalReturn">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <h4>年化收益率</h4>
+                                <div class="value" id="annualReturn">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <h4>最大回撤</h4>
+                                <div class="value" id="maxDrawdown">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <h4>夏普比率</h4>
+                                <div class="value" id="sharpeRatio">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <h4>交易次数</h4>
+                                <div class="value" id="tradeCount">-</div>
+                            </div>
+                            <div class="stat-card">
+                                <h4>胜率</h4>
+                                <div class="value" id="winRate">-</div>
+                            </div>
                         </div>
-                        <div class="stat-card">
-                            <h4>年化收益率</h4>
-                            <div class="value" id="annualReturn">-</div>
+                        <div style="margin-top: 20px;">
+                            <h4>交易记录</h4>
+                            <div id="tradeHistory" style="max-height: 400px; overflow-y: auto;"></div>
                         </div>
-                        <div class="stat-card">
-                            <h4>最大回撤</h4>
-                            <div class="value" id="maxDrawdown">-</div>
-                        </div>
-                        <div class="stat-card">
-                            <h4>夏普比率</h4>
-                            <div class="value" id="sharpeRatio">-</div>
-                        </div>
-                        <div class="stat-card">
-                            <h4>交易次数</h4>
-                            <div class="value" id="tradeCount">-</div>
-                        </div>
-                        <div class="stat-card">
-                            <h4>胜率</h4>
-                            <div class="value" id="winRate">-</div>
-                        </div>
-                    </div>
-                    <div style="margin-top: 20px;">
-                        <h4>交易记录</h4>
-                        <div id="tradeHistory" style="max-height: 400px; overflow-y: auto;"></div>
                     </div>
                 </div>
             </div>
@@ -1103,8 +1165,14 @@
                     const uniqueCodes = Array.from(new Set(codes));
                     const sel = document.getElementById('backtestStockSelect');
                     if (sel) {
-                        sel.innerHTML = '<option value="">从自选股选择...</option>' + 
-                            uniqueCodes.map(c => `<option value="${c}">${c}</option>`).join('');
+                        // 保留当前选中的值
+                        const currentSelected = Array.from(sel.selectedOptions || [])
+                            .map(opt => opt.value)
+                            .filter(Boolean);
+                            
+                        sel.innerHTML = uniqueCodes.map(c => 
+                            `<option value="${c}" ${currentSelected.includes(c) ? 'selected' : ''}>${c}</option>`
+                        ).join('');
                     }
                 } catch (e) {
                     console.warn('填充回测股票下拉失败:', e);
@@ -3137,7 +3205,225 @@
                 if (sel && input) {
                     input.value = sel.value || '';
                 }
-            }
+            },
+            
+            // 新增：添加选中的股票到回测列表
+            addSelectedStockToBacktest() {
+                const sel = document.getElementById('backtestStockSelect');
+                const input = document.getElementById('backtestStock');
+                if (!sel || !input) return;
+                
+                const selectedOptions = Array.from(sel.selectedOptions);
+                if (!selectedOptions.length) {
+                    alert('请先选择股票');
+                    return;
+                }
+                
+                // 获取当前已有的股票代码
+                let currentCodes = input.value.split(',')
+                    .map(code => code.trim())
+                    .filter(code => code);
+                
+                // 添加新选中的股票代码
+                for (const option of selectedOptions) {
+                    if (option.value && !currentCodes.includes(option.value)) {
+                        currentCodes.push(option.value);
+                    }
+                }
+                
+                // 更新输入框
+                input.value = currentCodes.join(',');
+            },
+            
+            // 新增：清空已选股票
+            clearBacktestStocks() {
+                const input = document.getElementById('backtestStock');
+                if (input) {
+                    input.value = '';
+                }
+            },
+            
+            // 新增：运行批量回测
+            async runBatchBacktest() {
+                const stockCodesInput = document.getElementById('backtestStock').value.trim();
+                const startDate = document.getElementById('backtestStartDate').value;
+                const endDate = document.getElementById('backtestEndDate').value;
+                const strategyName = document.getElementById('strategySelect').value;
+                
+                if (!stockCodesInput || !startDate || !endDate || !strategyName) {
+                    alert('请填写完整的回测参数');
+                    return;
+                }
+                
+                // 解析股票代码列表
+                const stockCodes = stockCodesInput.split(',')
+                    .map(code => code.trim())
+                    .filter(code => code);
+                
+                if (!stockCodes.length) {
+                    alert('请至少选择一只股票');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/Backtest/run-batch`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            stockCodes: stockCodes,
+                            strategyName: strategyName,
+                            startDate: startDate,
+                            endDate: endDate,
+                            initialCapital: 100000
+                        })
+                    });
+                    
+                    const results = await response.json();
+                    
+                    if (response.ok) {
+                        this.displayBatchBacktestResults(results);
+                    } else {
+                        alert('批量回测失败: ' + (results.message || '未知错误'));
+                    }
+                } catch (error) {
+                    console.error('批量回测失败:', error);
+                    alert('批量回测失败');
+                }
+            },
+            
+            // 新增：显示批量回测结果
+            displayBatchBacktestResults(results) {
+                if (!results || !results.length) {
+                    alert('没有回测结果');
+                    return;
+                }
+                
+                const summaryList = document.getElementById('backtestSummaryList');
+                const detailPanel = document.getElementById('backtestDetailPanel');
+                
+                // 创建结果摘要列表
+                let html = '<h4>批量回测结果</h4><div class="batch-backtest-list">';
+                
+                results.forEach((result, index) => {
+                    const returnColor = result.totalReturn >= 0 ? '#f44336' : '#4caf50';
+                    html += `
+                        <div class="batch-backtest-item" onclick="quantTrading.showBacktestDetail(${index})">
+                            <div class="stock-code">${result.stockCode}</div>
+                            <div class="return-rate" style="color: ${returnColor}">
+                                ${(result.totalReturn * 100).toFixed(2)}%
+                            </div>
+                            <div class="trade-count">交易: ${result.totalTrades}次</div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                summaryList.innerHTML = html;
+                
+                // 添加样式
+                const style = document.createElement('style');
+                style.textContent = `
+                    .batch-backtest-list {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                        gap: 10px;
+                        margin-top: 10px;
+                    }
+                    .batch-backtest-item {
+                        border: 1px solid #ddd;
+                        border-radius: 5px;
+                        padding: 10px;
+                        cursor: pointer;
+                        transition: all 0.2s;
+                    }
+                    .batch-backtest-item:hover {
+                        background-color: #f5f5f5;
+                        transform: translateY(-2px);
+                        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    }
+                    .batch-backtest-item .stock-code {
+                        font-weight: bold;
+                        font-size: 1.1em;
+                    }
+                    .batch-backtest-item .return-rate {
+                        font-size: 1.2em;
+                        margin: 5px 0;
+                    }
+                `;
+                document.head.appendChild(style);
+                
+                // 存储结果数据供详情查看
+                this.batchBacktestResults = results;
+                
+                // 默认显示第一个结果的详情
+                if (results.length > 0) {
+                    this.showBacktestDetail(0);
+                }
+                
+                document.getElementById('backtestResults').style.display = 'block';
+            },
+            
+            // 新增：显示单个回测详情
+            showBacktestDetail(index) {
+                if (!this.batchBacktestResults || !this.batchBacktestResults[index]) return;
+                
+                const result = this.batchBacktestResults[index];
+                const detailPanel = document.getElementById('backtestDetailPanel');
+                
+                // 更新详情面板数据
+                document.getElementById('totalReturn').textContent = (result.totalReturn * 100).toFixed(2) + '%';
+                document.getElementById('annualReturn').textContent = (result.annualizedReturn * 100).toFixed(2) + '%';
+                document.getElementById('maxDrawdown').textContent = (result.maxDrawdown * 100).toFixed(2) + '%';
+                document.getElementById('sharpeRatio').textContent = result.sharpeRatio.toFixed(2);
+                document.getElementById('tradeCount').textContent = result.totalTrades;
+                document.getElementById('winRate').textContent = (result.winRate * 100).toFixed(1) + '%';
+                
+                // 显示交易记录
+                const tradeHistory = document.getElementById('tradeHistory');
+                if (result.trades && result.trades.length > 0) {
+                    tradeHistory.innerHTML = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>类型</th>
+                                    <th>价格</th>
+                                    <th>数量</th>
+                                    <th>金额</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${result.trades.map(trade => `
+                                    <tr>
+                                        <td>${new Date(trade.executedAt).toLocaleDateString()}</td>
+                                        <td style="color: ${trade.type === 'BUY' ? '#f44336' : '#4caf50'}">${trade.type === 'BUY' ? '买入' : '卖出'}</td>
+                                        <td>¥${trade.price.toFixed(2)}</td>
+                                        <td>${trade.quantity}</td>
+                                        <td>¥${trade.amount.toFixed(2)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    `;
+                } else {
+                    tradeHistory.innerHTML = '<p style="text-align: center; color: #666;">暂无交易记录</p>';
+                }
+                
+                // 高亮选中的结果项
+                document.querySelectorAll('.batch-backtest-item').forEach((item, i) => {
+                    if (i === index) {
+                        item.style.backgroundColor = '#f0f7ff';
+                        item.style.borderColor = '#1976d2';
+                    } else {
+                        item.style.backgroundColor = '';
+                        item.style.borderColor = '#ddd';
+                    }
+                });
+                
+                detailPanel.style.display = 'block';
+            },
         };
 
         // 修改switchTab函数，添加量化交易选项卡的处理
