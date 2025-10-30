@@ -58,6 +58,77 @@
             border-right: none;
         }
         
+        /* 模态对话框样式 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            animation: fadeIn 0.3s;
+        }
+        
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s;
+        }
+        
+        .modal-header {
+            padding: 20px 25px 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            color: #333;
+        }
+        
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+        
+        .close:hover,
+        .close:focus {
+            color: #000;
+        }
+        
+        .modal-body {
+            padding: 20px 25px;
+        }
+        
+        .modal-footer {
+            padding: 15px 25px 20px;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
         .tab:hover {
             background: #e0e0e0;
         }
@@ -412,8 +483,29 @@
         <!-- 条件选股 -->
         <div id="screen" class="content">
             <div class="card">
+                <h3>选股条件模板</h3>
+                <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center;">
+                    <select id="templateSelect" style="flex: 1;">
+                        <option value="">选择模板...</option>
+                    </select>
+                    <button class="btn" onclick="loadTemplate()" style="background: #28a745;">📂 加载</button>
+                    <button class="btn" onclick="showSaveTemplateDialog()" style="background: #17a2b8;">💾 保存</button>
+                    <button class="btn" onclick="editTemplate()" style="background: #ffc107; color: #000;">✏️ 编辑</button>
+                    <button class="btn" onclick="deleteTemplate()" style="background: #dc3545;">🗑️ 删除</button>
+                </div>
+            </div>
+            
+            <div class="card">
                 <h3>设置选股条件</h3>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                    <div class="form-group">
+                        <label>市场</label>
+                        <select id="market">
+                            <option value="">全部市场</option>
+                            <option value="SH">上海市场</option>
+                            <option value="SZ">深圳市场</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label>价格区间（元）</label>
                         <input type="number" id="minPrice" placeholder="最低价">
@@ -427,6 +519,7 @@
                     <div class="form-group">
                         <label>换手率（%）</label>
                         <input type="number" id="minTurnover" placeholder="最低换手率">
+                        <input type="number" id="maxTurnover" placeholder="最高换手率" style="margin-top: 5px;">
                     </div>
                     <div class="form-group">
                         <label>市盈率（PE）</label>
@@ -444,7 +537,7 @@
                         <input type="number" id="maxVolume" placeholder="最高成交量" style="margin-top: 5px;">
                     </div>
                     <div class="form-group">
-                        <label>市值区间（亿元）</label>
+                        <label>市值区间（万元）</label>
                         <input type="number" id="minMarketValue" placeholder="最低市值">
                         <input type="number" id="maxMarketValue" placeholder="最高市值" style="margin-top: 5px;">
                     </div>
@@ -454,7 +547,10 @@
                         <input type="number" id="maxDividendYield" placeholder="最高股息率" style="margin-top: 5px;">
                     </div>
                 </div>
-                <button class="btn" onclick="screenStocks()">开始选股</button>
+                <div style="display: flex; gap: 10px; margin-top: 15px;">
+                    <button class="btn" onclick="screenStocks()" style="flex: 1;">🔍 开始选股</button>
+                    <button class="btn" onclick="clearConditions()" style="background: #6c757d;">🧹 清空条件</button>
+                </div>
             </div>
             
             <div class="card">
@@ -854,11 +950,13 @@
         // 条件选股
         async function screenStocks() {
             const criteria = {
+                market: document.getElementById('market').value || null,
                 minPrice: parseFloat(document.getElementById('minPrice').value) || null,
                 maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
                 minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
                 maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
                 minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
+                maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
                 minPE: parseFloat(document.getElementById('minPE').value) || null,
                 maxPE: parseFloat(document.getElementById('maxPE').value) || null,
                 minPB: parseFloat(document.getElementById('minPB').value) || null,
@@ -1971,6 +2069,230 @@
         // 初始化管理器
         const aiPromptManager = new AIPromptManager();
 
+        // 选股模板管理
+        class ScreenTemplateManager {
+            constructor() {
+                this.templates = [];
+                this.apiBase = window.location.origin;
+                this.currentEditingId = null;
+            }
+
+            async init() {
+                await this.loadTemplates();
+                this.renderTemplateSelect();
+            }
+
+            async loadTemplates() {
+                try {
+                    const res = await fetch(`${this.apiBase}/api/screentemplates`);
+                    this.templates = res.ok ? await res.json() : [];
+                    this.renderTemplateSelect();
+                } catch (e) {
+                    console.error('加载选股模板失败:', e);
+                }
+            }
+
+            renderTemplateSelect() {
+                const select = document.getElementById('templateSelect');
+                if (!select) return;
+                
+                let html = '<option value="">选择模板...</option>';
+                this.templates.forEach(template => {
+                    html += `<option value="${template.id}" ${template.isDefault ? 'selected' : ''}>${template.name}</option>`;
+                });
+                select.innerHTML = html;
+            }
+
+            async loadTemplate() {
+                const templateId = document.getElementById('templateSelect').value;
+                if (!templateId) return;
+
+                try {
+                    const res = await fetch(`${this.apiBase}/api/screentemplates/${templateId}`);
+                    if (!res.ok) throw new Error('加载模板失败');
+                    
+                    const template = await res.json();
+                    this.fillFormWithTemplate(template);
+                } catch (e) {
+                    alert('加载模板失败：' + e.message);
+                }
+            }
+
+            fillFormWithTemplate(template) {
+                // 填充表单字段
+                document.getElementById('market').value = template.market || '';
+                document.getElementById('minPrice').value = template.minPrice || '';
+                document.getElementById('maxPrice').value = template.maxPrice || '';
+                document.getElementById('minChange').value = template.minChangePercent || '';
+                document.getElementById('maxChange').value = template.maxChangePercent || '';
+                document.getElementById('minTurnover').value = template.minTurnoverRate || '';
+                document.getElementById('maxTurnover').value = template.maxTurnoverRate || '';
+                document.getElementById('minPE').value = template.minPE || '';
+                document.getElementById('maxPE').value = template.maxPE || '';
+                document.getElementById('minPB').value = template.minPB || '';
+                document.getElementById('maxPB').value = template.maxPB || '';
+                document.getElementById('minVolume').value = template.minVolume || '';
+                document.getElementById('maxVolume').value = template.maxVolume || '';
+                document.getElementById('minMarketValue').value = template.minMarketValue || '';
+                document.getElementById('maxMarketValue').value = template.maxMarketValue || '';
+                document.getElementById('minDividendYield').value = template.minDividendYield || '';
+                document.getElementById('maxDividendYield').value = template.maxDividendYield || '';
+            }
+
+            showSaveDialog() {
+                document.getElementById('saveTemplateTitle').textContent = '保存选股模板';
+                document.getElementById('templateName').value = '';
+                document.getElementById('templateDescription').value = '';
+                document.getElementById('setAsDefault').checked = false;
+                this.currentEditingId = null;
+                document.getElementById('saveTemplateModal').style.display = 'block';
+            }
+
+            showEditDialog() {
+                const templateId = document.getElementById('templateSelect').value;
+                if (!templateId) {
+                    alert('请先选择一个模板');
+                    return;
+                }
+
+                const template = this.templates.find(t => t.id == templateId);
+                if (!template) return;
+
+                document.getElementById('saveTemplateTitle').textContent = '编辑选股模板';
+                document.getElementById('templateName').value = template.name;
+                document.getElementById('templateDescription').value = template.description || '';
+                document.getElementById('setAsDefault').checked = template.isDefault;
+                this.currentEditingId = templateId;
+                document.getElementById('saveTemplateModal').style.display = 'block';
+            }
+
+            async saveTemplate() {
+                const name = document.getElementById('templateName').value.trim();
+                if (!name) {
+                    alert('请输入模板名称');
+                    return;
+                }
+
+                const templateData = {
+                    name: name,
+                    description: document.getElementById('templateDescription').value.trim(),
+                    market: document.getElementById('market').value || null,
+                    minPrice: parseFloat(document.getElementById('minPrice').value) || null,
+                    maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
+                    minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
+                    maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
+                    minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
+                    maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
+                    minPE: parseFloat(document.getElementById('minPE').value) || null,
+                    maxPE: parseFloat(document.getElementById('maxPE').value) || null,
+                    minPB: parseFloat(document.getElementById('minPB').value) || null,
+                    maxPB: parseFloat(document.getElementById('maxPB').value) || null,
+                    minVolume: parseFloat(document.getElementById('minVolume').value) || null,
+                    maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
+                    minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
+                    maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
+                    minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
+                    maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,
+                    isDefault: document.getElementById('setAsDefault').checked
+                };
+
+                try {
+                    let response;
+                    if (this.currentEditingId) {
+                        // 更新模板
+                        response = await fetch(`${this.apiBase}/api/screentemplates/${this.currentEditingId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(templateData)
+                        });
+                    } else {
+                        // 创建新模板
+                        response = await fetch(`${this.apiBase}/api/screentemplates`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(templateData)
+                        });
+                    }
+
+                    if (response.ok) {
+                        alert(this.currentEditingId ? '模板更新成功！' : '模板保存成功！');
+                        this.hideSaveDialog();
+                        await this.loadTemplates();
+                    } else {
+                        throw new Error(await response.text());
+                    }
+                } catch (e) {
+                    alert('保存失败：' + e.message);
+                }
+            }
+
+            async deleteTemplate() {
+                const templateId = document.getElementById('templateSelect').value;
+                if (!templateId) {
+                    alert('请先选择一个模板');
+                    return;
+                }
+
+                const template = this.templates.find(t => t.id == templateId);
+                if (!template) return;
+
+                if (!confirm(`确定要删除模板"${template.name}"吗？`)) return;
+
+                try {
+                    const response = await fetch(`${this.apiBase}/api/screentemplates/${templateId}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (response.ok) {
+                        alert('模板删除成功！');
+                        await this.loadTemplates();
+                        this.clearForm();
+                    } else {
+                        throw new Error(await response.text());
+                    }
+                } catch (e) {
+                    alert('删除失败：' + e.message);
+                }
+            }
+
+            clearForm() {
+                document.getElementById('templateSelect').value = '';
+                document.getElementById('market').value = '';
+                document.getElementById('minPrice').value = '';
+                document.getElementById('maxPrice').value = '';
+                document.getElementById('minChange').value = '';
+                document.getElementById('maxChange').value = '';
+                document.getElementById('minTurnover').value = '';
+                document.getElementById('maxTurnover').value = '';
+                document.getElementById('minPE').value = '';
+                document.getElementById('maxPE').value = '';
+                document.getElementById('minPB').value = '';
+                document.getElementById('maxPB').value = '';
+                document.getElementById('minVolume').value = '';
+                document.getElementById('maxVolume').value = '';
+                document.getElementById('minMarketValue').value = '';
+                document.getElementById('maxMarketValue').value = '';
+                document.getElementById('minDividendYield').value = '';
+                document.getElementById('maxDividendYield').value = '';
+            }
+
+            hideSaveDialog() {
+                document.getElementById('saveTemplateModal').style.display = 'none';
+            }
+        }
+
+        // 初始化选股模板管理器
+        const screenTemplateManager = new ScreenTemplateManager();
+
+        // 全局函数供HTML调用
+        function loadTemplate() { screenTemplateManager.loadTemplate(); }
+        function showSaveTemplateDialog() { screenTemplateManager.showSaveDialog(); }
+        function showEditTemplateDialog() { screenTemplateManager.showEditDialog(); }
+        function saveTemplate() { screenTemplateManager.saveTemplate(); }
+        function deleteTemplate() { screenTemplateManager.deleteTemplate(); }
+        function clearScreenForm() { screenTemplateManager.clearForm(); }
+        function hideSaveTemplateDialog() { screenTemplateManager.hideSaveDialog(); }
+
         // 页面加载时初始化
         window.onload = function() {
             loadSettings();
@@ -1982,8 +2304,40 @@
             // 初始化AI配置管理器
             aiConfigManager.init();
             aiPromptManager.init();
+            
+            // 初始化选股模板管理器
+            screenTemplateManager.init();
         };
     </script>
+    
+    <!-- 保存选股模板对话框 -->
+    <div id="saveTemplateModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="saveTemplateTitle">保存选股模板</h3>
+                <span class="close" onclick="hideSaveTemplateDialog()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>模板名称 *</label>
+                    <input type="text" id="templateName" placeholder="输入模板名称" required>
+                </div>
+                <div class="form-group">
+                    <label>模板描述</label>
+                    <textarea id="templateDescription" placeholder="输入模板描述（可选）" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="setAsDefault"> 设为默认模板
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="saveTemplate()">💾 保存</button>
+                <button class="btn" style="background: #6c757d;" onclick="hideSaveTemplateDialog()">取消</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 

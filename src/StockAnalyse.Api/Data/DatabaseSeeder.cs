@@ -52,6 +52,55 @@ public static class DatabaseSeeder
         };
         
         context.AIModelConfigs.Add(aiConfig);
+        
+        // 添加默认选股模板
+        var screenTemplates = new List<ScreenTemplate>
+        {
+            new ScreenTemplate
+            {
+                Name = "低价成长股",
+                Description = "价格较低、PE合理的成长型股票",
+                MinPrice = 5,
+                MaxPrice = 30,
+                MinPE = 10,
+                MaxPE = 25,
+                MinChangePercent = -5,
+                MaxChangePercent = 10,
+                IsDefault = true
+            },
+            new ScreenTemplate
+            {
+                Name = "高股息蓝筹",
+                Description = "股息率较高的蓝筹股票",
+                MinPrice = 10,
+                MinDividendYield = 3,
+                MaxPE = 20,
+                MinMarketValue = 1000000, // 100亿以上
+                IsDefault = false
+            },
+            new ScreenTemplate
+            {
+                Name = "活跃小盘股",
+                Description = "换手率高、市值较小的活跃股票",
+                MaxPrice = 50,
+                MinTurnoverRate = 5,
+                MaxMarketValue = 500000, // 50亿以下
+                MinChangePercent = 0,
+                IsDefault = false
+            },
+            new ScreenTemplate
+            {
+                Name = "超跌反弹",
+                Description = "近期跌幅较大，可能反弹的股票",
+                MinChangePercent = -10,
+                MaxChangePercent = -3,
+                MinPE = 8,
+                MaxPE = 30,
+                IsDefault = false
+            }
+        };
+        
+        context.ScreenTemplates.AddRange(screenTemplates);
         context.SaveChanges();
     }
 }

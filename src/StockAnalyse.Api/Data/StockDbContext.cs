@@ -16,7 +16,8 @@ public class StockDbContext : DbContext
     public DbSet<FinancialNews> FinancialNews { get; set; }
     public DbSet<AIModelConfig> AIModelConfigs { get; set; }
     public DbSet<PriceAlert> PriceAlerts { get; set; }
-    public DbSet<AIPrompt> AIPrompts { get; set; } // 新增
+    public DbSet<AIPrompt> AIPrompts { get; set; }
+    public DbSet<ScreenTemplate> ScreenTemplates { get; set; } // 新增选股模板
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -182,3 +182,112 @@ public enum AlertType
     PriceReach // 到达价格
 }
 
+/// <summary>
+/// 选股条件模板
+/// </summary>
+[Table("ScreenTemplates")]
+public class ScreenTemplate
+{
+    [Key]
+    public int Id { get; set; }
+    
+    [Required]
+    [MaxLength(100)]
+    public string Name { get; set; } = string.Empty; // 模板名称
+    
+    [MaxLength(500)]
+    public string? Description { get; set; } // 模板描述
+    
+    // 价格条件
+    public decimal? MinPrice { get; set; }
+    public decimal? MaxPrice { get; set; }
+    
+    // 涨跌幅条件
+    public decimal? MinChangePercent { get; set; }
+    public decimal? MaxChangePercent { get; set; }
+    
+    // 换手率条件
+    public decimal? MinTurnoverRate { get; set; }
+    public decimal? MaxTurnoverRate { get; set; }
+    
+    // 成交量条件
+    public decimal? MinVolume { get; set; }
+    public decimal? MaxVolume { get; set; }
+    
+    // 市值条件（万元）
+    public decimal? MinMarketValue { get; set; }
+    public decimal? MaxMarketValue { get; set; }
+    
+    // 基本面条件
+    public decimal? MinPE { get; set; }
+    public decimal? MaxPE { get; set; }
+    public decimal? MinPB { get; set; }
+    public decimal? MaxPB { get; set; }
+    
+    // 股息率条件
+    public decimal? MinDividendYield { get; set; }
+    public decimal? MaxDividendYield { get; set; }
+    
+    // 流通股本条件（万股）
+    public decimal? MinCirculatingShares { get; set; }
+    public decimal? MaxCirculatingShares { get; set; }
+    
+    // 总股本条件（万股）
+    public decimal? MinTotalShares { get; set; }
+    public decimal? MaxTotalShares { get; set; }
+    
+    // 市场筛选
+    [MaxLength(10)]
+    public string? Market { get; set; } // SH/SZ
+    
+    public DateTime CreateTime { get; set; } = DateTime.Now;
+    public DateTime UpdateTime { get; set; } = DateTime.Now;
+    public bool IsDefault { get; set; } = false; // 是否为默认模板
+}
+
+/// <summary>
+/// 选股条件
+/// </summary>
+public class ScreenCriteria
+{
+    public string? Market { get; set; } // 市场：SH/SZ
+    
+    // 价格条件
+    public decimal? MinPrice { get; set; }
+    public decimal? MaxPrice { get; set; }
+    
+    // 涨跌幅条件
+    public decimal? MinChangePercent { get; set; }
+    public decimal? MaxChangePercent { get; set; }
+    
+    // 换手率条件
+    public decimal? MinTurnoverRate { get; set; }
+    public decimal? MaxTurnoverRate { get; set; }
+    
+    // 成交量条件
+    public decimal? MinVolume { get; set; }
+    public decimal? MaxVolume { get; set; }
+    
+    // 市值条件（万元）
+    public decimal? MinMarketValue { get; set; }
+    public decimal? MaxMarketValue { get; set; }
+    
+    // 基本面条件
+    public decimal? MinPE { get; set; }
+    public decimal? MaxPE { get; set; }
+    public decimal? MinPB { get; set; }
+    public decimal? MaxPB { get; set; }
+    
+    // 股息率条件
+    public decimal? MinDividendYield { get; set; }
+    public decimal? MaxDividendYield { get; set; }
+    
+    // 流通股本条件（万股）
+    public decimal? MinCirculatingShares { get; set; }
+    public decimal? MaxCirculatingShares { get; set; }
+    
+    // 总股本条件（万股）
+    public decimal? MinTotalShares { get; set; }
+    public decimal? MaxTotalShares { get; set; }
+}
+
