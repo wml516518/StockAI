@@ -1,6 +1,6 @@
 {
-  "name": "ma-cross-strategy",
-  "description": "基于5日均线和20日均线的金叉死叉策略。当短期均线上穿长期均线时买入，下穿时卖出。适合趋势性较强的市场环境。",
+  "name": "简单移动平均策略",
+  "description": "【新手推荐】基于5日均线和20日均线的简单策略。当5日线上穿20日线时买入，下穿时卖出。操作简单，适合初学者。",
   "type": "TechnicalIndicator",
   "parameters": {
     "shortPeriod": 5,

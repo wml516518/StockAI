@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
@@ -261,30 +262,46 @@ public class StockDataService : IStockDataService
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
             
-            _logger.LogInformation("请求东方财富接口: {Url}", url);
             var response = await _httpClient.GetStringAsync(url);
-            _logger.LogInformation("东方财富返回数据: {Response}", response);
             
             dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
             
             if (data?.data == null)
             {
-                _logger.LogWarning("东方财富返回数据为空或格式不正确");
                 return null;
             }
             
             var stockInfo = data.data;
+            
+            // 获取各个价格字段
+            decimal currentPrice = Convert.ToDecimal(stockInfo.f43 ?? 0);
+            decimal openPrice = Convert.ToDecimal(stockInfo.f46 ?? 0);
+            decimal closePrice = Convert.ToDecimal(stockInfo.f60 ?? 0); // 昨收价
+            decimal highPrice = Convert.ToDecimal(stockInfo.f44 ?? 0);
+            decimal lowPrice = Convert.ToDecimal(stockInfo.f45 ?? 0);
+            
+            // 价格回退逻辑：非交易时间使用昨收价
+            if (currentPrice == 0.0m && closePrice > 0.0m)
+                currentPrice = closePrice;
+            
+            if (openPrice == 0 && closePrice > 0)
+                openPrice = closePrice;
+            
+            if (highPrice == 0) 
+                highPrice = currentPrice;
+            if (lowPrice == 0) 
+                lowPrice = currentPrice;
             
             var stock = new Stock
             {
                 Code = stockCode,
                 Name = stockInfo.f58?.ToString() ?? "未知",
                 Market = stockCode.StartsWith("6") ? "SH" : "SZ",
-                CurrentPrice = Convert.ToDecimal(stockInfo.f43 ?? 0), // 东方财富返回的价格是分为单位，需要转换为元
-                OpenPrice = Convert.ToDecimal(stockInfo.f46 ?? 0),
-                ClosePrice = Convert.ToDecimal(stockInfo.f60 ?? 0),
-                HighPrice = Convert.ToDecimal(stockInfo.f44 ?? 0),
-                LowPrice = Convert.ToDecimal(stockInfo.f45 ?? 0),
+                CurrentPrice = currentPrice,
+                OpenPrice = openPrice,
+                ClosePrice = closePrice,
+                HighPrice = highPrice,
+                LowPrice = lowPrice,
                 Volume = Convert.ToDecimal(stockInfo.f47 ?? 0),
                 Turnover = Convert.ToDecimal(stockInfo.f48 ?? 0),
                 ChangeAmount = Convert.ToDecimal(stockInfo.f169 ?? 0),
@@ -295,12 +312,10 @@ public class StockDataService : IStockDataService
                 LastUpdate = DateTime.Now
             };
             
-            _logger.LogInformation("成功从东方财富获取: {Code} {Name}", stock.Code, stock.Name);
             return stock;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "东方财富获取失败: {Code}", stockCode);
             return null;
         }
     }

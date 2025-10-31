@@ -77,8 +77,11 @@
             border-radius: 8px;
             width: 90%;
             max-width: 500px;
+            max-height: 90vh;
             box-shadow: 0 4px 20px rgba(0,0,0,0.3);
             animation: slideIn 0.3s;
+            display: flex;
+            flex-direction: column;
         }
         
         .modal-header {
@@ -87,6 +90,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-shrink: 0;
         }
         
         .modal-header h3 {
@@ -109,6 +113,9 @@
         
         .modal-body {
             padding: 20px 25px;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
         }
         
         .modal-footer {
@@ -117,6 +124,7 @@
             display: flex;
             gap: 10px;
             justify-content: flex-end;
+            flex-shrink: 0;
         }
         
         @keyframes fadeIn {
@@ -127,6 +135,32 @@
         @keyframes slideIn {
             from { transform: translateY(-50px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
+        }
+        
+        /* 自定义滚动条样式 */
+        .modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .modal-body::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        
+        .modal-body::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        
+        .modal-body::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+        
+        /* 确保长文本能够正确换行 */
+        .analysis-content {
+            word-break: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
         }
         
         .tab:hover {
@@ -660,9 +694,11 @@
                     <div class="form-group">
                         <label>策略类型</label>
                         <select id="strategyType" onchange="quantTrading.loadStrategyParameters(this.value)">
-                            <option value="MA_CROSS">MA交叉策略</option>
-                            <option value="RSI">RSI策略</option>
-                            <option value="BOLLINGER">布林带策略</option>
+                            <option value="TechnicalIndicator">技术指标策略</option>
+                            <option value="Fundamental">基本面策略</option>
+                            <option value="Arbitrage">套利策略</option>
+                            <option value="MachineLearning">机器学习策略</option>
+                            <option value="Custom">自定义策略</option>
                         </select>
                     </div>
                     <div id="strategyParameters">
@@ -682,6 +718,34 @@
             <!-- 回测结果 -->
             <div class="card">
                 <h3>📈 回测分析</h3>
+                
+                <!-- 一键回测区域 -->
+                <div class="card" style="background: #f8f9fa; border: 2px dashed #28a745; margin-bottom: 20px;">
+                    <h4 style="color: #28a745; margin-bottom: 15px;">🚀 新手一键回测</h4>
+                    <p style="color: #666; margin-bottom: 15px;">无需复杂配置，使用简单移动平均策略快速体验回测功能</p>
+                    <div style="display: flex; gap: 10px; align-items: end;">
+                        <div style="flex: 1;">
+                            <label>股票代码</label>
+                            <input type="text" id="quickBacktestStock" placeholder="如：000001" style="width: 100%;">
+                        </div>
+                        <div>
+                            <label>开始日期</label>
+                            <input type="date" id="quickBacktestStartDate" style="width: 140px;">
+                        </div>
+                        <div>
+                            <label>结束日期</label>
+                            <input type="date" id="quickBacktestEndDate" style="width: 140px;">
+                        </div>
+                        <button class="btn" onclick="quantTrading.quickBacktest()" style="background: #28a745; white-space: nowrap;">⚡ 一键回测</button>
+                    </div>
+                    <div id="quickBacktestResult" style="margin-top: 15px; display: none;">
+                        <div style="padding: 10px; background: white; border-radius: 5px; border-left: 4px solid #28a745;">
+                            <div id="quickBacktestMessage" style="font-weight: bold; margin-bottom: 5px;"></div>
+                            <div id="quickBacktestDetails" style="font-size: 0.9em; color: #666;"></div>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="form-group">
                     <label>选择股票进行回测</label>
                     <div style="display: flex; gap: 10px; margin-bottom: 10px;">
@@ -2712,12 +2776,49 @@
             startAutoRefresh();
             updateLastRefreshTime();
             
+            // 格式化日期为 YYYY-MM-DD
+            const formatDate = (date) => {
+                return date.getFullYear() + '-' + 
+                       String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+                       String(date.getDate()).padStart(2, '0');
+            };
+            
+            // 设置普通回测日期
+            const backtestStartDate = document.getElementById('backtestStartDate');
+            const backtestEndDate = document.getElementById('backtestEndDate');
+            if (backtestStartDate && backtestEndDate) {
+                backtestStartDate.value = formatDate(sixMonthsAgo);
+                backtestEndDate.value = formatDate(today);
+            }
+            
+            // 设置一键回测日期
+            const quickBacktestStartDate = document.getElementById('quickBacktestStartDate');
+            const quickBacktestEndDate = document.getElementById('quickBacktestEndDate');
+            if (quickBacktestStartDate && quickBacktestEndDate) {
+                quickBacktestStartDate.value = formatDate(sixMonthsAgo);
+                quickBacktestEndDate.value = formatDate(today);
+            }
+        }
+
+        window.onload = function() {
+            loadSettings();
+            loadCategories();
+            loadWatchlist();
+            startAutoRefresh();
+            updateLastRefreshTime();
+            
             // 初始化AI配置管理器
             aiConfigManager.init();
             aiPromptManager.init();
             
             // 初始化选股模板管理器
             screenTemplateManager.init();
+            
+            // 设置默认回测日期
+            setDefaultBacktestDates();
+            
+            // 设置默认回测日期
+            setDefaultBacktestDates();
         };
 
         // 量化交易管理
@@ -2855,6 +2956,62 @@
                 let html = '<h4>策略参数</h4>';
                 
                 switch (strategyType) {
+                    case 'TechnicalIndicator':
+                        html += `
+                            <div class="form-group">
+                                <label>短期均线周期</label>
+                                <input type="number" id="shortPeriod" value="${parameters.shortPeriod || 5}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>长期均线周期</label>
+                                <input type="number" id="longPeriod" value="${parameters.longPeriod || 20}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>快速EMA周期</label>
+                                <input type="number" id="fastPeriod" value="${parameters.fastPeriod || 12}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>慢速EMA周期</label>
+                                <input type="number" id="slowPeriod" value="${parameters.slowPeriod || 26}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>信号线周期</label>
+                                <input type="number" id="signalPeriod" value="${parameters.signalPeriod || 9}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>RSI周期</label>
+                                <input type="number" id="rsiPeriod" value="${parameters.rsiPeriod || 14}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>RSI超买阈值</label>
+                                <input type="number" id="rsiOverBought" value="${parameters.rsiOverBought || 70}" min="50" max="100">
+                            </div>
+                            <div class="form-group">
+                                <label>RSI超卖阈值</label>
+                                <input type="number" id="rsiOverSold" value="${parameters.rsiOverSold || 30}" min="0" max="50">
+                            </div>
+                            <div class="form-group">
+                                <label>布林带周期</label>
+                                <input type="number" id="bollingerPeriod" value="${parameters.bollingerPeriod || 20}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>布林带标准差</label>
+                                <input type="number" id="bollingerStdDev" value="${parameters.bollingerStdDev || 2.0}" min="0.1" step="0.1">
+                            </div>
+                        `;
+                        break;
+                    case 'Fundamental':
+                        html += `
+                            <div class="form-group">
+                                <label>PE比率阈值</label>
+                                <input type="number" id="peRatio" value="${parameters.peRatio || 15}" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>PB比率阈值</label>
+                                <input type="number" id="pbRatio" value="${parameters.pbRatio || 2}" min="0.1" step="0.1">
+                            </div>
+                        `;
+                        break;
                     case 'MA_CROSS':
                         html += `
                             <div class="form-group">
@@ -2949,6 +3106,22 @@
                 const parameters = {};
                 
                 switch (strategyType) {
+                    case 'TechnicalIndicator':
+                        parameters.shortPeriod = parseInt(document.getElementById('shortPeriod').value) || 5;
+                        parameters.longPeriod = parseInt(document.getElementById('longPeriod').value) || 20;
+                        parameters.fastPeriod = parseInt(document.getElementById('fastPeriod').value) || 12;
+                        parameters.slowPeriod = parseInt(document.getElementById('slowPeriod').value) || 26;
+                        parameters.signalPeriod = parseInt(document.getElementById('signalPeriod').value) || 9;
+                        parameters.rsiPeriod = parseInt(document.getElementById('rsiPeriod').value) || 14;
+                        parameters.overboughtThreshold = parseFloat(document.getElementById('rsiOverBought').value) || 70;
+                        parameters.oversoldThreshold = parseFloat(document.getElementById('rsiOverSold').value) || 30;
+                        parameters.bollingerPeriod = parseInt(document.getElementById('bollingerPeriod').value) || 20;
+                        parameters.standardDeviation = parseFloat(document.getElementById('bollingerStdDev').value) || 2.0;
+                        break;
+                    case 'Fundamental':
+                        parameters.peRatio = parseFloat(document.getElementById('peRatio').value) || 15;
+                        parameters.pbRatio = parseFloat(document.getElementById('pbRatio').value) || 2;
+                        break;
                     case 'MA_CROSS':
                         parameters.shortPeriod = parseInt(document.getElementById('shortPeriod').value);
                         parameters.longPeriod = parseInt(document.getElementById('longPeriod').value);
@@ -3768,12 +3941,12 @@
     
     <!-- AI分析回测结果对话框 -->
     <div id="aiAnalysisModal" class="modal">
-        <div class="modal-content" style="max-width: 800px; width: 90%;">
+        <div class="modal-content" style="max-width: 800px; width: 90%; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header">
                 <h3>AI分析回测结果</h3>
                 <span class="close" onclick="document.getElementById('aiAnalysisModal').style.display='none'">&times;</span>
             </div>
-            <div class="modal-body" style="padding: 20px;">
+            <div class="modal-body" style="padding: 20px; overflow-y: auto; flex: 1; min-height: 0;">
                 <div id="aiAnalysisLoading" style="text-align: center; padding: 20px;">
                     <div class="loading-spinner"></div>
                     <p>AI正在分析中，请稍候...</p>
@@ -3791,7 +3964,7 @@
                             <button class="btn btn-small" onclick="showAISettingsModal()" style="margin-left: 10px;">更改设置</button>
                         </div>
                     </div>
-                    <div class="analysis-content" style="line-height: 1.6; white-space: pre-wrap;"></div>
+                    <div class="analysis-content" style="line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;"></div>
                 </div>
             </div>
         </div>

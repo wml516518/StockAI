@@ -1,0 +1,21 @@
+{
+  "Name": "\u7B80\u5355\u79FB\u52A8\u5E73\u5747\u7B56\u7565",
+  "Description": "\u3010\u65B0\u624B\u63A8\u8350\u3011\u57FA\u4E8E5\u65E5\u5747\u7EBF\u548C20\u65E5\u5747\u7EBF\u7684\u7B80\u5355\u7B56\u7565\u3002\u5F535\u65E5\u7EBF\u4E0A\u7A7F20\u65E5\u7EBF\u65F6\u4E70\u5165\uFF0C\u4E0B\u7A7F\u65F6\u5356\u51FA\u3002\u64CD\u4F5C\u7B80\u5355\uFF0C\u9002\u5408\u521D\u5B66\u8005\u3002",
+  "Type": "TechnicalIndicator",
+  "Parameters": {
+    "ShortPeriod": 5,
+    "LongPeriod": 20,
+    "FastPeriod": 12,
+    "SlowPeriod": 26,
+    "SignalPeriod": 9,
+    "RSIPeriod": 14,
+    "RSIOverBought": 70,
+    "RSIOverSold": 30,
+    "BollingerPeriod": 20,
+    "BollingerStdDev": 2
+  },
+  "InitialCapital": 100000,
+  "IsActive": true,
+  "RiskSettings": null,
+  "Metadata": null
+}

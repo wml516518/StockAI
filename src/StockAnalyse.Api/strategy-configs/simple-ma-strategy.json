@@ -1,0 +1,30 @@
+{
+  "name": "简单移动平均策略",
+  "description": "适合新手的简单策略：当短期均线上穿长期均线时买入，下穿时卖出。使用5日和20日移动平均线，风险较低。",
+  "type": "TechnicalIndicator",
+  "parameters": {
+    "shortPeriod": 5,
+    "longPeriod": 20,
+    "fastPeriod": 12,
+    "slowPeriod": 26,
+    "signalPeriod": 9,
+    "rsiPeriod": 14,
+    "overboughtThreshold": 70,
+    "oversoldThreshold": 30,
+    "bollingerPeriod": 20,
+    "standardDeviation": 2
+  },
+  "initialCapital": 100000,
+  "isActive": true,
+  "riskSettings": {
+    "maxPositionSize": 0.2,
+    "stopLossPercentage": 0.05,
+    "takeProfitPercentage": 0.1
+  },
+  "metadata": {
+    "author": "系统默认",
+    "version": "1.0",
+    "tags": ["移动平均", "新手友好", "低风险"],
+    "description": "这是一个基于移动平均线的简单策略，适合量化交易初学者。策略逻辑清晰：短期均线向上突破长期均线时买入，向下跌破时卖出。"
+  }
+}

@@ -27,7 +27,7 @@ public class StrategyConfigService : IStrategyConfigService
         
         _jsonOptions = new JsonSerializerOptions
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true,
             WriteIndented = true,
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
         };
