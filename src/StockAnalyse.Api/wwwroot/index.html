@@ -3780,6 +3780,123 @@
                     alert('显示回测详情失败: ' + error.message);
                 }
             },
+
+            // 一键回测功能
+            async quickBacktest() {
+                try {
+                    // 获取输入值
+                    const stockCode = document.getElementById('quickBacktestStock').value.trim();
+                    const startDate = document.getElementById('quickBacktestStartDate').value;
+                    const endDate = document.getElementById('quickBacktestEndDate').value;
+                    
+                    // 验证输入
+                    if (!stockCode) {
+                        alert('请输入股票代码');
+                        return;
+                    }
+                    
+                    if (!startDate || !endDate) {
+                        alert('请选择开始和结束日期');
+                        return;
+                    }
+                    
+                    if (new Date(startDate) >= new Date(endDate)) {
+                        alert('开始日期必须早于结束日期');
+                        return;
+                    }
+                    
+                    // 显示加载状态
+                    const resultDiv = document.getElementById('quickBacktestResult');
+                    const messageDiv = document.getElementById('quickBacktestMessage');
+                    const detailsDiv = document.getElementById('quickBacktestDetails');
+                    
+                    resultDiv.style.display = 'block';
+                    messageDiv.innerHTML = '⏳ 正在执行一键回测，请稍候...';
+                    messageDiv.style.color = '#007bff';
+                    detailsDiv.innerHTML = '';
+                    
+                    // 调用一键回测API
+                    const response = await fetch(`${API_BASE}/api/SimpleBacktest/quick-test`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            stockCode: stockCode,
+                            startDate: startDate,
+                            endDate: endDate,
+                            initialCapital: 100000
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(errorText || `HTTP ${response.status}`);
+                    }
+                    
+                    const result = await response.json();
+                    
+                    // 显示回测结果
+                    messageDiv.innerHTML = `✅ ${result.message || '回测完成！'}`;
+                    messageDiv.style.color = '#28a745';
+                    
+                    detailsDiv.innerHTML = `
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px;">
+                            <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                <div style="font-size: 0.8em; color: #666;">总收益率</div>
+                                <div style="font-weight: bold; color: ${result.totalReturn >= 0 ? '#28a745' : '#dc3545'};">
+                                    ${(result.totalReturn * 100).toFixed(2)}%
+                                </div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                <div style="font-size: 0.8em; color: #666;">年化收益率</div>
+                                <div style="font-weight: bold; color: ${result.annualizedReturn >= 0 ? '#28a745' : '#dc3545'};">
+                                    ${(result.annualizedReturn * 100).toFixed(2)}%
+                                </div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                <div style="font-size: 0.8em; color: #666;">最大回撤</div>
+                                <div style="font-weight: bold; color: #dc3545;">
+                                    ${(result.maxDrawdown * 100).toFixed(2)}%
+                                </div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                <div style="font-size: 0.8em; color: #666;">夏普比率</div>
+                                <div style="font-weight: bold;">
+                                    ${result.sharpeRatio.toFixed(2)}
+                                </div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                <div style="font-size: 0.8em; color: #666;">交易次数</div>
+                                <div style="font-weight: bold;">
+                                    ${result.totalTrades}
+                                </div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                <div style="font-size: 0.8em; color: #666;">胜率</div>
+                                <div style="font-weight: bold; color: ${result.winRate >= 0.5 ? '#28a745' : '#dc3545'};">
+                                    ${(result.winRate * 100).toFixed(1)}%
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 0.85em; color: #666;">
+                            使用策略：${result.strategyName || '简单移动平均策略'}
+                        </div>
+                    `;
+                    
+                } catch (error) {
+                    console.error('一键回测失败:', error);
+                    
+                    const resultDiv = document.getElementById('quickBacktestResult');
+                    const messageDiv = document.getElementById('quickBacktestMessage');
+                    const detailsDiv = document.getElementById('quickBacktestDetails');
+                    
+                    resultDiv.style.display = 'block';
+                    messageDiv.innerHTML = `❌ 回测失败：${error.message}`;
+                    messageDiv.style.color = '#dc3545';
+                    detailsDiv.innerHTML = '';
+                }
+            }
         };
 
         // 修改switchTab函数，添加量化交易选项卡的处理
