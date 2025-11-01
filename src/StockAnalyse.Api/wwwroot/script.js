@@ -588,6 +588,7 @@ async function analyzeStock() {
     const stockCode = document.getElementById('aiStockCode').value.trim();
     const promptIdVal = document.getElementById('aiPromptSelect').value;
     const promptId = promptIdVal ? parseInt(promptIdVal) : null;
+    const modelId = selectedAIModelId || null;
 
     if (!stockCode) {
         alert('请输入股票代码');
@@ -599,7 +600,7 @@ async function analyzeStock() {
         const response = await fetch(`${API_BASE}/api/ai/analyze/${stockCode}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ promptId, context: "" })
+            body: JSON.stringify({ promptId, context: "", modelId })
         });
         const result = await response.text();
         document.getElementById('aiResult').textContent = result;
@@ -2097,7 +2098,7 @@ const quantTrading = {
                     <tbody>
                         ${result.trades.map(trade => `
                             <tr>
-                                <td>${new Date(trade.date).toLocaleDateString()}</td>
+                                <td>${new Date(trade.executedAt).toLocaleDateString()}</td>
                                 <td style="color: ${trade.type === 'BUY' ? '#f44336' : '#4caf50'}">${trade.type === 'BUY' ? '买入' : '卖出'}</td>
                                 <td>¥${trade.price.toFixed(2)}</td>
                                 <td>${trade.quantity}</td>
@@ -2525,7 +2526,8 @@ const quantTrading = {
             const requestBody = {
                 stockCode: stockCode,
                 context: context,
-                promptId: promptId
+                promptId: promptId,
+                modelId: selectedAIModelId || null
             };
             
             const response = await fetch(`${API_BASE}/api/ai/analyze/${stockCode}`, {
@@ -2578,7 +2580,7 @@ const quantTrading = {
                     <tbody>
                         ${result.trades.map(trade => `
                             <tr>
-                                <td>${new Date(trade.date).toLocaleDateString()}</td>
+                                <td>${new Date(trade.executedAt).toLocaleDateString()}</td>
                                 <td style="color: ${trade.type === 'BUY' ? '#f44336' : '#4caf50'}">${trade.type === 'BUY' ? '买入' : '卖出'}</td>
                                 <td>¥${trade.price.toFixed(2)}</td>
                                 <td>${trade.quantity}</td>
@@ -2664,6 +2666,77 @@ const quantTrading = {
         }
     }
 };
+
+// AI设置相关函数
+async function showAISettingsModal() {
+    try {
+        // 加载AI模型配置列表
+        const modelsResponse = await fetch(`${API_BASE}/api/aimodelconfig`);
+        if (modelsResponse.ok) {
+            const models = await modelsResponse.json();
+            const modelSelect = document.getElementById('aiModelSelect');
+            modelSelect.innerHTML = '<option value="">使用默认配置</option>';
+            
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.id;
+                option.textContent = `${model.name} (${model.modelName})`;
+                if (model.id === selectedAIModelId) {
+                    option.selected = true;
+                }
+                modelSelect.appendChild(option);
+            });
+        }
+        
+        // 加载AI提示词列表
+        const promptsResponse = await fetch(`${API_BASE}/api/aiprompts`);
+        if (promptsResponse.ok) {
+            const prompts = await promptsResponse.json();
+            const promptSelect = document.querySelector('#aiSettingsModal #aiPromptSelect');
+            promptSelect.innerHTML = '<option value="">使用默认提示词</option>';
+            
+            prompts.forEach(prompt => {
+                if (prompt.isActive) {
+                    const option = document.createElement('option');
+                    option.value = prompt.id;
+                    option.textContent = prompt.name;
+                    if (prompt.id === selectedAIPromptId) {
+                        option.selected = true;
+                    }
+                    promptSelect.appendChild(option);
+                }
+            });
+        }
+        
+        // 显示模态框
+        document.getElementById('aiSettingsModal').style.display = 'block';
+    } catch (error) {
+        console.error('加载AI设置失败:', error);
+        alert('加载AI设置失败: ' + error.message);
+    }
+}
+
+function applyAISettings() {
+    const modelSelect = document.getElementById('aiModelSelect');
+    const promptSelect = document.querySelector('#aiSettingsModal #aiPromptSelect');
+    
+    // 更新选中的AI模型和提示词
+    selectedAIModelId = modelSelect.value ? parseInt(modelSelect.value) : null;
+    selectedAIPromptId = promptSelect.value ? parseInt(promptSelect.value) : null;
+    
+    // 更新显示的AI设置信息
+    const modelName = modelSelect.selectedOptions[0]?.textContent || '默认';
+    const promptName = promptSelect.selectedOptions[0]?.textContent || '默认';
+    
+    document.getElementById('aiModelName').textContent = modelName;
+    document.getElementById('aiPromptName').textContent = promptName;
+    
+    // 关闭模态框
+    document.getElementById('aiSettingsModal').style.display = 'none';
+    
+    // 提示用户设置已更新
+    console.log('AI设置已更新:', { modelId: selectedAIModelId, promptId: selectedAIPromptId });
+}
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
