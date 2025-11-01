@@ -1734,6 +1734,16 @@ const quantTrading = {
                 return;
             }
             
+            // 名称中文映射（仅显示，用于前端友好展示）
+            const translateStrategyName = (name) => {
+                if (!name) return '';
+                const n = String(name).toLowerCase();
+                if (n === 'ma-cross-strategy') return '简单移动平均策略';
+                if (n === 'macd-strategy') return 'MACD指标策略';
+                if (n === 'rsi-strategy') return 'RSI指标策略';
+                return name; // 其他保持原样
+            };
+
             // 防御式资金显示：优先currentCapital，回退initialCapital，格式化失败显示-
             strategyList.innerHTML = strategies.map(strategy => {
                 const cap = typeof strategy.currentCapital === 'number'
@@ -1745,7 +1755,7 @@ const quantTrading = {
                     <div class="stock-card" style="margin-bottom: 15px;">
                         <div class="stock-header">
                             <div class="stock-name-section">
-                                <div class="stock-name">${strategy.name}</div>
+                                <div class="stock-name">${translateStrategyName(strategy.name)}</div>
                                 <div class="stock-code">${strategy.type} | 资金: ${capStr}</div>
                             </div>
                             <div class="stock-actions">
@@ -1754,7 +1764,7 @@ const quantTrading = {
                                     ${strategy.isActive ? '✅ 已启用' : '⏸️ 已停用'}
                                 </button>
                                 <button class="btn btn-danger btn-small" 
-                                        onclick="quantTrading.deleteStrategyById(${strategy.id}, '${strategy.name.replace(/'/g, "\\'")}')">🗑️ 删除</button>
+                                        onclick="quantTrading.deleteStrategyById(${strategy.id}, '${translateStrategyName(strategy.name).replace(/'/g, "\\'")}')">🗑️ 删除</button>
                             </div>
                         </div>
                         <div class="price-section">
@@ -1770,9 +1780,9 @@ const quantTrading = {
                 `;
             }).join('');
 
-            // 下拉框以现有策略名填充，便于加载对应配置文件
+            // 下拉框按英文值传递，中文显示，保证后端文件查找不受影响
             strategySelect.innerHTML = '<option value="">请选择策略...</option>' + 
-                strategies.map(s => `<option value="${s.name}">${s.name} (${s.type})</option>`).join('');
+                strategies.map(s => `<option value="${s.name}">${translateStrategyName(s.name)} (${s.type})</option>`).join('');
             
             // 回测股票选择下拉框已在loadWatchlist中自动填充
                 
@@ -2716,6 +2726,20 @@ async function showAISettingsModal() {
     }
 }
 
+// 从localStorage恢复AI设置选择
+function loadAISettings() {
+    const savedModelId = localStorage.getItem('selectedAIModelId');
+    const savedPromptId = localStorage.getItem('selectedAIPromptId');
+    
+    if (savedModelId) {
+        selectedAIModelId = parseInt(savedModelId);
+    }
+    
+    if (savedPromptId) {
+        selectedAIPromptId = parseInt(savedPromptId);
+    }
+}
+
 function applyAISettings() {
     const modelSelect = document.getElementById('aiModelSelect');
     const promptSelect = document.querySelector('#aiSettingsModal #aiPromptSelect');
@@ -2723,6 +2747,19 @@ function applyAISettings() {
     // 更新选中的AI模型和提示词
     selectedAIModelId = modelSelect.value ? parseInt(modelSelect.value) : null;
     selectedAIPromptId = promptSelect.value ? parseInt(promptSelect.value) : null;
+    
+    // 保存选择到localStorage
+    if (selectedAIModelId) {
+        localStorage.setItem('selectedAIModelId', selectedAIModelId.toString());
+    } else {
+        localStorage.removeItem('selectedAIModelId');
+    }
+    
+    if (selectedAIPromptId) {
+        localStorage.setItem('selectedAIPromptId', selectedAIPromptId.toString());
+    } else {
+        localStorage.removeItem('selectedAIPromptId');
+    }
     
     // 更新显示的AI设置信息
     const modelName = modelSelect.selectedOptions[0]?.textContent || '默认';
@@ -2748,6 +2785,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 加载设置
     loadSettings();
+    
+    // 恢复AI设置选择
+    loadAISettings();
     
     // 初始化AI配置管理器
     aiConfigManager.init();

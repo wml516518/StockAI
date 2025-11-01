@@ -1,5 +1,5 @@
 {
-  "name": "rsi-strategy",
+  "name": "RSI指标策略",
   "description": "基于RSI指标的超买超卖策略。当RSI低于30时买入，高于70时卖出。",
   "type": "TechnicalIndicator",
   "parameters": {
