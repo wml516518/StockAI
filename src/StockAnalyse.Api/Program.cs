@@ -43,6 +43,7 @@ builder.Services.AddScoped<IQuantTradingService, QuantTradingService>();
 builder.Services.AddScoped<ITechnicalIndicatorService, TechnicalIndicatorService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IStrategyConfigService, StrategyConfigService>();
+builder.Services.AddScoped<IStrategyOptimizationService, StrategyOptimizationService>();
 
 // 注册定时任务服务
 builder.Services.AddHostedService<NewsBackgroundService>();

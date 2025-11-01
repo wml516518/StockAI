@@ -505,3 +505,72 @@ public class TechnicalIndicatorParameters
     public decimal BollingerStdDev { get; set; } = 2; // 标准差倍数
 }
 
+/// <summary>
+/// 策略优化结果模型
+/// </summary>
+[Table("StrategyOptimizationResults")]
+public class StrategyOptimizationResult
+{
+    [Key]
+    public int Id { get; set; }
+    
+    public int StrategyId { get; set; } // 策略ID
+    
+    [Column(TypeName = "TEXT")]
+    public string OptimizedParameters { get; set; } = "{}"; // JSON格式存储优化后的参数
+    
+    [Column(TypeName = "TEXT")]
+    public string OptimizationConfig { get; set; } = "{}"; // JSON格式存储优化配置
+    
+    // 优化结果指标
+    public decimal TotalReturn { get; set; } // 总收益率
+    public decimal SharpeRatio { get; set; } // 夏普比率
+    public decimal MaxDrawdown { get; set; } // 最大回撤
+    public decimal WinRate { get; set; } // 胜率
+    public int TotalTrades { get; set; } // 总交易次数
+    
+    // 优化过程信息
+    public int TotalCombinations { get; set; } // 总参数组合数
+    public int TestedCombinations { get; set; } // 已测试组合数
+    public TimeSpan OptimizationDuration { get; set; } // 优化耗时
+    
+    public DateTime StartDate { get; set; } // 回测开始日期
+    public DateTime EndDate { get; set; } // 回测结束日期
+    
+    [Column(TypeName = "TEXT")]
+    public string StockCodes { get; set; } = "[]"; // JSON格式存储股票代码列表
+    
+    public DateTime CreatedAt { get; set; } = DateTime.Now; // 创建时间
+    
+    public bool IsApplied { get; set; } = false; // 是否已应用到策略
+    
+    // 导航属性
+    public virtual QuantStrategy Strategy { get; set; } = null!;
+}
+
+/// <summary>
+/// 参数组合测试结果
+/// </summary>
+[Table("ParameterTestResults")]
+public class ParameterTestResult
+{
+    [Key]
+    public int Id { get; set; }
+    
+    public int OptimizationResultId { get; set; } // 优化结果ID
+    
+    [Column(TypeName = "TEXT")]
+    public string Parameters { get; set; } = "{}"; // JSON格式存储参数组合
+    
+    public decimal TotalReturn { get; set; } // 总收益率
+    public decimal SharpeRatio { get; set; } // 夏普比率
+    public decimal MaxDrawdown { get; set; } // 最大回撤
+    public decimal WinRate { get; set; } // 胜率
+    public int TotalTrades { get; set; } // 总交易次数
+    
+    public DateTime TestedAt { get; set; } = DateTime.Now; // 测试时间
+    
+    // 导航属性
+    public virtual StrategyOptimizationResult OptimizationResult { get; set; } = null!;
+}
+

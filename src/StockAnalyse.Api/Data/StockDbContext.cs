@@ -24,6 +24,10 @@ public class StockDbContext : DbContext
     public DbSet<TradingSignal> TradingSignals { get; set; }
     public DbSet<SimulatedTrade> SimulatedTrades { get; set; }
     public DbSet<BacktestResult> BacktestResults { get; set; }
+    
+    // 策略优化相关表
+    public DbSet<StrategyOptimizationResult> StrategyOptimizationResults { get; set; }
+    public DbSet<ParameterTestResult> ParameterTestResults { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

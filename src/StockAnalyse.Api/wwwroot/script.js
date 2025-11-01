@@ -13,11 +13,20 @@ let selectedAIModelId = null;
 let selectedAIPromptId = null;
 
 // Tab切换
-function switchTab(tabName) {
+function switchTab(tabName, element) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
-    event.target.classList.add('active');
-    document.getElementById(tabName).classList.add('active');
+    
+    // 如果没有传入element参数，尝试从event获取
+    const targetElement = element || (window.event && window.event.target) || document.querySelector(`[onclick*="switchTab('${tabName}')"]`);
+    if (targetElement) {
+        targetElement.classList.add('active');
+    }
+    
+    const contentElement = document.getElementById(tabName);
+    if (contentElement) {
+        contentElement.classList.add('active');
+    }
     
     // 根据Tab加载数据
     switch(tabName) {
@@ -1493,7 +1502,8 @@ const aiPromptManager = new AIPromptManager();
 class ScreenTemplateManager {
     constructor() {
         this.templates = [];
-        this.apiBase = window.location.origin;
+        // 与其他API调用保持一致，使用统一的API基地址
+        this.apiBase = API_BASE;
         this.currentEditingId = null;
     }
 
@@ -1504,7 +1514,8 @@ class ScreenTemplateManager {
 
     async loadTemplates() {
         try {
-            const res = await fetch(`${this.apiBase}/api/screentemplates`);
+            // 修正路径以匹配后端控制器 ScreenTemplateController 的路由
+            const res = await fetch(`${this.apiBase}/api/ScreenTemplate`);
             this.templates = res.ok ? await res.json() : [];
             this.renderTemplateSelect();
         } catch (e) {
@@ -1528,7 +1539,8 @@ class ScreenTemplateManager {
         if (!templateId) return;
 
         try {
-            const res = await fetch(`${this.apiBase}/api/screentemplates/${templateId}`);
+            // 修正路径以匹配后端控制器 ScreenTemplateController 的路由
+            const res = await fetch(`${this.apiBase}/api/ScreenTemplate/${templateId}`);
             if (!res.ok) throw new Error('加载模板失败');
             
             const template = await res.json();
@@ -2823,4 +2835,7 @@ document.addEventListener('DOMContentLoaded', function() {
             quantTrading.onBacktestStockChange();
         });
     }
+    
+    // 确保switchTab函数在全局作用域中可用
+    window.switchTab = switchTab;
 });
