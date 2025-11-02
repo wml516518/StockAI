@@ -256,7 +256,8 @@ public class StockDataService : IStockDataService
             var market = stockCode.StartsWith("6") ? "1" : "0";
             var secid = $"{market}.{stockCode}";
             
-            var url = $"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f107,f137,f43,f46,f44,f45,f47,f48,f168,f60,f170,f116,f171,f117,f172,f169&fltt=2";
+            // 补充PE(PETTM f162)与PB(f167)字段，避免PE/PB一直为0导致筛选结果为空
+            var url = $"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f107,f137,f43,f46,f44,f45,f47,f48,f168,f60,f170,f116,f171,f117,f172,f169,f162,f167&fltt=2";
             
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
@@ -307,8 +308,8 @@ public class StockDataService : IStockDataService
                 ChangeAmount = Convert.ToDecimal(stockInfo.f169 ?? 0),
                 ChangePercent = Convert.ToDecimal(stockInfo.f170 ?? 0),
                 TurnoverRate = Convert.ToDecimal(stockInfo.f168 ?? 0),
-                PE = Convert.ToDecimal(stockInfo.f162 ?? 0),
-                PB = Convert.ToDecimal(stockInfo.f167 ?? 0),
+                PE = Convert.ToDecimal(stockInfo.f162 ?? 0),  // 市盈率
+                PB = Convert.ToDecimal(stockInfo.f167 ?? 0),  // 市净率
                 LastUpdate = DateTime.Now
             };
             
