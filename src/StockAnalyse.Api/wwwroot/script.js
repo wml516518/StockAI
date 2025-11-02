@@ -1796,6 +1796,13 @@ const quantTrading = {
             strategySelect.innerHTML = '<option value="">请选择策略...</option>' + 
                 strategies.map(s => `<option value="${s.name}">${translateStrategyName(s.name)} (${s.type})</option>`).join('');
             
+            // 同步填充策略优化下拉框
+            const optimizationStrategySelect = document.getElementById('optimizationStrategySelect');
+            if (optimizationStrategySelect) {
+                optimizationStrategySelect.innerHTML = '<option value="">请选择要优化的策略...</option>' + 
+                    strategies.map(s => `<option value="${s.name}">${translateStrategyName(s.name)} (${s.type})</option>`).join('');
+            }
+            
             // 回测股票选择下拉框已在loadWatchlist中自动填充
                 
         } catch (error) {
@@ -2808,49 +2815,99 @@ const strategyOptimization = {
             alert('请填写完整的优化配置');
             return;
         }
+        if (new Date(startDate) >= new Date(endDate)) {
+            alert('开始日期必须早于结束日期');
+            return;
+        }
         
         try {
-            // 收集参数范围
-            const parameters = this.collectParameterRanges();
-            if (parameters.length === 0) {
-                alert('请先加载策略参数配置');
+            // 将策略名称映射到ID
+            const match = (quantTrading._strategies || []).find(s => s.name === strategyName);
+            if (!match) {
+                alert('未找到该策略，请刷新策略列表后重试');
                 return;
             }
-            
-            // 显示进度条
+            const strategyId = match.id;
+
+            // 收集参数范围（用于覆盖默认优化配置）
+            const parameters = this.collectParameterRanges();
+
+            // 显示加载状态
             document.getElementById('optimizationProgress').classList.remove('hidden');
             document.getElementById('optimizationResults').classList.add('hidden');
-            
             const progressBar = document.getElementById('optimizationProgressBar');
             const progressText = document.getElementById('optimizationProgressText');
-            
             progressBar.style.width = '0%';
-            progressText.textContent = '正在启动优化...';
-            
-            // 发送优化请求
-            const response = await fetch(`${API_BASE}/api/strategyoptimization/optimize`, {
+            progressText.textContent = '正在计算优化结果...';
+
+            // 获取默认优化配置并覆盖为UI设置
+            let optimizationConfig = null;
+            try {
+                const confResp = await fetch(`${API_BASE}/api/StrategyOptimization/default-config`);
+                if (confResp.ok) optimizationConfig = await confResp.json();
+            } catch {}
+
+            const targetMap = { totalReturn: 'TotalReturn', sharpeRatio: 'SharpeRatio', maxDrawdown: 'MaxDrawdown', winRate: 'WinRate' };
+            if (!optimizationConfig) optimizationConfig = {};
+            optimizationConfig.Target = targetMap[target] || 'TotalReturn';
+
+            const getParam = (name) => parameters.find(p => p.name === name);
+            const shortP = getParam('短周期');
+            const longP = getParam('长周期');
+            const overBought = getParam('超买阈值');
+            const overSold = getParam('超卖阈值');
+            if (shortP) optimizationConfig.ShortPeriodRange = { Min: shortP.minValue, Max: shortP.maxValue, Step: shortP.step };
+            if (longP) optimizationConfig.LongPeriodRange = { Min: longP.minValue, Max: longP.maxValue, Step: longP.step };
+            if (overBought) optimizationConfig.RSIOverBoughtRange = { Min: overBought.minValue, Max: overBought.maxValue, Step: overBought.step };
+            if (overSold) optimizationConfig.RSIOverSoldRange = { Min: overSold.minValue, Max: overSold.maxValue, Step: overSold.step };
+            const hasAnyRange = !!(shortP || longP || overBought || overSold);
+            if (!hasAnyRange) optimizationConfig = null; // 使用后端默认
+
+            // 发送优化请求（匹配后端模型）
+            const response = await fetch(`${API_BASE}/api/StrategyOptimization/optimize`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    strategyName: strategyName,
-                    stockCode: stockCode,
+                    strategyId: strategyId,
+                    stockCodes: [stockCode],
                     startDate: startDate,
                     endDate: endDate,
-                    optimizationTarget: target,
-                    parameters: parameters
+                    optimizationConfig: optimizationConfig
                 })
             });
-            
+
             if (!response.ok) {
-                throw new Error(`优化请求失败: ${response.status}`);
+                let msg = '';
+                try { msg = await response.text(); } catch {}
+                throw new Error(`优化请求失败: ${response.status} ${msg}`);
             }
-            
+
             const result = await response.json();
-            this.currentOptimizationId = result.optimizationId;
-            
-            // 开始轮询优化进度
-            this.pollOptimizationProgress();
-            
+            // 保存关键结果
+            this.lastOptimizationResult = result;
+            this.currentOptimizationResultId = result.id;
+            this.currentStrategyId = result.strategyId;
+
+            // 展示结果
+            document.getElementById('optimizationProgress').classList.add('hidden');
+            document.getElementById('optimizationResults').classList.remove('hidden');
+            const bestParamsDiv = document.getElementById('bestParameters');
+            try {
+                const parsedParams = typeof result.optimizedParameters === 'string' ? JSON.parse(result.optimizedParameters) : (result.optimizedParameters || {});
+                bestParamsDiv.innerHTML = Object.entries(parsedParams).map(([k, v]) => `
+                    <div class="parameter-item"><span class="param-name">${k}:</span><span class="param-value">${v}</span></div>
+                `).join('') || '<div class="parameter-item">无参数</div>';
+            } catch {
+                bestParamsDiv.innerHTML = '<div class="parameter-item">参数解析失败</div>';
+            }
+            document.getElementById('bestTotalReturn').textContent = ((Number(result.totalReturn) || 0) * 100).toFixed(2) + '%';
+            document.getElementById('bestSharpeRatio').textContent = (Number(result.sharpeRatio) || 0).toFixed(3);
+            document.getElementById('bestMaxDrawdown').textContent = ((Number(result.maxDrawdown) || 0) * 100).toFixed(2) + '%';
+            document.getElementById('bestWinRate').textContent = ((Number(result.winRate) || 0) * 100).toFixed(2) + '%';
+
+            // 加载历史
+            this.loadOptimizationHistory(this.currentStrategyId);
+
         } catch (error) {
             console.error('启动优化失败:', error);
             alert('启动优化失败: ' + error.message);
@@ -2890,75 +2947,10 @@ const strategyOptimization = {
     },
     
     // 轮询优化进度
-    async pollOptimizationProgress() {
-        if (!this.currentOptimizationId) return;
-        
-        try {
-            const response = await fetch(`${API_BASE}/api/strategyoptimization/progress/${this.currentOptimizationId}`);
-            if (!response.ok) {
-                throw new Error(`获取进度失败: ${response.status}`);
-            }
-            
-            const progress = await response.json();
-            
-            // 更新进度条
-            const progressBar = document.getElementById('optimizationProgressBar');
-            const progressText = document.getElementById('optimizationProgressText');
-            
-            const percentage = Math.round(progress.completedTests / progress.totalTests * 100);
-            progressBar.style.width = percentage + '%';
-            progressText.textContent = `已完成 ${progress.completedTests}/${progress.totalTests} 个测试 (${percentage}%)`;
-            
-            if (progress.isCompleted) {
-                // 优化完成，获取结果
-                await this.loadOptimizationResult();
-            } else {
-                // 继续轮询
-                setTimeout(() => this.pollOptimizationProgress(), 2000);
-            }
-            
-        } catch (error) {
-            console.error('获取优化进度失败:', error);
-            document.getElementById('optimizationProgressText').textContent = '获取进度失败: ' + error.message;
-        }
-    },
+    async pollOptimizationProgress() { return; },
     
     // 加载优化结果
-    async loadOptimizationResult() {
-        if (!this.currentOptimizationId) return;
-        
-        try {
-            const response = await fetch(`${API_BASE}/api/strategyoptimization/result/${this.currentOptimizationId}`);
-            if (!response.ok) {
-                throw new Error(`获取结果失败: ${response.status}`);
-            }
-            
-            const result = await response.json();
-            
-            // 隐藏进度条，显示结果
-            document.getElementById('optimizationProgress').classList.add('hidden');
-            document.getElementById('optimizationResults').classList.remove('hidden');
-            
-            // 显示最佳参数
-            const bestParams = document.getElementById('bestParameters');
-            bestParams.innerHTML = result.bestParameters.map(param => 
-                `<div class="parameter-item">
-                    <span class="param-name">${param.name}:</span>
-                    <span class="param-value">${param.value}</span>
-                </div>`
-            ).join('');
-            
-            // 显示最佳指标
-            document.getElementById('bestTotalReturn').textContent = (result.totalReturn * 100).toFixed(2) + '%';
-            document.getElementById('bestSharpeRatio').textContent = result.sharpeRatio.toFixed(3);
-            document.getElementById('bestMaxDrawdown').textContent = (result.maxDrawdown * 100).toFixed(2) + '%';
-            document.getElementById('bestWinRate').textContent = (result.winRate * 100).toFixed(2) + '%';
-            
-        } catch (error) {
-            console.error('加载优化结果失败:', error);
-            alert('加载优化结果失败: ' + error.message);
-        }
-    },
+    async loadOptimizationResult() { return; },
     
     // 停止优化
     async stopOptimization() {
@@ -2981,22 +2973,20 @@ const strategyOptimization = {
     
     // 应用最佳参数
     async applyBestParameters() {
-        if (!this.currentOptimizationId) {
+        if (!this.currentOptimizationResultId || !this.currentStrategyId) {
             alert('没有可应用的优化结果');
             return;
         }
-        
         try {
-            const response = await fetch(`${API_BASE}/api/strategyoptimization/apply/${this.currentOptimizationId}`, {
+            const response = await fetch(`${API_BASE}/api/StrategyOptimization/${this.currentStrategyId}/apply/${this.currentOptimizationResultId}`, {
                 method: 'POST'
             });
-            
             if (response.ok) {
                 alert('最佳参数已应用到策略配置');
-                // 刷新策略列表
                 quantTrading.loadStrategies();
             } else {
-                throw new Error(`应用参数失败: ${response.status}`);
+                const txt = await response.text();
+                throw new Error(`应用参数失败: ${response.status} ${txt}`);
             }
         } catch (error) {
             console.error('应用最佳参数失败:', error);
@@ -3006,89 +2996,86 @@ const strategyOptimization = {
     
     // 查看详细结果
     async viewDetailedResults() {
-        if (!this.currentOptimizationId) {
+        if (!this.lastOptimizationResult) {
             alert('没有可查看的优化结果');
             return;
         }
-        
+        const r = this.lastOptimizationResult;
+        const detailWindow = window.open('', '_blank', 'width=800,height=600');
+        let paramsHtml = '';
         try {
-            const response = await fetch(`${API_BASE}/api/strategyoptimization/details/${this.currentOptimizationId}`);
-            if (!response.ok) {
-                throw new Error(`获取详细结果失败: ${response.status}`);
-            }
-            
-            const details = await response.json();
-            
-            // 创建详细结果窗口
-            const detailWindow = window.open('', '_blank', 'width=800,height=600');
-            detailWindow.document.write(`
-                <html>
-                <head>
-                    <title>优化详细结果</title>
-                    <style>
-                        body { font-family: Arial, sans-serif; margin: 20px; }
-                        table { border-collapse: collapse; width: 100%; }
-                        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                        th { background-color: #f2f2f2; }
-                        .best-row { background-color: #e8f5e8; }
-                    </style>
-                </head>
-                <body>
-                    <h2>策略优化详细结果</h2>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>参数组合</th>
-                                <th>总收益率</th>
-                                <th>夏普比率</th>
-                                <th>最大回撤</th>
-                                <th>胜率</th>
-                                <th>总交易次数</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${details.map((result, index) => `
-                                <tr class="${index === 0 ? 'best-row' : ''}">
-                                    <td>${result.parameters.map(p => `${p.name}=${p.value}`).join(', ')}</td>
-                                    <td>${(result.totalReturn * 100).toFixed(2)}%</td>
-                                    <td>${result.sharpeRatio.toFixed(3)}</td>
-                                    <td>${(result.maxDrawdown * 100).toFixed(2)}%</td>
-                                    <td>${(result.winRate * 100).toFixed(2)}%</td>
-                                    <td>${result.totalTrades}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </body>
-                </html>
-            `);
-        } catch (error) {
-            console.error('查看详细结果失败:', error);
-            alert('查看详细结果失败: ' + error.message);
-        }
+            const parsedParams = typeof r.optimizedParameters === 'string' ? JSON.parse(r.optimizedParameters) : (r.optimizedParameters || {});
+            paramsHtml = Object.entries(parsedParams).map(([k, v]) => `${k}: ${v}`).join(', ');
+        } catch { paramsHtml = String(r.optimizedParameters || '') }
+        detailWindow.document.write(`
+            <html>
+            <head>
+                <title>优化详细结果</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    table { border-collapse: collapse; width: 100%; }
+                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                    th { background-color: #f2f2f2; }
+                </style>
+            </head>
+            <body>
+                <h2>优化详细结果</h2>
+                <p><strong>策略ID:</strong> ${r.strategyId} | <strong>股票:</strong> ${r.stockCodes}</p>
+                <p><strong>周期:</strong> ${new Date(r.startDate).toLocaleDateString()} - ${new Date(r.endDate).toLocaleDateString()}</p>
+                <p><strong>测试组合:</strong> ${r.testedCombinations}/${r.totalCombinations} | <strong>耗时:</strong> ${r.optimizationDuration}</p>
+                <p><strong>最佳参数:</strong> ${paramsHtml}</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>总收益率</th>
+                            <th>夏普比率</th>
+                            <th>最大回撤</th>
+                            <th>胜率</th>
+                            <th>总交易数</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>${((Number(r.totalReturn) || 0) * 100).toFixed(2)}%</td>
+                            <td>${(Number(r.sharpeRatio) || 0).toFixed(3)}</td>
+                            <td>${((Number(r.maxDrawdown) || 0) * 100).toFixed(2)}%</td>
+                            <td>${((Number(r.winRate) || 0) * 100).toFixed(2)}%</td>
+                            <td>${r.totalTrades ?? '-'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </body>
+            </html>
+        `);
     },
     
     // 加载优化历史
-    async loadOptimizationHistory() {
+    async loadOptimizationHistory(strategyId) {
         try {
-            const response = await fetch(`${API_BASE}/api/strategyoptimization/history`);
+            if (!strategyId) {
+                const strategyName = document.getElementById('optimizationStrategySelect')?.value;
+                const match = (quantTrading._strategies || []).find(s => s.name === strategyName);
+                if (match) strategyId = match.id;
+            }
+            if (!strategyId) {
+                document.getElementById('optimizationHistory').innerHTML = '<p class="no-data">请选择策略以查看历史</p>';
+                return;
+            }
+            const response = await fetch(`${API_BASE}/api/StrategyOptimization/${strategyId}/history`);
             if (!response.ok) {
                 throw new Error(`获取历史失败: ${response.status}`);
             }
-            
             const history = await response.json();
             const historyDiv = document.getElementById('optimizationHistory');
-            
             if (!Array.isArray(history) || history.length === 0) {
                 historyDiv.innerHTML = '<p class="no-data">暂无优化历史记录</p>';
                 return;
             }
-            
             historyDiv.innerHTML = history.map(item => `
                 <div class="optimization-history-item">
                     <div class="history-header">
                         <div class="history-title">
-                            <strong>${item.strategyName}</strong> - ${item.stockCode}
+                            <strong>策略 #${item.strategyId}</strong>
                         </div>
                         <div class="history-date">
                             ${new Date(item.createdAt).toLocaleString()}
@@ -3096,19 +3083,18 @@ const strategyOptimization = {
                     </div>
                     <div class="history-details">
                         <div class="history-metrics">
-                            <span>收益率: ${(item.totalReturn * 100).toFixed(2)}%</span>
-                            <span>夏普比率: ${item.sharpeRatio.toFixed(3)}</span>
-                            <span>最大回撤: ${(item.maxDrawdown * 100).toFixed(2)}%</span>
-                            <span>胜率: ${(item.winRate * 100).toFixed(2)}%</span>
+                            <span>收益率: ${((Number(item.totalReturn) || 0) * 100).toFixed(2)}%</span>
+                            <span>夏普比率: ${(Number(item.sharpeRatio) || 0).toFixed(3)}</span>
+                            <span>最大回撤: ${((Number(item.maxDrawdown) || 0) * 100).toFixed(2)}%</span>
+                            <span>胜率: ${((Number(item.winRate) || 0) * 100).toFixed(2)}%</span>
                         </div>
                         <div class="history-actions">
-                            <button class="btn btn-small" onclick="strategyOptimization.viewHistoryDetails('${item.id}')">查看详情</button>
-                            <button class="btn btn-small" onclick="strategyOptimization.applyHistoryParameters('${item.id}')">应用参数</button>
+                            <button class="btn btn-small" onclick="strategyOptimization.viewHistoryDetails(${item.id})">查看详情</button>
+                            <button class="btn btn-small" onclick="strategyOptimization.applyHistoryParameters(${item.id})">应用参数</button>
                         </div>
                     </div>
                 </div>
             `).join('');
-            
         } catch (error) {
             console.error('加载优化历史失败:', error);
             document.getElementById('optimizationHistory').innerHTML = '<p class="error">加载历史失败: ' + error.message + '</p>';
@@ -3117,13 +3103,45 @@ const strategyOptimization = {
     
     // 查看历史详情
     async viewHistoryDetails(optimizationId) {
-        this.currentOptimizationId = optimizationId;
-        await this.viewDetailedResults();
+        // 尝试通过当前选择的策略加载历史并定位该条目
+        let strategyId = this.currentStrategyId;
+        if (!strategyId) {
+            const strategyName = document.getElementById('optimizationStrategySelect')?.value;
+            const match = (quantTrading._strategies || []).find(s => s.name === strategyName);
+            strategyId = match?.id;
+        }
+        if (!strategyId) {
+            alert('请先选择策略');
+            return;
+        }
+        try {
+            const resp = await fetch(`${API_BASE}/api/StrategyOptimization/${strategyId}/history`);
+            if (!resp.ok) throw new Error(`加载历史失败: ${resp.status}`);
+            const list = await resp.json();
+            const item = list.find(x => x.id === optimizationId);
+            if (!item) {
+                alert('未在历史中找到该优化结果');
+                return;
+            }
+            this.lastOptimizationResult = item;
+            this.currentOptimizationResultId = item.id;
+            this.currentStrategyId = item.strategyId;
+            await this.viewDetailedResults();
+        } catch (e) {
+            console.error('查看历史详情失败:', e);
+            alert('查看历史详情失败: ' + e.message);
+        }
     },
     
     // 应用历史参数
     async applyHistoryParameters(optimizationId) {
-        this.currentOptimizationId = optimizationId;
+        // 依赖当前策略ID；如果未知则尝试推断
+        if (!this.currentStrategyId) {
+            const strategyName = document.getElementById('optimizationStrategySelect')?.value;
+            const match = (quantTrading._strategies || []).find(s => s.name === strategyName);
+            this.currentStrategyId = match?.id || this.currentStrategyId;
+        }
+        this.currentOptimizationResultId = optimizationId;
         await this.applyBestParameters();
     },
     
