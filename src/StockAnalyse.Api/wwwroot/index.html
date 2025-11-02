@@ -314,6 +314,113 @@
                 </div>
             </div>
 
+            <!-- 策略优化 -->
+            <div class="card">
+                <h3>🎯 策略优化</h3>
+                <p class="card-description">通过网格搜索自动优化策略参数，找到最佳参数组合</p>
+                
+                <!-- 优化配置 -->
+                <div class="optimization-config">
+                    <div class="form-group">
+                        <label>选择策略</label>
+                        <select id="optimizationStrategySelect">
+                            <option value="">请选择要优化的策略...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>股票代码</label>
+                        <input type="text" id="optimizationStockCode" placeholder="如：000001">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>优化时间范围</label>
+                        <div class="date-range">
+                            <input type="date" id="optimizationStartDate">
+                            <span>至</span>
+                            <input type="date" id="optimizationEndDate">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>优化目标</label>
+                        <select id="optimizationTarget">
+                            <option value="TotalReturn">总收益率</option>
+                            <option value="SharpeRatio">夏普比率</option>
+                            <option value="MaxDrawdown">最大回撤（最小化）</option>
+                            <option value="WinRate">胜率</option>
+                        </select>
+                    </div>
+                    
+                    <!-- 参数配置区域 -->
+                    <div id="optimizationParameters" class="hidden">
+                        <h4>参数范围配置</h4>
+                        <div id="parameterRanges"></div>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button class="btn" onclick="strategyOptimization.loadStrategyParameters()">📋 加载参数</button>
+                        <button class="btn btn-success" onclick="strategyOptimization.startOptimization()">🚀 开始优化</button>
+                        <button class="btn btn-info" onclick="strategyOptimization.loadOptimizationHistory()">📊 查看历史</button>
+                    </div>
+                </div>
+                
+                <!-- 优化进度 -->
+                <div id="optimizationProgress" class="hidden">
+                    <h4>优化进度</h4>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="optimizationProgressBar"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="optimizationProgressText">准备中...</span>
+                        <button class="btn btn-danger btn-small" onclick="strategyOptimization.stopOptimization()">停止优化</button>
+                    </div>
+                </div>
+                
+                <!-- 优化结果 -->
+                <div id="optimizationResults" class="hidden">
+                    <h4>优化结果</h4>
+                    <div class="optimization-summary">
+                        <div class="best-result">
+                            <h5>最佳参数组合</h5>
+                            <div id="bestParameters"></div>
+                            <div class="best-metrics">
+                                <div class="metric">
+                                    <span class="label">总收益率:</span>
+                                    <span class="value" id="bestTotalReturn">-</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="label">夏普比率:</span>
+                                    <span class="value" id="bestSharpeRatio">-</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="label">最大回撤:</span>
+                                    <span class="value" id="bestMaxDrawdown">-</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="label">胜率:</span>
+                                    <span class="value" id="bestWinRate">-</span>
+                                </div>
+                            </div>
+                            <div class="result-actions">
+                                <button class="btn" onclick="strategyOptimization.applyBestParameters()">✅ 应用最佳参数</button>
+                                <button class="btn btn-info" onclick="strategyOptimization.viewDetailedResults()">📋 查看详细结果</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 优化历史 -->
+            <div class="card">
+                <h3>📈 优化历史</h3>
+                <div class="history-controls">
+                    <button class="btn" onclick="strategyOptimization.loadOptimizationHistory()">🔄 刷新历史</button>
+                    <button class="btn btn-danger" onclick="strategyOptimization.clearHistory()">🗑️ 清空历史</button>
+                </div>
+                <div id="optimizationHistory" class="loading">点击刷新历史查看优化记录...</div>
+            </div>
+
             <!-- 实时监控 -->
             <div class="card">
                 <h3>📡 实时监控</h3>
