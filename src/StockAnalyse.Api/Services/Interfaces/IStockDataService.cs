@@ -43,6 +43,11 @@ public interface IStockDataService
     /// 从东方财富拉取日线历史并保存到数据库（存在则更新）
     /// </summary>
     Task<int> FetchAndStoreDailyHistoryAsync(string stockCode, DateTime startDate, DateTime endDate);
+    
+    /// <summary>
+    /// 从东方财富获取指定市场的所有股票实时行情（用于选股）
+    /// </summary>
+    Task<List<Stock>> FetchAllStocksFromEastMoneyAsync(string? market = null, int maxCount = 5000);
 }
 
 

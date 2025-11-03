@@ -188,8 +188,8 @@ public class NewsController : ControllerBase
 
             // 统计相关股票
             var allStockCodes = newsList
-                .Where(n => n.StockCodes != null)
-                .SelectMany(n => n.StockCodes)
+                .Where(n => n.StockCodes != null && n.StockCodes.Any())
+                .SelectMany(n => n.StockCodes ?? Enumerable.Empty<string>())
                 .GroupBy(code => code)
                 .OrderByDescending(g => g.Count())
                 .Take(10)

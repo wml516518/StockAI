@@ -185,11 +185,11 @@ public class BacktestService : IBacktestService
         return true;
     }
 
-    public async Task<(decimal totalReturn, decimal annualizedReturn, decimal sharpeRatio, decimal maxDrawdown, decimal winRate)> CalculatePerformanceMetricsAsync(
+    public Task<(decimal totalReturn, decimal annualizedReturn, decimal sharpeRatio, decimal maxDrawdown, decimal winRate)> CalculatePerformanceMetricsAsync(
         List<SimulatedTrade> trades, decimal initialCapital, DateTime startDate, DateTime endDate)
     {
         if (!trades.Any())
-            return (0, 0, 0, 0, 0);
+            return Task.FromResult((0m, 0m, 0m, 0m, 0m));
 
         // 计算每日资产价值
         var dailyCapital = CalculateDailyCapital(trades, initialCapital);
@@ -233,7 +233,7 @@ public class BacktestService : IBacktestService
         var dailyStdDev = CalculateStandardDeviation(dailyReturns);
         var sharpeRatio = dailyStdDev > 0 ? (avgDailyReturn - riskFreeRate / 365) / dailyStdDev * (decimal)Math.Sqrt(365) : 0;
 
-        return (totalReturn, annualizedReturn, sharpeRatio, maxDrawdown, winRate);
+        return Task.FromResult((totalReturn, annualizedReturn, sharpeRatio, maxDrawdown, winRate));
     }
 
     private async Task<TradingSignal?> GenerateHistoricalSignalAsync(string stockCode, DateTime date, 
@@ -457,7 +457,7 @@ public class BacktestService : IBacktestService
         };
     }
 
-    private async Task<(SimulatedTrade? trade, decimal newCapital)> ExecuteBacktestTradeAsync(TradingSignal signal, decimal currentCapital, 
+    private Task<(SimulatedTrade? trade, decimal newCapital)> ExecuteBacktestTradeAsync(TradingSignal signal, decimal currentCapital, 
         Dictionary<string, decimal> positions, int strategyId)
     {
         var quantity = CalculateTradeQuantity(currentCapital, signal.Price);
@@ -466,7 +466,7 @@ public class BacktestService : IBacktestService
         {
             var totalCost = quantity * signal.Price * 1.0003m; // 包含手续费
             if (currentCapital < totalCost || quantity <= 0)
-                return (null, currentCapital);
+                return Task.FromResult<(SimulatedTrade?, decimal)>((null, currentCapital));
 
             var newCapital = currentCapital - totalCost;
             positions[signal.StockCode] = positions.GetValueOrDefault(signal.StockCode, 0) + quantity;
@@ -482,13 +482,13 @@ public class BacktestService : IBacktestService
                 Amount = quantity * signal.Price
             };
 
-            return (trade, newCapital);
+            return Task.FromResult<(SimulatedTrade?, decimal)>((trade, newCapital));
         }
         else if (signal.Type == SignalType.Sell)
         {
             var availableQuantity = positions.GetValueOrDefault(signal.StockCode, 0);
             if (availableQuantity <= 0)
-                return (null, currentCapital);
+                return Task.FromResult<(SimulatedTrade?, decimal)>((null, currentCapital));
 
             var sellQuantity = Math.Min(quantity, availableQuantity);
             var totalReceived = sellQuantity * signal.Price * 0.9997m; // 扣除手续费
@@ -507,10 +507,10 @@ public class BacktestService : IBacktestService
                 Amount = sellQuantity * signal.Price
             };
 
-            return (trade, newCapital);
+            return Task.FromResult<(SimulatedTrade?, decimal)>((trade, newCapital));
         }
-
-        return (null, currentCapital);
+        
+        return Task.FromResult<(SimulatedTrade?, decimal)>((null, currentCapital));
     }
 
     private async Task<decimal> GetLatestPriceAsync(string stockCode, DateTime beforeDate)

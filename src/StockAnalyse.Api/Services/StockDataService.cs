@@ -20,6 +20,24 @@ public class StockDataService : IStockDataService
         _httpClient.Timeout = TimeSpan.FromSeconds(10);
     }
 
+    /// <summary>
+    /// 安全地将字符串转换为decimal，处理 "-"、空字符串等情况
+    /// </summary>
+    private decimal SafeConvertToDecimal(object? value, decimal defaultValue = 0)
+    {
+        if (value == null)
+            return defaultValue;
+        
+        string? strValue = value.ToString();
+        if (string.IsNullOrWhiteSpace(strValue) || strValue == "-" || strValue == "--")
+            return defaultValue;
+        
+        if (decimal.TryParse(strValue, out decimal result))
+            return result;
+        
+        return defaultValue;
+    }
+
     public async Task<Stock?> GetRealTimeQuoteAsync(string stockCode)
     {
         try
@@ -193,13 +211,13 @@ public class StockDataService : IStockDataService
             }
             
             var name = parts[0]; // 股票名称在第一个位置
-            var open = decimal.Parse(parts[1]);
-            var prevClose = decimal.Parse(parts[2]);
-            var current = decimal.Parse(parts[3]) / 100;
-            var high = decimal.Parse(parts[4]);
-            var low = decimal.Parse(parts[5]);
-            var volume = decimal.Parse(parts[8]);
-            var turnover = decimal.Parse(parts[9]);
+            var open = SafeConvertToDecimal(parts[1]);
+            var prevClose = SafeConvertToDecimal(parts[2]);
+            var current = SafeConvertToDecimal(parts[3]) / 100;
+            var high = SafeConvertToDecimal(parts[4]);
+            var low = SafeConvertToDecimal(parts[5]);
+            var volume = SafeConvertToDecimal(parts[8]);
+            var turnover = SafeConvertToDecimal(parts[9]);
             
             var changeAmount = current - prevClose;
             var changePercent = prevClose != 0 ? changeAmount / prevClose * 100 : 0;
@@ -274,12 +292,12 @@ public class StockDataService : IStockDataService
             
             var stockInfo = data.data;
             
-            // 获取各个价格字段
-            decimal currentPrice = Convert.ToDecimal(stockInfo.f43 ?? 0);
-            decimal openPrice = Convert.ToDecimal(stockInfo.f46 ?? 0);
-            decimal closePrice = Convert.ToDecimal(stockInfo.f60 ?? 0); // 昨收价
-            decimal highPrice = Convert.ToDecimal(stockInfo.f44 ?? 0);
-            decimal lowPrice = Convert.ToDecimal(stockInfo.f45 ?? 0);
+            // 获取各个价格字段（使用安全转换方法，处理"-"等无效值）
+            decimal currentPrice = SafeConvertToDecimal(stockInfo.f43);
+            decimal openPrice = SafeConvertToDecimal(stockInfo.f46);
+            decimal closePrice = SafeConvertToDecimal(stockInfo.f60); // 昨收价
+            decimal highPrice = SafeConvertToDecimal(stockInfo.f44);
+            decimal lowPrice = SafeConvertToDecimal(stockInfo.f45);
             
             // 价格回退逻辑：非交易时间使用昨收价
             if (currentPrice == 0.0m && closePrice > 0.0m)
@@ -303,19 +321,19 @@ public class StockDataService : IStockDataService
                 ClosePrice = closePrice,
                 HighPrice = highPrice,
                 LowPrice = lowPrice,
-                Volume = Convert.ToDecimal(stockInfo.f47 ?? 0),
-                Turnover = Convert.ToDecimal(stockInfo.f48 ?? 0),
-                ChangeAmount = Convert.ToDecimal(stockInfo.f169 ?? 0),
-                ChangePercent = Convert.ToDecimal(stockInfo.f170 ?? 0),
-                TurnoverRate = Convert.ToDecimal(stockInfo.f168 ?? 0),
-                PE = Convert.ToDecimal(stockInfo.f162 ?? 0),  // 市盈率
-                PB = Convert.ToDecimal(stockInfo.f167 ?? 0),  // 市净率
+                Volume = SafeConvertToDecimal(stockInfo.f47),
+                Turnover = SafeConvertToDecimal(stockInfo.f48),
+                ChangeAmount = SafeConvertToDecimal(stockInfo.f169),
+                ChangePercent = SafeConvertToDecimal(stockInfo.f170),
+                TurnoverRate = SafeConvertToDecimal(stockInfo.f168),
+                PE = SafeConvertToDecimal(stockInfo.f162) > 0 ? SafeConvertToDecimal(stockInfo.f162) : null,  // 市盈率
+                PB = SafeConvertToDecimal(stockInfo.f167) > 0 ? SafeConvertToDecimal(stockInfo.f167) : null,  // 市净率
                 LastUpdate = DateTime.Now
             };
             
             return stock;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return null;
         }
@@ -390,41 +408,54 @@ public class StockDataService : IStockDataService
                 var parts = line.Split(',');
                 if (parts.Length < 7) continue;
 
-                var tradeDate = DateTime.Parse(parts[0]);
-                var open = decimal.Parse(parts[1]);
-                var close = decimal.Parse(parts[2]);
-                var high = decimal.Parse(parts[3]);
-                var low = decimal.Parse(parts[4]);
-                var volume = decimal.Parse(parts[5]);
-                var amount = decimal.Parse(parts[6]);
-
-                var existing = await _context.StockHistories
-                    .FirstOrDefaultAsync(h => h.StockCode == stockCode && h.TradeDate == tradeDate);
-
-                if (existing != null)
+                try
                 {
-                    existing.Open = open;
-                    existing.Close = close;
-                    existing.High = high;
-                    existing.Low = low;
-                    existing.Volume = volume;
-                    existing.Turnover = amount;
-                }
-                else
-                {
-                    await _context.StockHistories.AddAsync(new StockHistory
+                    var tradeDate = DateTime.Parse(parts[0]);
+                    var open = SafeConvertToDecimal(parts[1]);
+                    var close = SafeConvertToDecimal(parts[2]);
+                    var high = SafeConvertToDecimal(parts[3]);
+                    var low = SafeConvertToDecimal(parts[4]);
+                    var volume = SafeConvertToDecimal(parts[5]);
+                    var amount = SafeConvertToDecimal(parts[6]);
+
+                    // 跳过无效数据（价格为0或负数）
+                    if (open <= 0 || close <= 0 || high <= 0 || low <= 0)
+                        continue;
+
+                    var existing = await _context.StockHistories
+                        .FirstOrDefaultAsync(h => h.StockCode == stockCode && h.TradeDate == tradeDate);
+
+                    if (existing != null)
                     {
-                        StockCode = stockCode,
-                        TradeDate = tradeDate,
-                        Open = open,
-                        Close = close,
-                        High = high,
-                        Low = low,
-                        Volume = volume,
-                        Turnover = amount
-                    });
+                        existing.Open = open;
+                        existing.Close = close;
+                        existing.High = high;
+                        existing.Low = low;
+                        existing.Volume = volume;
+                        existing.Turnover = amount;
+                    }
+                    else
+                    {
+                        await _context.StockHistories.AddAsync(new StockHistory
+                        {
+                            StockCode = stockCode,
+                            TradeDate = tradeDate,
+                            Open = open,
+                            Close = close,
+                            High = high,
+                            Low = low,
+                            Volume = volume,
+                            Turnover = amount
+                        });
+                    }
+                    
+                    saved++;
                 }
-                saved++;
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("解析日线数据失败: {Line}, 错误: {Error}", line, ex.Message);
+                    continue;
+                }
             }
 
             await _context.SaveChangesAsync();
@@ -435,6 +466,189 @@ public class StockDataService : IStockDataService
         {
             _logger.LogError(ex, "拉取并保存东方财富日线失败: {Code}", stockCode);
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// 从东方财富获取指定市场的所有股票实时行情（用于选股）
+    /// </summary>
+    public async Task<List<Stock>> FetchAllStocksFromEastMoneyAsync(string? market = null, int maxCount = 5000)
+    {
+        var allStocks = new List<Stock>();
+        
+        try
+        {
+            _logger.LogInformation("开始从东方财富获取股票列表，市场: {Market}, 最大数量: {MaxCount}", 
+                market ?? "全部", maxCount);
+            
+            // 构建筛选条件
+            // m:1 表示上交所, m:2 表示深交所, 不指定则获取全部
+            string fs = "";
+            if (!string.IsNullOrEmpty(market))
+            {
+                if (market == "SH")
+                {
+                    fs = "m:1"; // 上交所
+                }
+                else if (market == "SZ")
+                {
+                    fs = "m:2"; // 深交所
+                }
+            }
+            else
+            {
+                fs = "m:1+t:2"; // 全部A股（上交所+深交所）
+            }
+            
+            int pageSize = 100; // 每页100只股票
+            int pageNum = 1;
+            int totalFetched = 0;
+            
+            // 字段说明：
+            // f57: 代码, f58: 名称, f43: 最新价, f44: 最高价, f45: 最低价
+            // f46: 今开, f60: 昨收, f47: 成交量, f48: 成交额
+            // f170: 涨跌幅, f169: 涨跌额, f168: 换手率
+            // f162: 市盈率(PE), f167: 市净率(PB)
+            string fields = "f57,f58,f43,f44,f45,f46,f60,f47,f48,f170,f169,f168,f162,f167";
+            
+            while (totalFetched < maxCount)
+            {
+                // 东方财富股票列表API
+                // pn: 页码, pz: 每页数量, po: 排序(1=降序), np: 1
+                // fltt: 2, invt: 2, fid: f3(按涨跌幅排序), fs: 筛选条件
+                // fields: 需要获取的字段
+                var url = $"http://82.push2.eastmoney.com/api/qt/clist/get?" +
+                    $"pn={pageNum}&pz={pageSize}&po=1&np=1&fltt=2&invt=2&fid=f3&fs={fs}&fields={fields}";
+                
+                _logger.LogDebug("请求东方财富股票列表，页码: {PageNum}, URL: {Url}", pageNum, url);
+                
+                _httpClient.DefaultRequestHeaders.Clear();
+                _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+                
+                var response = await _httpClient.GetStringAsync(url);
+                
+                dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
+                
+                if (data?.data == null || data.data.diff == null)
+                {
+                    _logger.LogWarning("东方财富返回数据为空，页码: {PageNum}", pageNum);
+                    break;
+                }
+                
+                var stocks = data.data.diff;
+                int pageCount = 0;
+                
+                foreach (var stockInfo in stocks)
+                {
+                    try
+                    {
+                        // 获取股票代码（格式：1.600000 或 0.000001）
+                        string? secid = stockInfo.f57?.ToString();
+                        if (string.IsNullOrEmpty(secid))
+                            continue;
+                        
+                        // 解析secid获取市场代码和股票代码
+                        var parts = secid.Split('.');
+                        if (parts.Length != 2)
+                            continue;
+                        
+                        string marketCode = parts[0];
+                        string stockCode = parts[1];
+                        
+                        // 判断市场
+                        string marketType = marketCode == "1" ? "SH" : "SZ";
+                        
+                        // 只处理A股（排除B股等）
+                        // B股: 90开头（上交所B股），20开头（深交所B股）
+                        // 排除其他非A股代码
+                        if (stockCode.StartsWith("90") || stockCode.StartsWith("20"))
+                            continue;
+                        
+                        // clist接口的价格格式：通常直接是元，但某些字段可能需要除以100
+                        // f43: 最新价（可能需要除以100）, f60: 昨收（可能需要除以100）
+                        // 其他价格字段（f44,f45,f46）格式一致
+                        decimal currentPriceRaw = SafeConvertToDecimal(stockInfo.f43);
+                        decimal closePriceRaw = SafeConvertToDecimal(stockInfo.f60);
+                        
+                        // clist接口的价格通常需要除以100（单位是分）
+                        decimal currentPrice = currentPriceRaw / 100;
+                        decimal closePrice = closePriceRaw / 100;
+                        decimal openPrice = SafeConvertToDecimal(stockInfo.f46) / 100;
+                        decimal highPrice = SafeConvertToDecimal(stockInfo.f44) / 100;
+                        decimal lowPrice = SafeConvertToDecimal(stockInfo.f45) / 100;
+                        
+                        // 价格回退逻辑：非交易时间使用昨收价
+                        if (currentPrice == 0 && closePrice > 0)
+                            currentPrice = closePrice;
+                        if (openPrice == 0 && closePrice > 0)
+                            openPrice = closePrice;
+                        if (highPrice == 0)
+                            highPrice = currentPrice;
+                        if (lowPrice == 0)
+                            lowPrice = currentPrice;
+                        
+                        // 获取PE和PB（可能为0、负数或"-"，需要处理）
+                        decimal peValue = SafeConvertToDecimal(stockInfo.f162);
+                        decimal pbValue = SafeConvertToDecimal(stockInfo.f167);
+                        
+                        var stock = new Stock
+                        {
+                            Code = stockCode,
+                            Name = stockInfo.f58?.ToString() ?? "未知",
+                            Market = marketType,
+                            CurrentPrice = currentPrice,
+                            OpenPrice = openPrice,
+                            ClosePrice = closePrice,
+                            HighPrice = highPrice,
+                            LowPrice = lowPrice,
+                            Volume = SafeConvertToDecimal(stockInfo.f47),
+                            Turnover = SafeConvertToDecimal(stockInfo.f48),
+                            ChangeAmount = SafeConvertToDecimal(stockInfo.f169) / 100, // 涨跌额也需要除以100
+                            ChangePercent = SafeConvertToDecimal(stockInfo.f170),
+                            TurnoverRate = SafeConvertToDecimal(stockInfo.f168),
+                            PE = peValue > 0 ? peValue : null,
+                            PB = pbValue > 0 ? pbValue : null,
+                            LastUpdate = DateTime.Now
+                        };
+                        
+                        // 跳过价格为0或无效的股票（可能是停牌、退市等）
+                        if (stock.CurrentPrice <= 0 || string.IsNullOrEmpty(stock.Name) || stock.Name == "未知")
+                            continue;
+                        
+                        allStocks.Add(stock);
+                        pageCount++;
+                        totalFetched++;
+                        
+                        if (totalFetched >= maxCount)
+                            break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("解析股票数据失败: {Error}", ex.Message);
+                        continue;
+                    }
+                }
+                
+                _logger.LogInformation("第 {PageNum} 页获取到 {Count} 只股票", pageNum, pageCount);
+                
+                // 如果这一页获取的股票数量少于页面大小，说明已经是最后一页
+                if (pageCount < pageSize || totalFetched >= maxCount)
+                    break;
+                
+                pageNum++;
+                
+                // 添加延迟，避免请求过快
+                await Task.Delay(200);
+            }
+            
+            _logger.LogInformation("从东方财富总共获取到 {Count} 只股票", allStocks.Count);
+            return allStocks;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "从东方财富获取股票列表失败");
+            return allStocks; // 返回已获取的部分数据
         }
     }
 }

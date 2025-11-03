@@ -226,10 +226,6 @@ async function screenStocks() {
         maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
         minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
         maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
-        minPE: parseFloat(document.getElementById('minPE').value) || null,
-        maxPE: parseFloat(document.getElementById('maxPE').value) || null,
-        minPB: parseFloat(document.getElementById('minPB').value) || null,
-        maxPB: parseFloat(document.getElementById('maxPB').value) || null,
         minVolume: parseFloat(document.getElementById('minVolume').value) || null,
         maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
         minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
@@ -239,16 +235,42 @@ async function screenStocks() {
     };
     
     try {
-        document.getElementById('screenResults').innerHTML = '<div class="loading">查询中...</div>';
+        document.getElementById('screenResults').innerHTML = 
+            '<div class="loading">⏳ 正在从东方财富获取实时股票数据并筛选...<br><small>这可能需要几秒钟时间</small></div>';
+        
+        // 记录选股条件用于调试
+        console.log('选股条件:', criteria);
+        
         const response = await fetch(`${API_BASE}/api/screen/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(criteria)
         });
         
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: '未知错误', message: response.statusText }));
+            throw new Error(errorData.message || errorData.error || '查询失败');
+        }
+        
         const stocks = await response.json();
         
-        let html = `<p>找到 ${stocks.length} 只股票</p><table><thead><tr><th>代码</th><th>名称</th><th>当前价</th><th>涨跌幅</th><th>换手率</th><th>PE</th><th>PB</th><th>成交量</th></tr></thead><tbody>`;
+        if (stocks.length === 0) {
+            let tip = '<p class="warning">⚠️ 未找到符合条件的股票</p>';
+            tip += '<p style="font-size: 0.9em; color: #666; margin-top: 10px;">可能的原因：</p>';
+            tip += '<ul style="font-size: 0.9em; color: #666; margin-left: 20px;">';
+            tip += '<li>可能从东方财富获取的股票数据中没有符合条件的股票</li>';
+            if (criteria.market) {
+                tip += `<li>市场筛选为：${criteria.market}，可能该市场暂无股票数据</li>`;
+            }
+            tip += '<li>其他筛选条件过于严格，导致没有股票满足所有条件</li>';
+            tip += '<li>提示：可以查看服务器日志获取更详细的筛选信息</li>';
+            tip += '</ul>';
+            document.getElementById('screenResults').innerHTML = tip;
+            return;
+        }
+        
+        let html = `<p style="margin-bottom: 15px;"><strong>找到 ${stocks.length} 只股票</strong></p>`;
+        html += '<div style="overflow-x: auto;"><table><thead><tr><th>代码</th><th>名称</th><th>当前价</th><th>涨跌幅</th><th>换手率</th><th>PE</th><th>PB</th><th>成交量</th></tr></thead><tbody>';
         
         stocks.forEach(stock => {
             html += `
@@ -267,10 +289,13 @@ async function screenStocks() {
             `;
         });
         
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         document.getElementById('screenResults').innerHTML = html;
     } catch (error) {
-        document.getElementById('screenResults').innerHTML = '<p class="error">查询失败：' + error.message + '</p>';
+        console.error('选股查询错误:', error);
+        document.getElementById('screenResults').innerHTML = 
+            '<p class="error">查询失败：' + error.message + '</p>' +
+            '<p style="font-size: 0.9em; color: #666; margin-top: 10px;">请检查网络连接或查看服务器日志</p>';
     }
 }
 
@@ -1559,10 +1584,6 @@ class ScreenTemplateManager {
         document.getElementById('maxChange').value = template.maxChangePercent || '';
         document.getElementById('minTurnover').value = template.minTurnoverRate || '';
         document.getElementById('maxTurnover').value = template.maxTurnoverRate || '';
-        document.getElementById('minPE').value = template.minPE || '';
-        document.getElementById('maxPE').value = template.maxPE || '';
-        document.getElementById('minPB').value = template.minPB || '';
-        document.getElementById('maxPB').value = template.maxPB || '';
         document.getElementById('minVolume').value = template.minVolume || '';
         document.getElementById('maxVolume').value = template.maxVolume || '';
         document.getElementById('minMarketValue').value = template.minMarketValue || '';
@@ -1615,10 +1636,6 @@ class ScreenTemplateManager {
             maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
             minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
             maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
-            minPE: parseFloat(document.getElementById('minPE').value) || null,
-            maxPE: parseFloat(document.getElementById('maxPE').value) || null,
-            minPB: parseFloat(document.getElementById('minPB').value) || null,
-            maxPB: parseFloat(document.getElementById('maxPB').value) || null,
             minVolume: parseFloat(document.getElementById('minVolume').value) || null,
             maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
             minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
@@ -1696,10 +1713,6 @@ class ScreenTemplateManager {
         document.getElementById('maxChange').value = '';
         document.getElementById('minTurnover').value = '';
         document.getElementById('maxTurnover').value = '';
-        document.getElementById('minPE').value = '';
-        document.getElementById('maxPE').value = '';
-        document.getElementById('minPB').value = '';
-        document.getElementById('maxPB').value = '';
         document.getElementById('minVolume').value = '';
         document.getElementById('maxVolume').value = '';
         document.getElementById('minMarketValue').value = '';

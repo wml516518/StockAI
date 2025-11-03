@@ -175,7 +175,14 @@ public class AIService : IAIService
             string? messageContent = null;
             try
             {
-                messageContent = result.choices[0].message.content.ToString();
+                if (result?.choices != null && result.choices.Length > 0)
+                {
+                    var firstChoice = result.choices[0];
+                    if (firstChoice?.message?.content != null)
+                    {
+                        messageContent = firstChoice.message.content.ToString();
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -235,7 +242,14 @@ public class AIService : IAIService
             string? messageContent = null;
             try
             {
-                messageContent = result.choices[0].message.content.ToString();
+                if (result?.choices != null && result.choices.Count > 0)
+                {
+                    var firstChoice = result.choices[0];
+                    if (firstChoice?.message?.content != null)
+                    {
+                        messageContent = firstChoice.message.content.ToString();
+                    }
+                }
             }
             catch (Exception ex)
             {

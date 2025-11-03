@@ -297,7 +297,13 @@ public class NewsService : INewsService{
             
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError("天行数据API请求失败: {StatusCode}, 错误内容: {Content}", response.StatusCode, jsonContent);
+                _logger.LogError("天行数据API请求失败: {StatusCode}, 错误内容: {Content}", response.StatusCode, jsonContent ?? "null");
+                return;
+            }
+            
+            if (string.IsNullOrEmpty(jsonContent))
+            {
+                _logger.LogWarning("天行数据API返回内容为空");
                 return;
             }
             
@@ -318,9 +324,15 @@ public class NewsService : INewsService{
     {
         var newsList = new List<FinancialNews>();
         
+        if (string.IsNullOrEmpty(jsonContent))
+        {
+            _logger.LogWarning("尝试解析空的JSON内容");
+            return newsList;
+        }
+        
         try
         {
-            _logger.LogInformation("开始解析天行数据JSON: {Length}字节", jsonContent?.Length ?? 0);
+            _logger.LogInformation("开始解析天行数据JSON: {Length}字节", jsonContent.Length);
             
             using var document = JsonDocument.Parse(jsonContent);
             var root = document.RootElement;
@@ -512,7 +524,8 @@ public class NewsService : INewsService{
     {
         try
         {
-            var url = "https://www.cls.cn/api/sw"; // 财联社API（需要替换为实际API）
+            // 财联社API（需要替换为实际API）
+            // const string url = "https://www.cls.cn/api/sw";
             
             // 这里只是示例，实际需要根据财联社的API文档实现
             // var response = await _httpClient.GetStringAsync(url);
