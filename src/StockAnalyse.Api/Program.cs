@@ -17,6 +17,9 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
     });
     
+// 添加内存缓存服务（用于缓存选股结果）
+builder.Services.AddMemoryCache();
+    
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {

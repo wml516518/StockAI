@@ -1,7 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace StockAnalyse.Api.Services;
 
@@ -10,27 +14,97 @@ public class ScreenService : IScreenService
     private readonly StockDbContext _context;
     private readonly ILogger<ScreenService> _logger;
     private readonly IStockDataService _stockDataService;
+    private readonly IMemoryCache _cache;
+    private const int CacheExpirationMinutes = 10; // 缓存10分钟
 
     public ScreenService(
         StockDbContext context, 
         ILogger<ScreenService> logger,
-        IStockDataService stockDataService)
+        IStockDataService stockDataService,
+        IMemoryCache cache)
     {
         _context = context;
         _logger = logger;
         _stockDataService = stockDataService;
+        _cache = cache;
+    }
+
+    /// <summary>
+    /// 生成查询条件的缓存键
+    /// </summary>
+    private string GenerateCacheKey(ScreenCriteria criteria)
+    {
+        // 排除分页参数，只使用筛选条件生成缓存键
+        var criteriaForCache = new
+        {
+            criteria.Market,
+            criteria.MinPrice,
+            criteria.MaxPrice,
+            criteria.MinChangePercent,
+            criteria.MaxChangePercent,
+            criteria.MinTurnoverRate,
+            criteria.MaxTurnoverRate,
+            criteria.MinVolume,
+            criteria.MaxVolume,
+            criteria.MinMarketValue,
+            criteria.MaxMarketValue,
+            criteria.MinDividendYield,
+            criteria.MaxDividendYield,
+            criteria.MinPE,
+            criteria.MaxPE,
+            criteria.MinPB,
+            criteria.MaxPB,
+            criteria.MinCirculatingShares,
+            criteria.MaxCirculatingShares,
+            criteria.MinTotalShares,
+            criteria.MaxTotalShares
+        };
+        
+        var json = JsonSerializer.Serialize(criteriaForCache);
+        using var sha256 = SHA256.Create();
+        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(json));
+        return $"ScreenResult_{Convert.ToBase64String(hashBytes)}";
     }
 
     public async Task<PagedResult<Stock>> ScreenStocksAsync(ScreenCriteria criteria)
     {
-        var allResults = await ScreenStocksAllAsync(criteria);
+        // 生成缓存键（基于筛选条件，不包括分页参数）
+        var cacheKey = GenerateCacheKey(criteria);
         
-        // 应用分页
+        // 尝试从缓存获取全部筛选结果
+        List<Stock> allResults;
+        if (_cache.TryGetValue<List<Stock>>(cacheKey, out var cachedResults))
+        {
+            _logger.LogInformation("从缓存获取选股结果，缓存键: {CacheKey}, 记录数: {Count}", cacheKey, cachedResults.Count);
+            allResults = cachedResults;
+        }
+        else
+        {
+            // 缓存不存在，执行完整查询
+            _logger.LogInformation("缓存未命中，开始执行完整查询，缓存键: {CacheKey}", cacheKey);
+            allResults = await ScreenStocksAllAsync(criteria);
+            
+            // 将结果存入缓存（10分钟过期）
+            var cacheOptions = new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(CacheExpirationMinutes),
+                SlidingExpiration = TimeSpan.FromMinutes(5), // 滑动过期5分钟
+                Priority = CacheItemPriority.Normal
+            };
+            _cache.Set(cacheKey, allResults, cacheOptions);
+            _logger.LogInformation("选股结果已缓存，缓存键: {CacheKey}, 记录数: {Count}, 过期时间: {Expiration}分钟", 
+                cacheKey, allResults.Count, CacheExpirationMinutes);
+        }
+        
+        // 从缓存的结果中应用分页
         var pageIndex = Math.Max(1, criteria.PageIndex);
         var pageSize = Math.Max(1, Math.Min(100, criteria.PageSize)); // 限制每页最多100条
         
         var skip = (pageIndex - 1) * pageSize;
         var pagedItems = allResults.Skip(skip).Take(pageSize).ToList();
+        
+        _logger.LogInformation("分页查询完成 - 总记录数: {TotalCount}, 页码: {PageIndex}, 每页: {PageSize}, 返回: {ReturnCount} 条", 
+            allResults.Count, pageIndex, pageSize, pagedItems.Count);
         
         return new PagedResult<Stock>
         {
