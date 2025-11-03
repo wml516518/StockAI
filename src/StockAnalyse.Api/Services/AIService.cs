@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using System.Linq;
 
 namespace StockAnalyse.Api.Services;
 
@@ -165,7 +167,36 @@ public class AIService : IAIService
             }
             
             // 检查返回结构是否符合预期
-            if (result?.choices == null || result?.choices.Count == 0)
+            bool hasChoices = false;
+            if (result?.choices != null)
+            {
+                if (result.choices is JArray jArray && jArray.Count > 0)
+                {
+                    hasChoices = true;
+                }
+                else if (result.choices is JToken jToken && jToken.Type == JTokenType.Array && jToken.Count() > 0)
+                {
+                    hasChoices = true;
+                }
+                else
+                {
+                    // 尝试动态访问Count属性
+                    try
+                    {
+                        dynamic choices = result.choices;
+                        if (choices != null && choices.Count > 0)
+                        {
+                            hasChoices = true;
+                        }
+                    }
+                    catch
+                    {
+                        // 忽略转换错误
+                    }
+                }
+            }
+            
+            if (!hasChoices)
             {
                 _logger.LogError("DeepSeek API返回结构异常: {Json}", json);
                 return "AI返回结构异常，请检查API配置";
@@ -175,12 +206,44 @@ public class AIService : IAIService
             string? messageContent = null;
             try
             {
-                if (result?.choices != null && result.choices.Length > 0)
+                // JArray使用Count属性，而不是Length
+                if (result?.choices != null)
                 {
-                    var firstChoice = result.choices[0];
-                    if (firstChoice?.message?.content != null)
+                    // 将choices转换为JArray以便安全访问
+                    JArray? choicesArray = null;
+                    if (result.choices is JArray jArray)
                     {
-                        messageContent = firstChoice.message.content.ToString();
+                        choicesArray = jArray;
+                    }
+                    else if (result.choices is JToken jToken && jToken.Type == JTokenType.Array)
+                    {
+                        choicesArray = jToken as JArray;
+                    }
+                    else
+                    {
+                        // 尝试将dynamic转换为JArray
+                        var token = result.choices as JToken;
+                        if (token?.Type == JTokenType.Array)
+                        {
+                            choicesArray = token as JArray;
+                        }
+                    }
+                    
+                    if (choicesArray != null && choicesArray.Count > 0)
+                    {
+                        var firstChoice = choicesArray[0];
+                        if (firstChoice != null)
+                        {
+                            var messageToken = firstChoice["message"];
+                            if (messageToken != null)
+                            {
+                                var contentToken = messageToken["content"];
+                                if (contentToken != null)
+                                {
+                                    messageContent = contentToken.ToString();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -232,7 +295,36 @@ public class AIService : IAIService
             }
             
             // 检查返回结构是否符合预期
-            if (result?.choices == null || result?.choices.Count == 0)
+            bool hasChoices = false;
+            if (result?.choices != null)
+            {
+                if (result.choices is JArray jArray && jArray.Count > 0)
+                {
+                    hasChoices = true;
+                }
+                else if (result.choices is JToken jToken && jToken.Type == JTokenType.Array && jToken.Count() > 0)
+                {
+                    hasChoices = true;
+                }
+                else
+                {
+                    // 尝试动态访问Count属性
+                    try
+                    {
+                        dynamic choices = result.choices;
+                        if (choices != null && choices.Count > 0)
+                        {
+                            hasChoices = true;
+                        }
+                    }
+                    catch
+                    {
+                        // 忽略转换错误
+                    }
+                }
+            }
+            
+            if (!hasChoices)
             {
                 _logger.LogError("OpenAI API返回结构异常: {Json}", json);
                 return "AI返回结构异常，请检查API配置";
@@ -242,12 +334,43 @@ public class AIService : IAIService
             string? messageContent = null;
             try
             {
-                if (result?.choices != null && result.choices.Count > 0)
+                if (result?.choices != null)
                 {
-                    var firstChoice = result.choices[0];
-                    if (firstChoice?.message?.content != null)
+                    // 将choices转换为JArray以便安全访问
+                    JArray? choicesArray = null;
+                    if (result.choices is JArray jArray)
                     {
-                        messageContent = firstChoice.message.content.ToString();
+                        choicesArray = jArray;
+                    }
+                    else if (result.choices is JToken jToken && jToken.Type == JTokenType.Array)
+                    {
+                        choicesArray = jToken as JArray;
+                    }
+                    else
+                    {
+                        // 尝试将dynamic转换为JArray
+                        var token = result.choices as JToken;
+                        if (token?.Type == JTokenType.Array)
+                        {
+                            choicesArray = token as JArray;
+                        }
+                    }
+                    
+                    if (choicesArray != null && choicesArray.Count > 0)
+                    {
+                        var firstChoice = choicesArray[0];
+                        if (firstChoice != null)
+                        {
+                            var messageToken = firstChoice["message"];
+                            if (messageToken != null)
+                            {
+                                var contentToken = messageToken["content"];
+                                if (contentToken != null)
+                                {
+                                    messageContent = contentToken.ToString();
+                                }
+                            }
+                        }
                     }
                 }
             }

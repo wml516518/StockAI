@@ -40,8 +40,21 @@ public class ScreenService : IScreenService
                 marketParam = criteria.Market;
             }
             
-            allStocks = await _stockDataService.FetchAllStocksFromEastMoneyAsync(marketParam);
-            _logger.LogInformation("从东方财富获取到 {Count} 只股票", allStocks.Count);
+            // 优先使用腾讯财经接口（数据更准确），失败时回退到东方财富
+            try
+            {
+                allStocks = await _stockDataService.FetchAllStocksFromTencentAsync(marketParam, 2000);
+                if (allStocks.Count == 0)
+                {
+                    throw new Exception("腾讯财经接口返回空数据");
+                }
+            }
+            catch (Exception tencentEx)
+            {
+                _logger.LogWarning(tencentEx, "腾讯财经接口失败，尝试使用东方财富接口");
+                allStocks = await _stockDataService.FetchAllStocksFromEastMoneyAsync(marketParam);
+            }
+            _logger.LogInformation("获取到 {Count} 只股票", allStocks.Count);
         }
         catch (Exception ex)
         {

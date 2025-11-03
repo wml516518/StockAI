@@ -3,6 +3,10 @@ using Microsoft.OpenApi.Models;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Services;
 using StockAnalyse.Api.Services.Interfaces;
+using System.Text;
+
+// 注册CodePages编码提供程序，支持GBK等中文编码
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 

@@ -470,6 +470,380 @@ public class StockDataService : IStockDataService
     }
 
     /// <summary>
+    /// 从腾讯财经获取股票列表（替代方案，数据更准确）
+    /// </summary>
+    public async Task<List<Stock>> FetchAllStocksFromTencentAsync(string? market = null, int maxCount = 2000)
+    {
+        var allStocks = new List<Stock>();
+        
+        try
+        {
+            _logger.LogInformation("开始从腾讯财经获取股票列表，市场: {Market}, 最大数量: {MaxCount}", 
+                market ?? "全部", maxCount);
+            
+            var stockCodes = GenerateStockCodeList(market, maxCount * 2);
+            _logger.LogInformation("生成 {Count} 个股票代码", stockCodes.Count);
+            
+            int batchSize = 100;
+            for (int i = 0; i < stockCodes.Count && allStocks.Count < maxCount; i += batchSize)
+            {
+                var batch = stockCodes.Skip(i).Take(batchSize).ToList();
+                var batchStocks = await FetchBatchFromTencentAsync(batch);
+                
+                foreach (var stock in batchStocks)
+                {
+                    if (stock != null && !string.IsNullOrWhiteSpace(stock.Code) && 
+                        !string.IsNullOrWhiteSpace(stock.Name) && stock.CurrentPrice > 0)
+                    {
+                        allStocks.Add(stock);
+                        if (allStocks.Count >= maxCount)
+                            break;
+                    }
+                }
+                
+                await Task.Delay(300);
+                
+                if ((i + batchSize) % 500 == 0 || allStocks.Count % 500 == 0)
+                {
+                    _logger.LogInformation("已获取 {Count}/{Total} 只有效股票", allStocks.Count, Math.Min(stockCodes.Count, maxCount));
+                }
+            }
+            
+            _logger.LogInformation("从腾讯财经获取到 {Count} 只有效股票", allStocks.Count);
+            return allStocks;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "从腾讯财经获取股票列表失败");
+            return allStocks;
+        }
+    }
+
+    /// <summary>
+    /// 批量从腾讯财经获取股票数据
+    /// </summary>
+    private async Task<List<Stock>> FetchBatchFromTencentAsync(List<string> stockCodes)
+    {
+        var stocks = new List<Stock>();
+        
+        try
+        {
+            var codeList = stockCodes.Select(code =>
+            {
+                var prefix = code.StartsWith("6") ? "sh" : "sz";
+                return $"{prefix}{code}";
+            }).ToList();
+            
+            var url = $"http://qt.gtimg.cn/q={string.Join(",", codeList)}";
+            
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            
+            // 使用GetByteArrayAsync然后手动解码，解决编码问题
+            var responseBytes = await _httpClient.GetByteArrayAsync(url);
+            // 腾讯财经返回的是GBK编码
+            // .NET Core需要注册CodePages编码提供程序才能使用GBK
+            // 确保编码提供程序已注册（如果未注册则注册，已注册则忽略）
+            try
+            {
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            }
+            catch
+            {
+                // 可能已经注册过，忽略异常
+            }
+            
+            System.Text.Encoding gbkEncoding;
+            try
+            {
+                gbkEncoding = System.Text.Encoding.GetEncoding("GBK");
+            }
+            catch (Exception ex)
+            {
+                // 如果GBK不可用，尝试GB2312
+                try
+                {
+                    gbkEncoding = System.Text.Encoding.GetEncoding("GB2312");
+                    _logger.LogDebug("使用GB2312编码替代GBK");
+                }
+                catch
+                {
+                    // 如果都不可用，使用UTF-8（可能会乱码，但不会崩溃）
+                    gbkEncoding = System.Text.Encoding.UTF8;
+                    _logger.LogWarning("无法使用GBK/GB2312编码，使用UTF-8可能会导致中文乱码。错误: {Error}", ex.Message);
+                }
+            }
+            var response = gbkEncoding.GetString(responseBytes);
+            
+            var lines = response.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            
+            foreach (var line in lines)
+            {
+                try
+                {
+                    // 腾讯财经返回格式可能是：
+                    // 1. v_sh603901="1~股票名~603901~价格~...";
+                    // 2. ~603901~12.81~... (没有变量名和引号)
+                    
+                    string dataLine = line.Trim();
+                    if (string.IsNullOrWhiteSpace(dataLine))
+                        continue;
+                    
+                    string dataContent = "";
+                    
+                    // 尝试格式1：带变量名和引号的格式
+                    var match = System.Text.RegularExpressions.Regex.Match(dataLine, @"v_\w+=""([^""]+)""");
+                    if (match.Success)
+                    {
+                        dataContent = match.Groups[1].Value;
+                    }
+                    else
+                    {
+                        // 尝试格式2：直接以~开头的格式
+                        if (dataLine.StartsWith("~"))
+                        {
+                            // 移除开头的~，然后解析
+                            dataContent = dataLine.Substring(1);
+                        }
+                        else
+                        {
+                            // 尝试其他格式：可能没有引号
+                            var match2 = System.Text.RegularExpressions.Regex.Match(dataLine, @"=\""?([^""]+)""?\s*;?\s*$");
+                            if (match2.Success)
+                            {
+                                dataContent = match2.Groups[1].Value;
+                            }
+                            else
+                            {
+                                // 如果都不匹配，尝试直接用整行（去除变量名部分）
+                                var index = dataLine.IndexOf('=');
+                                if (index > 0)
+                                {
+                                    dataContent = dataLine.Substring(index + 1).Trim().Trim('"').Trim(';');
+                                }
+                                else
+                                {
+                                    continue; // 无法解析，跳过
+                                }
+                            }
+                        }
+                    }
+                    
+                    var parts = dataContent.Split('~');
+                    if (parts.Length < 33) continue;
+                    
+                    // 根据格式调整索引
+                    // 格式1：parts[0]="1", parts[1]=名称, parts[2]=代码, parts[3]=当前价, parts[4]=昨收, parts[5]=今开
+                    // 格式2：parts[0]=代码, parts[1]=当前价, parts[2]=今开, parts[3]=昨收（注意：格式2没有名称字段）
+                    string code = "";
+                    string name = "";
+                    int priceIndexOffset = 0; // 价格字段的索引偏移量
+                    
+                    if (parts.Length > 2 && parts[0] == "1")
+                    {
+                        // 标准格式1：v_sh603901="1~股票名~603901~当前价~昨收~今开~..."
+                        name = parts[1];
+                        code = parts[2];
+                        priceIndexOffset = 0; // 价格从索引3开始
+                    }
+                    else if (parts.Length > 0 && parts[0].Length == 6 && parts[0].All(char.IsDigit))
+                    {
+                        // 格式2：~603901~12.81~12.89~12.90~...
+                        // parts[0]=代码, parts[1]=当前价, parts[2]=今开, parts[3]=昨收
+                        code = parts[0];
+                        priceIndexOffset = -2; // 价格索引需要调整，因为格式不同
+                        
+                        // 对于格式2，我们需要通过单只股票API获取名称（因为没有名称字段）
+                        // 这里先标记为"未知"，后续可以通过API补充
+                        name = "未知";
+                    }
+                    else
+                    {
+                        // 无法识别格式，跳过
+                        continue;
+                    }
+                    
+                    if (string.IsNullOrWhiteSpace(code) || code == "N/A")
+                        continue;
+                    
+                    // 根据格式获取价格字段
+                    decimal currentPrice, openPrice, prevClose;
+                    
+                    if (priceIndexOffset == 0)
+                    {
+                        // 标准格式1
+                        currentPrice = SafeConvertToDecimal(parts[3]);
+                        prevClose = SafeConvertToDecimal(parts[4]);
+                        openPrice = SafeConvertToDecimal(parts[5]);
+                    }
+                    else
+                    {
+                        // 格式2：~603901~当前价~今开~昨收~
+                        currentPrice = SafeConvertToDecimal(parts[1]);
+                        openPrice = SafeConvertToDecimal(parts[2]);
+                        prevClose = SafeConvertToDecimal(parts[3]);
+                    }
+                    
+                    // 其他字段的索引需要根据格式调整
+                    // 标准格式1中：parts[6]=成交量, parts[37]=成交额, parts[33]=最高, parts[34]=最低
+                    // 格式2中需要找到对应的字段位置（通常在这些索引附近）
+                    
+                    decimal volume, turnover, highPrice, lowPrice;
+                    decimal changeAmount, changePercent;
+                    
+                    if (priceIndexOffset == 0)
+                    {
+                        // 标准格式1
+                        volume = SafeConvertToDecimal(parts[6]);
+                        turnover = parts.Length > 37 ? SafeConvertToDecimal(parts[37]) : 0;
+                        highPrice = parts.Length > 33 ? SafeConvertToDecimal(parts[33]) : currentPrice;
+                        lowPrice = parts.Length > 34 ? SafeConvertToDecimal(parts[34]) : currentPrice;
+                        
+                        changeAmount = currentPrice - prevClose;
+                        changePercent = prevClose != 0 ? changeAmount / prevClose * 100 : 0;
+                    }
+                    else
+                    {
+                        // 格式2：需要从字段中找到对应的值
+                        // 根据提供的格式：~603901~12.81~12.89~12.90~280684~130878~149806~...
+                        // parts[4]可能是成交量，需要尝试不同索引
+                        volume = parts.Length > 4 ? SafeConvertToDecimal(parts[4]) : 0;
+                        turnover = parts.Length > 6 ? SafeConvertToDecimal(parts[6]) : 0;
+                        
+                        // 尝试找到最高价和最低价（通常在后面的字段）
+                        highPrice = currentPrice;
+                        lowPrice = currentPrice;
+                        for (int i = 20; i < Math.Min(parts.Length, 40); i++)
+                        {
+                            var val = SafeConvertToDecimal(parts[i]);
+                            if (val > highPrice && val > currentPrice * 0.5m && val < currentPrice * 1.5m)
+                                highPrice = val;
+                            if (val < lowPrice && val > 0 && val < currentPrice * 1.5m)
+                                lowPrice = val;
+                        }
+                        
+                        // 涨跌幅可能在特定位置，尝试查找
+                        changeAmount = currentPrice - prevClose;
+                        changePercent = prevClose != 0 ? changeAmount / prevClose * 100 : 0;
+                        
+                        // 如果parts中有明确的涨跌幅字段，使用它
+                        // 通常在20-30之间的位置
+                        for (int i = 20; i < Math.Min(parts.Length, 30); i++)
+                        {
+                            var val = SafeConvertToDecimal(parts[i]);
+                            if (Math.Abs(val) < 20 && Math.Abs(val) > 0.001m) // 涨跌幅通常在-20到20之间
+                            {
+                                changePercent = val;
+                                changeAmount = prevClose * val / 100;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // 换手率和PE/PB（这些字段在不同格式中位置可能不同）
+                    decimal turnoverRate = 0m;
+                    decimal pe = 0;
+                    decimal pb = 0;
+                    
+                    // 尝试从常见位置获取
+                    if (parts.Length > 38)
+                    {
+                        turnoverRate = SafeConvertToDecimal(parts[38]);
+                    }
+                    if (parts.Length > 39)
+                    {
+                        pe = SafeConvertToDecimal(parts[39]);
+                    }
+                    if (parts.Length > 46)
+                    {
+                        pb = SafeConvertToDecimal(parts[46]);
+                    }
+                    
+                    // 如果名称是"未知"（格式2），暂时跳过，或者尝试从数据库获取
+                    if (name == "未知")
+                    {
+                        // 尝试从数据库获取名称（如果有缓存）
+                        try
+                        {
+                            var cachedStock = await _context.Stocks.FirstOrDefaultAsync(s => s.Code == code);
+                            if (cachedStock != null && !string.IsNullOrWhiteSpace(cachedStock.Name))
+                            {
+                                name = cachedStock.Name;
+                            }
+                        }
+                        catch
+                        {
+                            // 如果数据库中没有，暂时跳过这条记录
+                            continue;
+                        }
+                    }
+                    
+                    // 验证名称有效性
+                    if (string.IsNullOrWhiteSpace(name) || name == "未知" || name == "N/A" || name == "-")
+                        continue;
+                    
+                    stocks.Add(new Stock
+                    {
+                        Code = code,
+                        Name = name,
+                        Market = code.StartsWith("6") ? "SH" : "SZ",
+                        CurrentPrice = currentPrice,
+                        OpenPrice = openPrice > 0 ? openPrice : prevClose,
+                        ClosePrice = prevClose,
+                        HighPrice = highPrice > 0 ? highPrice : currentPrice,
+                        LowPrice = lowPrice > 0 ? lowPrice : currentPrice,
+                        Volume = volume * 100,
+                        Turnover = turnover,
+                        ChangeAmount = changeAmount,
+                        ChangePercent = changePercent,
+                        TurnoverRate = turnoverRate,
+                        PE = pe > 0 ? pe : null,
+                        PB = pb > 0 ? pb : null,
+                        LastUpdate = DateTime.Now
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug("解析腾讯财经股票数据失败: {Error}", ex.Message);
+                }
+            }
+            
+            return stocks;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("批量获取腾讯财经数据失败: {Error}", ex.Message);
+            return stocks;
+        }
+    }
+
+    /// <summary>
+    /// 生成股票代码列表
+    /// </summary>
+    private List<string> GenerateStockCodeList(string? market, int maxCount)
+    {
+        var codes = new List<string>();
+        
+        if (market == null || market == "SH")
+        {
+            for (int i = 600000; i <= 603999 && codes.Count < maxCount; i++)
+                codes.Add(i.ToString());
+            for (int i = 688000; i <= 689999 && codes.Count < maxCount; i++)
+                codes.Add(i.ToString());
+        }
+        
+        if (market == null || market == "SZ")
+        {
+            for (int i = 1; i <= 2999 && codes.Count < maxCount; i++)
+                codes.Add(i.ToString("D6"));
+            for (int i = 300000; i <= 300999 && codes.Count < maxCount; i++)
+                codes.Add(i.ToString());
+        }
+        
+        return codes;
+    }
+
+    /// <summary>
     /// 从东方财富获取指定市场的所有股票实时行情（用于选股）
     /// </summary>
     public async Task<List<Stock>> FetchAllStocksFromEastMoneyAsync(string? market = null, int maxCount = 5000)

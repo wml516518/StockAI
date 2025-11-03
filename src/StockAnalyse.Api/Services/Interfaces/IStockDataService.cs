@@ -48,6 +48,11 @@ public interface IStockDataService
     /// 从东方财富获取指定市场的所有股票实时行情（用于选股）
     /// </summary>
     Task<List<Stock>> FetchAllStocksFromEastMoneyAsync(string? market = null, int maxCount = 5000);
+    
+    /// <summary>
+    /// 从腾讯财经获取指定市场的所有股票实时行情（用于选股，数据更准确）
+    /// </summary>
+    Task<List<Stock>> FetchAllStocksFromTencentAsync(string? market = null, int maxCount = 2000);
 }
 
 

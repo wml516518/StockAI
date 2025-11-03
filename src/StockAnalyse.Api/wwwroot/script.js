@@ -17,8 +17,31 @@ function switchTab(tabName, element) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
     
-    // 如果没有传入element参数，尝试从event获取
-    const targetElement = element || (window.event && window.event.target) || document.querySelector(`[onclick*="switchTab('${tabName}')"]`);
+    // 如果没有传入element参数，尝试找到对应的tab元素
+    let targetElement = element;
+    if (!targetElement) {
+        // 优先尝试通过onclick属性查找
+        targetElement = document.querySelector(`[onclick*="switchTab('${tabName}')"]`);
+        
+        // 如果还是找不到，尝试通过标签顺序查找
+        if (!targetElement) {
+            const tabs = document.querySelectorAll('.tab');
+            const tabMap = {
+                'watchlist': 0,
+                'screen': 1,
+                'quant': 2,
+                'news': 3,
+                'ai': 4,
+                'alert': 5,
+                'settings': 6
+            };
+            const index = tabMap[tabName];
+            if (index !== undefined && tabs[index]) {
+                targetElement = tabs[index];
+            }
+        }
+    }
+    
     if (targetElement) {
         targetElement.classList.add('active');
     }
@@ -845,14 +868,26 @@ function openAI(stockCode) {
     // 切换到AI分析标签
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
-    document.querySelector('.tab:nth-child(4)').classList.add('active');
-    document.getElementById('ai').classList.add('active');
+    
+    // 找到AI分析标签页（第5个，索引为4）
+    const tabs = document.querySelectorAll('.tab');
+    if (tabs.length > 4) {
+        tabs[4].classList.add('active');
+    }
+    
+    // 显示AI分析内容
+    const aiContent = document.getElementById('ai');
+    if (aiContent) {
+        aiContent.classList.add('active');
+    }
     
     // 设置股票代码
     document.getElementById('aiStockCode').value = stockCode;
     
     // 刷新提示词列表（防止未初始化）
-    aiPromptManager.fillPromptSelect();
+    if (typeof aiPromptManager !== 'undefined') {
+        aiPromptManager.fillPromptSelect();
+    }
     
     // 自动分析
     analyzeStock();
