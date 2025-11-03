@@ -18,21 +18,22 @@ public class ScreenController : ControllerBase
     }
 
     /// <summary>
-    /// 条件选股
+    /// 条件选股（分页）
     /// </summary>
     [HttpPost("search")]
-    public async Task<ActionResult<List<Stock>>> Search([FromBody] ScreenCriteria criteria)
+    public async Task<ActionResult<PagedResult<Stock>>> Search([FromBody] ScreenCriteria criteria)
     {
         try
         {
-            _logger.LogInformation("收到选股请求，条件: {Criteria}", 
-                System.Text.Json.JsonSerializer.Serialize(criteria));
+            _logger.LogInformation("收到选股请求，条件: {Criteria}, 页码: {PageIndex}, 每页: {PageSize}", 
+                System.Text.Json.JsonSerializer.Serialize(criteria), criteria.PageIndex, criteria.PageSize);
             
-            var stocks = await _screenService.ScreenStocksAsync(criteria);
+            var result = await _screenService.ScreenStocksAsync(criteria);
             
-            _logger.LogInformation("选股查询完成，返回 {Count} 条结果", stocks.Count);
+            _logger.LogInformation("选股查询完成，总记录数: {TotalCount}, 当前页: {PageIndex}, 返回 {Count} 条结果", 
+                result.TotalCount, result.PageIndex, result.Items.Count);
             
-            return Ok(stocks);
+            return Ok(result);
         }
         catch (Exception ex)
         {

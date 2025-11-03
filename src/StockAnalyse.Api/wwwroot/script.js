@@ -239,35 +239,47 @@ async function loadWatchlist() {
     }
 }
 
+// 条件选股 - 分页状态
+let currentScreenPage = 1;
+let currentScreenPageSize = 20;
+let currentScreenCriteria = null;
+
 // 条件选股
-async function screenStocks() {
-    const criteria = {
-        market: document.getElementById('market').value || null,
-        minPrice: parseFloat(document.getElementById('minPrice').value) || null,
-        maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
-        minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
-        maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
-        minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
-        maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
-        minVolume: parseFloat(document.getElementById('minVolume').value) || null,
-        maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
-        minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
-        maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
-        minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
-        maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null
-    };
+async function screenStocks(pageIndex = 1) {
+    // 保存当前条件（如果正在翻页，使用保存的条件）
+    if (pageIndex === 1) {
+        currentScreenCriteria = {
+            market: document.getElementById('market').value || null,
+            minPrice: parseFloat(document.getElementById('minPrice').value) || null,
+            maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
+            minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
+            maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
+            minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
+            maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
+            minVolume: parseFloat(document.getElementById('minVolume').value) || null,
+            maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
+            minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
+            maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
+            minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
+            maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,
+            pageIndex: pageIndex,
+            pageSize: currentScreenPageSize
+        };
+    } else {
+        // 使用保存的条件，只更新页码
+        currentScreenCriteria.pageIndex = pageIndex;
+    }
+    
+    currentScreenPage = pageIndex;
     
     try {
         document.getElementById('screenResults').innerHTML = 
             '<div class="loading">⏳ 正在从东方财富获取实时股票数据并筛选...<br><small>这可能需要几秒钟时间</small></div>';
         
-        // 记录选股条件用于调试
-        console.log('选股条件:', criteria);
-        
         const response = await fetch(`${API_BASE}/api/screen/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(criteria)
+            body: JSON.stringify(currentScreenCriteria)
         });
         
         if (!response.ok) {
@@ -275,15 +287,15 @@ async function screenStocks() {
             throw new Error(errorData.message || errorData.error || '查询失败');
         }
         
-        const stocks = await response.json();
+        const result = await response.json();
         
-        if (stocks.length === 0) {
+        if (result.items && result.items.length === 0 && result.totalCount === 0) {
             let tip = '<p class="warning">⚠️ 未找到符合条件的股票</p>';
             tip += '<p style="font-size: 0.9em; color: #666; margin-top: 10px;">可能的原因：</p>';
             tip += '<ul style="font-size: 0.9em; color: #666; margin-left: 20px;">';
             tip += '<li>可能从东方财富获取的股票数据中没有符合条件的股票</li>';
-            if (criteria.market) {
-                tip += `<li>市场筛选为：${criteria.market}，可能该市场暂无股票数据</li>`;
+            if (currentScreenCriteria.market) {
+                tip += `<li>市场筛选为：${currentScreenCriteria.market}，可能该市场暂无股票数据</li>`;
             }
             tip += '<li>其他筛选条件过于严格，导致没有股票满足所有条件</li>';
             tip += '<li>提示：可以查看服务器日志获取更详细的筛选信息</li>';
@@ -292,7 +304,19 @@ async function screenStocks() {
             return;
         }
         
-        let html = `<p style="margin-bottom: 15px;"><strong>找到 ${stocks.length} 只股票</strong></p>`;
+        const stocks = result.items || [];
+        const totalCount = result.totalCount || 0;
+        const currentPage = result.pageIndex || 1;
+        const pageSize = result.pageSize || 20;
+        const totalPages = result.totalPages || 1;
+        
+        let html = `<p style="margin-bottom: 15px;">
+            <strong>找到 ${totalCount} 只股票</strong>
+            <span style="margin-left: 15px; color: #666; font-size: 0.9em;">
+                第 ${currentPage} / ${totalPages} 页，每页 ${pageSize} 条
+            </span>
+        </p>`;
+        
         html += '<div style="overflow-x: auto;"><table><thead><tr><th>代码</th><th>名称</th><th>当前价</th><th>涨跌幅</th><th>换手率</th><th>PE</th><th>PB</th><th>成交量</th></tr></thead><tbody>';
         
         stocks.forEach(stock => {
@@ -313,12 +337,93 @@ async function screenStocks() {
         });
         
         html += '</tbody></table></div>';
+        
+        // 添加分页控件
+        html += '<div style="margin-top: 20px; text-align: center;">';
+        html += renderPagination(currentPage, totalPages, totalCount);
+        html += '</div>';
+        
         document.getElementById('screenResults').innerHTML = html;
     } catch (error) {
         console.error('选股查询错误:', error);
         document.getElementById('screenResults').innerHTML = 
             '<p class="error">查询失败：' + error.message + '</p>' +
             '<p style="font-size: 0.9em; color: #666; margin-top: 10px;">请检查网络连接或查看服务器日志</p>';
+    }
+}
+
+// 渲染分页控件
+function renderPagination(currentPage, totalPages, totalCount) {
+    if (totalPages <= 1) {
+        return '';
+    }
+    
+    let html = '<div style="display: inline-flex; align-items: center; gap: 5px;">';
+    
+    // 首页和上一页
+    if (currentPage > 1) {
+        html += `<button onclick="screenStocks(1)" style="padding: 5px 10px; cursor: pointer;">首页</button>`;
+        html += `<button onclick="screenStocks(${currentPage - 1})" style="padding: 5px 10px; cursor: pointer;">上一页</button>`;
+    } else {
+        html += `<button disabled style="padding: 5px 10px; opacity: 0.5;">首页</button>`;
+        html += `<button disabled style="padding: 5px 10px; opacity: 0.5;">上一页</button>`;
+    }
+    
+    // 页码按钮（显示当前页前后各2页）
+    let startPage = Math.max(1, currentPage - 2);
+    let endPage = Math.min(totalPages, currentPage + 2);
+    
+    if (startPage > 1) {
+        html += `<button onclick="screenStocks(1)" style="padding: 5px 10px; cursor: pointer;">1</button>`;
+        if (startPage > 2) {
+            html += `<span style="padding: 5px;">...</span>`;
+        }
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+        if (i === currentPage) {
+            html += `<button style="padding: 5px 10px; background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold;">${i}</button>`;
+        } else {
+            html += `<button onclick="screenStocks(${i})" style="padding: 5px 10px; cursor: pointer;">${i}</button>`;
+        }
+    }
+    
+    if (endPage < totalPages) {
+        if (endPage < totalPages - 1) {
+            html += `<span style="padding: 5px;">...</span>`;
+        }
+        html += `<button onclick="screenStocks(${totalPages})" style="padding: 5px 10px; cursor: pointer;">${totalPages}</button>`;
+    }
+    
+    // 下一页和末页
+    if (currentPage < totalPages) {
+        html += `<button onclick="screenStocks(${currentPage + 1})" style="padding: 5px 10px; cursor: pointer;">下一页</button>`;
+        html += `<button onclick="screenStocks(${totalPages})" style="padding: 5px 10px; cursor: pointer;">末页</button>`;
+    } else {
+        html += `<button disabled style="padding: 5px 10px; opacity: 0.5;">下一页</button>`;
+        html += `<button disabled style="padding: 5px 10px; opacity: 0.5;">末页</button>`;
+    }
+    
+    // 每页数量选择
+    html += `<span style="margin-left: 15px;">每页：</span>`;
+    html += `<select id="screenPageSize" onchange="changeScreenPageSize()" style="padding: 3px;">`;
+    html += `<option value="10" ${currentScreenPageSize === 10 ? 'selected' : ''}>10</option>`;
+    html += `<option value="20" ${currentScreenPageSize === 20 ? 'selected' : ''}>20</option>`;
+    html += `<option value="50" ${currentScreenPageSize === 50 ? 'selected' : ''}>50</option>`;
+    html += `<option value="100" ${currentScreenPageSize === 100 ? 'selected' : ''}>100</option>`;
+    html += `</select>`;
+    
+    html += '</div>';
+    return html;
+}
+
+// 改变每页数量
+function changeScreenPageSize() {
+    const newSize = parseInt(document.getElementById('screenPageSize').value);
+    currentScreenPageSize = newSize;
+    if (currentScreenCriteria) {
+        currentScreenCriteria.pageSize = newSize;
+        screenStocks(1); // 重新从第一页开始
     }
 }
 

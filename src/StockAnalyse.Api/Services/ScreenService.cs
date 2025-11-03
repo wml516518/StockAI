@@ -21,7 +21,27 @@ public class ScreenService : IScreenService
         _stockDataService = stockDataService;
     }
 
-    public async Task<List<Stock>> ScreenStocksAsync(ScreenCriteria criteria)
+    public async Task<PagedResult<Stock>> ScreenStocksAsync(ScreenCriteria criteria)
+    {
+        var allResults = await ScreenStocksAllAsync(criteria);
+        
+        // 应用分页
+        var pageIndex = Math.Max(1, criteria.PageIndex);
+        var pageSize = Math.Max(1, Math.Min(100, criteria.PageSize)); // 限制每页最多100条
+        
+        var skip = (pageIndex - 1) * pageSize;
+        var pagedItems = allResults.Skip(skip).Take(pageSize).ToList();
+        
+        return new PagedResult<Stock>
+        {
+            Items = pagedItems,
+            TotalCount = allResults.Count,
+            PageIndex = pageIndex,
+            PageSize = pageSize
+        };
+    }
+
+    public async Task<List<Stock>> ScreenStocksAllAsync(ScreenCriteria criteria)
     {
         _logger.LogInformation("开始条件选股，条件：{Criteria}", 
             System.Text.Json.JsonSerializer.Serialize(criteria));
