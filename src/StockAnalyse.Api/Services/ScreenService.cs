@@ -73,8 +73,27 @@ public class ScreenService : IScreenService
         
         // 尝试从缓存获取全部筛选结果
         List<Stock> allResults;
-        if (_cache.TryGetValue<List<Stock>>(cacheKey, out var cachedResults))
+        
+        // 如果强制刷新，跳过缓存，直接获取最新数据
+        if (criteria.ForceRefresh)
         {
+            _logger.LogInformation("强制刷新，跳过缓存，重新从接口获取数据，缓存键: {CacheKey}", cacheKey);
+            allResults = await ScreenStocksAllAsync(criteria);
+            
+            // 更新缓存（即使强制刷新，也更新缓存供后续翻页使用）
+            var cacheOptions = new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(CacheExpirationMinutes),
+                SlidingExpiration = TimeSpan.FromMinutes(5), // 滑动过期5分钟
+                Priority = CacheItemPriority.Normal
+            };
+            _cache.Set(cacheKey, allResults, cacheOptions);
+            _logger.LogInformation("选股结果已更新缓存，缓存键: {CacheKey}, 记录数: {Count}, 过期时间: {Expiration}分钟", 
+                cacheKey, allResults.Count, CacheExpirationMinutes);
+        }
+        else if (_cache.TryGetValue<List<Stock>>(cacheKey, out var cachedResults))
+        {
+            // 使用缓存
             _logger.LogInformation("从缓存获取选股结果，缓存键: {CacheKey}, 记录数: {Count}", cacheKey, cachedResults.Count);
             allResults = cachedResults;
         }
@@ -273,17 +292,43 @@ public class ScreenService : IScreenService
         _logger.LogInformation("应用所有数据库筛选条件后得到 {Count} 条结果", beforePostFilter);
         
         // 后置过滤条件（需要计算的指标）
+        var beforeMarketValueFilter = results.Count;
         results = results.Where(stock => {
-            // 市值条件（假设股价*总股本=市值，单位：万元）
+            // 市值条件（单位：万元）
+            // 注意：由于 Stock 模型中没有总股本数据，无法准确计算市值
+            // 这里使用成交额和换手率来估算流通市值：流通市值 ≈ 成交额 / (换手率/100)
             if (criteria.MinMarketValue.HasValue || criteria.MaxMarketValue.HasValue)
             {
-                // 这里需要根据实际情况调整计算方式
-                // 暂时使用一个近似计算：当前价格 * 10000（假设总股本为10000万股）
-                decimal marketValue = stock.CurrentPrice * 10000;
-                if (criteria.MinMarketValue.HasValue && marketValue < criteria.MinMarketValue.Value)
+                decimal estimatedMarketValue = 0;
+                
+                // 方法1：使用成交额和换手率估算（更准确）
+                // 流通市值 = 成交额 / (换手率/100)
+                // 假设成交额单位是元，需要转换为万元
+                if (stock.TurnoverRate > 0 && stock.Turnover > 0)
+                {
+                    // 流通市值（元）= 成交额（元）/ (换手率/100)
+                    decimal marketValueYuan = stock.Turnover / (stock.TurnoverRate / 100m);
+                    // 转换为万元
+                    estimatedMarketValue = marketValueYuan / 10000;
+                }
+                
+                // 方法2：如果方法1无法使用，使用价格估算（作为备选，但不准确）
+                if (estimatedMarketValue == 0 || estimatedMarketValue < 1)
+                {
+                    // 使用一个更合理的估算：假设平均流通股本约为30000万股（30亿股）
+                    // 流通市值（万元）= 股价（元）* 流通股本（万股）
+                    // 对于中小盘成长股，流通股本通常在20-50亿股之间
+                    estimatedMarketValue = stock.CurrentPrice * 30000;
+                }
+                
+                if (criteria.MinMarketValue.HasValue && estimatedMarketValue < criteria.MinMarketValue.Value)
+                {
                     return false;
-                if (criteria.MaxMarketValue.HasValue && marketValue > criteria.MaxMarketValue.Value)
+                }
+                if (criteria.MaxMarketValue.HasValue && estimatedMarketValue > criteria.MaxMarketValue.Value)
+                {
                     return false;
+                }
             }
             
             // 股息率条件（如果有此字段的话）
@@ -292,7 +337,15 @@ public class ScreenService : IScreenService
             return true;
         }).ToList();
         
+        var marketValueFilteredCount = beforeMarketValueFilter - results.Count;
+        
         var finalCount = results.Count;
+        
+        if (marketValueFilteredCount > 0)
+        {
+            _logger.LogInformation("市值条件过滤: {FilteredCount} 条记录", marketValueFilteredCount);
+        }
+        
         _logger.LogInformation("条件选股查询完成 - 最终返回 {FinalCount} 条结果 (筛选前: {BeforePostFilter}, 数据源: {SourceCount})", 
             finalCount, beforePostFilter, allStocks.Count);
         

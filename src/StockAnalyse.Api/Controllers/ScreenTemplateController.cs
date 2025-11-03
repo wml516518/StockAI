@@ -198,4 +198,87 @@ public class ScreenTemplateController : ControllerBase
 
         return Ok(criteria);
     }
+
+    /// <summary>
+    /// 初始化或更新优化后的默认模板（根据市场行情优化）
+    /// </summary>
+    [HttpPost("initialize-optimized")]
+    public async Task<IActionResult> InitializeOptimizedTemplates()
+    {
+        var templates = await _context.ScreenTemplates.ToListAsync();
+        
+        // 定义优化的模板配置
+        var optimizedTemplates = new Dictionary<string, ScreenTemplate>
+        {
+            ["低价成长股"] = new ScreenTemplate
+            {
+                Name = "低价成长股",
+                Description = "价格较低、成长性好的中小盘股票。适合寻找有成长潜力的投资标的。\n\n参数说明：\n- 价格5-30元：处于合理低价区间\n- 换手率2%-8%：有一定活跃度但不过度炒作\n- 成交量>5000手：保证流动性\n- 市值50-500亿：中小盘成长股典型规模\n- 股息率0-3%：成长股通常股息率不高（利润用于再投资）\n- PE 10-40：合理的估值区间\n- PB 1-5：合理的市净率\n- 涨跌幅-5%到+10%：有一定上涨空间",
+                MinPrice = 5,
+                MaxPrice = 30,
+                MinTurnoverRate = 2,
+                MaxTurnoverRate = 8,
+                MinVolume = 5000,
+                MinMarketValue = 500000,
+                MaxMarketValue = 5000000,
+                MinDividendYield = 0,
+                MaxDividendYield = 3,
+                MinPE = 10,
+                MaxPE = 40,
+                MinPB = 1,
+                MaxPB = 5,
+                MinChangePercent = -5,
+                MaxChangePercent = 10,
+                IsDefault = true,
+                CreateTime = DateTime.Now,
+                UpdateTime = DateTime.Now
+            }
+        };
+
+        int updatedCount = 0;
+        int createdCount = 0;
+
+        foreach (var optimizedTemplate in optimizedTemplates)
+        {
+            var existing = templates.FirstOrDefault(t => t.Name == optimizedTemplate.Key);
+            if (existing != null)
+            {
+                // 更新现有模板
+                existing.Description = optimizedTemplate.Value.Description;
+                existing.MinPrice = optimizedTemplate.Value.MinPrice;
+                existing.MaxPrice = optimizedTemplate.Value.MaxPrice;
+                existing.MinTurnoverRate = optimizedTemplate.Value.MinTurnoverRate;
+                existing.MaxTurnoverRate = optimizedTemplate.Value.MaxTurnoverRate;
+                existing.MinVolume = optimizedTemplate.Value.MinVolume;
+                existing.MinMarketValue = optimizedTemplate.Value.MinMarketValue;
+                existing.MaxMarketValue = optimizedTemplate.Value.MaxMarketValue;
+                existing.MinDividendYield = optimizedTemplate.Value.MinDividendYield;
+                existing.MaxDividendYield = optimizedTemplate.Value.MaxDividendYield;
+                existing.MinPE = optimizedTemplate.Value.MinPE;
+                existing.MaxPE = optimizedTemplate.Value.MaxPE;
+                existing.MinPB = optimizedTemplate.Value.MinPB;
+                existing.MaxPB = optimizedTemplate.Value.MaxPB;
+                existing.MinChangePercent = optimizedTemplate.Value.MinChangePercent;
+                existing.MaxChangePercent = optimizedTemplate.Value.MaxChangePercent;
+                existing.UpdateTime = DateTime.Now;
+                updatedCount++;
+                _logger.LogInformation("更新模板: {Name}", existing.Name);
+            }
+            else
+            {
+                // 创建新模板
+                _context.ScreenTemplates.Add(optimizedTemplate.Value);
+                createdCount++;
+                _logger.LogInformation("创建模板: {Name}", optimizedTemplate.Value.Name);
+            }
+        }
+
+        await _context.SaveChangesAsync();
+        
+        return Ok(new { 
+            message = "模板初始化完成",
+            updated = updatedCount,
+            created = createdCount
+        });
+    }
 }

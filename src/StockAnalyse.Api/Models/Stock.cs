@@ -280,6 +280,9 @@ public class ScreenCriteria
     public int PageIndex { get; set; } = 1; // 页码，从1开始
     public int PageSize { get; set; } = 20; // 每页数量
     
+    // 是否强制刷新（跳过缓存，重新从接口获取数据）
+    public bool ForceRefresh { get; set; } = false;
+    
     // 价格条件
     public decimal? MinPrice { get; set; }
     public decimal? MaxPrice { get; set; }

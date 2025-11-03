@@ -244,31 +244,113 @@ let currentScreenPage = 1;
 let currentScreenPageSize = 20;
 let currentScreenCriteria = null;
 
+// 条件选股 - 当前页原始结果缓存（用于本页内查询过滤）
+let currentScreenStocksRaw = [];
+
+// 渲染选股结果表格行
+function renderScreenRows(stocks) {
+	let rows = '';
+	stocks.forEach(stock => {
+		rows += `
+			<tr>
+				<td>${stock.code}</td>
+				<td>${stock.name}</td>
+				<td>${stock.currentPrice.toFixed(2)}</td>
+				<td class="${stock.changePercent >= 0 ? 'price-up' : 'price-down'}">
+					${stock.changePercent.toFixed(2)}%
+				</td>
+				<td>${stock.turnoverRate.toFixed(2)}%</td>
+				<td>${stock.pe?.toFixed(2) || '-'}</td>
+				<td>${stock.pb?.toFixed(2) || '-'}</td>
+				<td>${(stock.volume / 10000).toFixed(2)}万手</td>
+			</tr>
+		`;
+	});
+	return rows;
+}
+
+// 应用本页查询（根据代码/名称）
+function applyScreenSearch() {
+	const codeInput = document.getElementById('screenSearchCode');
+	const nameInput = document.getElementById('screenSearchName');
+	const codeKeyword = (codeInput?.value || '').trim().toLowerCase();
+	const nameKeyword = (nameInput?.value || '').trim().toLowerCase();
+
+	let filtered = currentScreenStocksRaw || [];
+	if (codeKeyword) {
+		filtered = filtered.filter(s => (s.code || '').toLowerCase().includes(codeKeyword));
+	}
+	if (nameKeyword) {
+		filtered = filtered.filter(s => (s.name || '').toLowerCase().includes(nameKeyword));
+	}
+
+	const tbody = document.querySelector('#screenResults tbody');
+	if (tbody) {
+		tbody.innerHTML = renderScreenRows(filtered);
+	}
+}
+
 // 条件选股
 async function screenStocks(pageIndex = 1) {
-    // 保存当前条件（如果正在翻页，使用保存的条件）
-    if (pageIndex === 1) {
-        currentScreenCriteria = {
-            market: document.getElementById('market').value || null,
-            minPrice: parseFloat(document.getElementById('minPrice').value) || null,
-            maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
-            minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
-            maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
-            minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
-            maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
-            minVolume: parseFloat(document.getElementById('minVolume').value) || null,
-            maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
-            minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
-            maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
-            minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
-            maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,
-            pageIndex: pageIndex,
-            pageSize: currentScreenPageSize
-        };
+    // 构建新的条件
+    const newCriteria = {
+        market: document.getElementById('market').value || null,
+        minPrice: parseFloat(document.getElementById('minPrice').value) || null,
+        maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
+        minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
+        maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
+        minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
+        maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
+        minVolume: parseFloat(document.getElementById('minVolume').value) || null,
+        maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
+        minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
+        maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
+        minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
+        maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,
+        pageIndex: pageIndex,
+        pageSize: currentScreenPageSize
+    };
+    
+    // 检查条件是否改变
+    let criteriaChanged = false;
+    if (!currentScreenCriteria) {
+        criteriaChanged = true; // 首次查询
     } else {
-        // 使用保存的条件，只更新页码
-        currentScreenCriteria.pageIndex = pageIndex;
+        // 比较关键条件是否改变（使用安全的比较，处理 null、NaN 等情况）
+        const compareValue = (a, b) => {
+            // 如果两个值都是 null 或都是 NaN，认为相等
+            const normalize = (val) => {
+                if (val === null || val === undefined) return null;
+                if (typeof val === 'number' && isNaN(val)) return null;
+                return val;
+            };
+            const aVal = normalize(a);
+            const bVal = normalize(b);
+            return aVal === bVal;
+        };
+        
+        criteriaChanged = 
+            newCriteria.market !== currentScreenCriteria.market ||
+            !compareValue(newCriteria.minPrice, currentScreenCriteria.minPrice) ||
+            !compareValue(newCriteria.maxPrice, currentScreenCriteria.maxPrice) ||
+            !compareValue(newCriteria.minChangePercent, currentScreenCriteria.minChangePercent) ||
+            !compareValue(newCriteria.maxChangePercent, currentScreenCriteria.maxChangePercent) ||
+            !compareValue(newCriteria.minTurnoverRate, currentScreenCriteria.minTurnoverRate) ||
+            !compareValue(newCriteria.maxTurnoverRate, currentScreenCriteria.maxTurnoverRate) ||
+            !compareValue(newCriteria.minVolume, currentScreenCriteria.minVolume) ||
+            !compareValue(newCriteria.maxVolume, currentScreenCriteria.maxVolume) ||
+            !compareValue(newCriteria.minMarketValue, currentScreenCriteria.minMarketValue) ||
+            !compareValue(newCriteria.maxMarketValue, currentScreenCriteria.maxMarketValue) ||
+            !compareValue(newCriteria.minDividendYield, currentScreenCriteria.minDividendYield) ||
+            !compareValue(newCriteria.maxDividendYield, currentScreenCriteria.maxDividendYield);
     }
+    
+    // 如果是第一页或者条件改变，强制刷新（重新从接口获取数据）
+    // 如果是翻页且条件未改变，使用缓存
+    currentScreenCriteria = {
+        ...newCriteria,
+        forceRefresh: (pageIndex === 1 || criteriaChanged) // 第一页或条件改变时强制刷新
+    };
     
     currentScreenPage = pageIndex;
     
@@ -305,6 +387,8 @@ async function screenStocks(pageIndex = 1) {
         }
         
         const stocks = result.items || [];
+        // 缓存当前页原始结果，供本页查询使用
+        currentScreenStocksRaw = stocks.slice();
         const totalCount = result.totalCount || 0;
         const currentPage = result.pageIndex || 1;
         const pageSize = result.pageSize || 20;
@@ -317,25 +401,15 @@ async function screenStocks(pageIndex = 1) {
             </span>
         </p>`;
         
+        // 查询控件 + 表格
+        html += '<div style="display: flex; gap: 8px; align-items: center; margin: 8px 0 4px 0; flex-wrap: wrap;">';
+        html += '<input type="text" id="screenSearchCode" placeholder="按代码查询" onkeydown="if(event.key===\'Enter\'){applyScreenSearch()}" style="padding: 6px 8px; width: 140px;">';
+        html += '<input type="text" id="screenSearchName" placeholder="按名称查询" onkeydown="if(event.key===\'Enter\'){applyScreenSearch()}" style="padding: 6px 8px; width: 160px;">';
+        html += '<button class="btn btn-info" onclick="applyScreenSearch()">查询</button>';
+        html += '</div>';
+
         html += '<div style="overflow-x: auto;"><table><thead><tr><th>代码</th><th>名称</th><th>当前价</th><th>涨跌幅</th><th>换手率</th><th>PE</th><th>PB</th><th>成交量</th></tr></thead><tbody>';
-        
-        stocks.forEach(stock => {
-            html += `
-                <tr>
-                    <td>${stock.code}</td>
-                    <td>${stock.name}</td>
-                    <td>${stock.currentPrice.toFixed(2)}</td>
-                    <td class="${stock.changePercent >= 0 ? 'price-up' : 'price-down'}">
-                        ${stock.changePercent.toFixed(2)}%
-                    </td>
-                    <td>${stock.turnoverRate.toFixed(2)}%</td>
-                    <td>${stock.pe?.toFixed(2) || '-'}</td>
-                    <td>${stock.pb?.toFixed(2) || '-'}</td>
-                    <td>${(stock.volume / 10000).toFixed(2)}万手</td>
-                </tr>
-            `;
-        });
-        
+        html += renderScreenRows(stocks);
         html += '</tbody></table></div>';
         
         // 添加分页控件

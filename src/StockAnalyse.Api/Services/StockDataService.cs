@@ -478,26 +478,44 @@ public class StockDataService : IStockDataService
         
         try
         {
-            _logger.LogInformation("开始从腾讯财经获取股票列表，市场: {Market}, 最大数量: {MaxCount}", 
-                market ?? "全部", maxCount);
+            // 如果是全部市场，需要允许获取更多股票（每个市场各 maxCount 个）
+            int actualMaxCount = market == null ? maxCount * 2 : maxCount;
             
-            var stockCodes = GenerateStockCodeList(market, maxCount * 2);
+            _logger.LogInformation("开始从腾讯财经获取股票列表，市场: {Market}, 最大数量: {ActualMaxCount} (原始: {MaxCount})", 
+                market ?? "全部", actualMaxCount, maxCount);
+            
+            var stockCodes = GenerateStockCodeList(market, actualMaxCount * 2);
             _logger.LogInformation("生成 {Count} 个股票代码", stockCodes.Count);
             
             int batchSize = 100;
-            for (int i = 0; i < stockCodes.Count && allStocks.Count < maxCount; i += batchSize)
+            for (int i = 0; i < stockCodes.Count && allStocks.Count < actualMaxCount; i += batchSize)
             {
                 var batch = stockCodes.Skip(i).Take(batchSize).ToList();
                 var batchStocks = await FetchBatchFromTencentAsync(batch);
                 
                 foreach (var stock in batchStocks)
                 {
+                    // 放宽过滤条件：允许临时名称，价格可以稍微宽松（某些股票可能价格暂时为0但数据有效）
                     if (stock != null && !string.IsNullOrWhiteSpace(stock.Code) && 
-                        !string.IsNullOrWhiteSpace(stock.Name) && stock.CurrentPrice > 0)
+                        !string.IsNullOrWhiteSpace(stock.Name))
                     {
-                        allStocks.Add(stock);
-                        if (allStocks.Count >= maxCount)
-                            break;
+                        // 如果价格无效，但有其他有效数据，仍然保留（可能在非交易时间）
+                        if (stock.CurrentPrice <= 0 && stock.ClosePrice > 0)
+                        {
+                            stock.CurrentPrice = stock.ClosePrice; // 使用昨收价
+                        }
+                        
+                        // 只有当完全没有价格信息时才跳过
+                        if (stock.CurrentPrice > 0 || stock.ClosePrice > 0)
+                        {
+                            allStocks.Add(stock);
+                            if (allStocks.Count >= actualMaxCount)
+                                break;
+                        }
+                        else
+                        {
+                            _logger.LogDebug("跳过无价格信息的股票: {Code} {Name}", stock.Code, stock.Name);
+                        }
                     }
                 }
                 
@@ -505,11 +523,19 @@ public class StockDataService : IStockDataService
                 
                 if ((i + batchSize) % 500 == 0 || allStocks.Count % 500 == 0)
                 {
-                    _logger.LogInformation("已获取 {Count}/{Total} 只有效股票", allStocks.Count, Math.Min(stockCodes.Count, maxCount));
+                    _logger.LogInformation("已获取 {Count}/{Total} 只有效股票", allStocks.Count, actualMaxCount);
                 }
             }
             
-            _logger.LogInformation("从腾讯财经获取到 {Count} 只有效股票", allStocks.Count);
+            _logger.LogInformation("从腾讯财经获取到 {Count} 只有效股票 (目标: {Target})", allStocks.Count, actualMaxCount);
+            
+            // 如果是全部市场，统计各市场的数量
+            if (market == null)
+            {
+                var shCount = allStocks.Count(s => s.Market == "SH");
+                var szCount = allStocks.Count(s => s.Market == "SZ");
+                _logger.LogInformation("市场分布 - 上海: {SHCount}, 深圳: {SZCount}, 总计: {Total}", shCount, szCount, allStocks.Count);
+            }
             return allStocks;
         }
         catch (Exception ex)
@@ -630,11 +656,17 @@ public class StockDataService : IStockDataService
                     }
                     
                     var parts = dataContent.Split('~');
-                    if (parts.Length < 33) continue;
+                    // 降低最小字段要求，因为有些股票可能字段较少
+                    if (parts.Length < 10) 
+                    {
+                        _logger.LogDebug("数据字段太少，跳过。字段数: {Count}, 内容: {Content}", parts.Length, dataContent.Substring(0, Math.Min(100, dataContent.Length)));
+                        continue;
+                    }
                     
                     // 根据格式调整索引
                     // 格式1：parts[0]="1", parts[1]=名称, parts[2]=代码, parts[3]=当前价, parts[4]=昨收, parts[5]=今开
                     // 格式2：parts[0]=代码, parts[1]=当前价, parts[2]=今开, parts[3]=昨收（注意：格式2没有名称字段）
+                    // 格式3：可能还有其他变体，比如 parts[0] 不是"1"但包含名称
                     string code = "";
                     string name = "";
                     int priceIndexOffset = 0; // 价格字段的索引偏移量
@@ -646,21 +678,68 @@ public class StockDataService : IStockDataService
                         code = parts[2];
                         priceIndexOffset = 0; // 价格从索引3开始
                     }
-                    else if (parts.Length > 0 && parts[0].Length == 6 && parts[0].All(char.IsDigit))
+                    else if (parts.Length > 2 && parts[0].Length == 6 && parts[0].All(char.IsDigit))
                     {
                         // 格式2：~603901~12.81~12.89~12.90~...
                         // parts[0]=代码, parts[1]=当前价, parts[2]=今开, parts[3]=昨收
                         code = parts[0];
                         priceIndexOffset = -2; // 价格索引需要调整，因为格式不同
-                        
-                        // 对于格式2，我们需要通过单只股票API获取名称（因为没有名称字段）
-                        // 这里先标记为"未知"，后续可以通过API补充
                         name = "未知";
+                    }
+                    else if (parts.Length > 2 && parts[2].Length == 6 && parts[2].All(char.IsDigit))
+                    {
+                        // 格式3：可能是 parts[0]="0"或其他，parts[1]=名称, parts[2]=代码
+                        // 尝试这种格式（常见于某些市场）
+                        if (parts[1].Length > 0 && !parts[1].All(char.IsDigit) && parts[1].Length < 20)
+                        {
+                            name = parts[1];
+                            code = parts[2];
+                            priceIndexOffset = 0;
+                        }
+                        else
+                        {
+                            // 如果 parts[1] 不是名称，尝试作为格式2处理
+                            code = parts[0].Length == 6 && parts[0].All(char.IsDigit) ? parts[0] : 
+                                   (parts[2].Length == 6 && parts[2].All(char.IsDigit) ? parts[2] : "");
+                            if (string.IsNullOrEmpty(code))
+                            {
+                                _logger.LogDebug("无法识别股票代码格式，跳过。内容: {Content}", dataContent.Substring(0, Math.Min(100, dataContent.Length)));
+                                continue;
+                            }
+                            priceIndexOffset = -2;
+                            name = "未知";
+                        }
                     }
                     else
                     {
-                        // 无法识别格式，跳过
-                        continue;
+                        // 尝试查找6位数字作为股票代码
+                        string? foundCode = null;
+                        for (int i = 0; i < Math.Min(parts.Length, 10); i++)
+                        {
+                            if (parts[i].Length == 6 && parts[i].All(char.IsDigit))
+                            {
+                                foundCode = parts[i];
+                                // 如果前一个字段可能是名称（非纯数字且长度合理）
+                                if (i > 0 && !parts[i-1].All(char.IsDigit) && parts[i-1].Length > 0 && parts[i-1].Length < 20)
+                                {
+                                    name = parts[i-1];
+                                    priceIndexOffset = 0;
+                                }
+                                else
+                                {
+                                    name = "未知";
+                                    priceIndexOffset = -2;
+                                }
+                                break;
+                            }
+                        }
+                        
+                        if (foundCode == null)
+                        {
+                            _logger.LogDebug("无法找到有效的股票代码，跳过。内容: {Content}", dataContent.Substring(0, Math.Min(100, dataContent.Length)));
+                            continue;
+                        }
+                        code = foundCode;
                     }
                     
                     if (string.IsNullOrWhiteSpace(code) || code == "N/A")
@@ -759,7 +838,7 @@ public class StockDataService : IStockDataService
                         pb = SafeConvertToDecimal(parts[46]);
                     }
                     
-                    // 如果名称是"未知"（格式2），暂时跳过，或者尝试从数据库获取
+                    // 如果名称是"未知"（格式2），尝试从数据库获取，或者使用临时名称
                     if (name == "未知")
                     {
                         // 尝试从数据库获取名称（如果有缓存）
@@ -770,17 +849,28 @@ public class StockDataService : IStockDataService
                             {
                                 name = cachedStock.Name;
                             }
+                            else
+                            {
+                                // 如果数据库中没有，使用临时名称（股票代码），至少让数据能保存下来
+                                // 后续可以通过其他接口补充名称
+                                name = $"股票{code}";
+                                _logger.LogDebug("腾讯财经返回格式2，名称未知，使用临时名称: {Code}", code);
+                            }
                         }
-                        catch
+                        catch (Exception ex)
                         {
-                            // 如果数据库中没有，暂时跳过这条记录
-                            continue;
+                            // 如果数据库查询失败，使用临时名称
+                            name = $"股票{code}";
+                            _logger.LogDebug(ex, "从数据库获取股票名称失败，使用临时名称: {Code}", code);
                         }
                     }
                     
-                    // 验证名称有效性
-                    if (string.IsNullOrWhiteSpace(name) || name == "未知" || name == "N/A" || name == "-")
-                        continue;
+                    // 验证名称有效性（允许临时名称通过）
+                    if (string.IsNullOrWhiteSpace(name) || name == "N/A" || name == "-")
+                    {
+                        // 如果名称仍然无效，使用临时名称
+                        name = $"股票{code}";
+                    }
                     
                     stocks.Add(new Stock
                     {
@@ -824,19 +914,56 @@ public class StockDataService : IStockDataService
     {
         var codes = new List<string>();
         
-        if (market == null || market == "SH")
+        // 如果是全部市场，平均分配数量，确保两个市场都有股票
+        // maxCount 是最终要获取的有效股票数量，生成代码时要生成更多（因为很多代码可能无效）
+        int targetCodes = maxCount * 2; // 生成更多的代码以确保有足够的有效股票
+        
+        if (market == null)
         {
-            for (int i = 600000; i <= 603999 && codes.Count < maxCount; i++)
+            // 全部市场：交替生成两个市场的代码，确保两个市场都能被处理
+            int shTarget = targetCodes / 2; // 每个市场各分配一半
+            int szTarget = targetCodes - shTarget;
+            
+            // 生成上海市场代码列表（先收集）
+            var shCodes = new List<string>();
+            for (int i = 600000; i <= 603999 && shCodes.Count < shTarget; i++)
+                shCodes.Add(i.ToString());
+            for (int i = 688000; i <= 689999 && shCodes.Count < shTarget; i++)
+                shCodes.Add(i.ToString());
+            
+            // 生成深圳市场代码列表（先收集）
+            var szCodes = new List<string>();
+            for (int i = 1; i <= 2999 && szCodes.Count < szTarget; i++)
+                szCodes.Add(i.ToString("D6"));
+            for (int i = 300000; i <= 300999 && szCodes.Count < szTarget; i++)
+                szCodes.Add(i.ToString());
+            
+            // 交替合并两个市场的代码，确保两个市场都能被处理
+            int maxLen = Math.Max(shCodes.Count, szCodes.Count);
+            for (int i = 0; i < maxLen && codes.Count < targetCodes; i++)
+            {
+                if (i < shCodes.Count)
+                    codes.Add(shCodes[i]);
+                if (i < szCodes.Count && codes.Count < targetCodes)
+                    codes.Add(szCodes[i]);
+            }
+        }
+        else if (market == "SH")
+        {
+            // 上交所主板：600000-603999
+            for (int i = 600000; i <= 603999 && codes.Count < targetCodes; i++)
                 codes.Add(i.ToString());
-            for (int i = 688000; i <= 689999 && codes.Count < maxCount; i++)
+            // 科创板：688000-689999
+            for (int i = 688000; i <= 689999 && codes.Count < targetCodes; i++)
                 codes.Add(i.ToString());
         }
-        
-        if (market == null || market == "SZ")
+        else if (market == "SZ")
         {
-            for (int i = 1; i <= 2999 && codes.Count < maxCount; i++)
+            // 深交所主板：000001-002999
+            for (int i = 1; i <= 2999 && codes.Count < targetCodes; i++)
                 codes.Add(i.ToString("D6"));
-            for (int i = 300000; i <= 300999 && codes.Count < maxCount; i++)
+            // 创业板：300000-300999
+            for (int i = 300000; i <= 300999 && codes.Count < targetCodes; i++)
                 codes.Add(i.ToString());
         }
         
