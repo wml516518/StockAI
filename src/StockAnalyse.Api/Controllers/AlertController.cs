@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
+using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace StockAnalyse.Api.Controllers;
 
@@ -23,8 +25,21 @@ public class AlertController : ControllerBase
     [HttpPost("create")]
     public async Task<ActionResult<PriceAlert>> CreateAlert([FromBody] CreateAlertRequest request)
     {
-        var alert = await _alertService.CreateAlertAsync(request.StockCode, request.TargetPrice, request.Type);
-        return Ok(alert);
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        try
+        {
+            var alert = await _alertService.CreateAlertAsync(request.StockCode, request.TargetPrice, request.Type);
+            return Ok(alert);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "创建价格提醒失败");
+            return StatusCode(500, new { error = "创建价格提醒失败", message = ex.Message });
+        }
     }
 
     /// <summary>
@@ -64,8 +79,15 @@ public class AlertController : ControllerBase
 
 public class CreateAlertRequest
 {
+    [Required(ErrorMessage = "股票代码不能为空")]
     public string StockCode { get; set; } = string.Empty;
+    
+    [Required(ErrorMessage = "目标价格不能为空")]
+    [Range(0.01, double.MaxValue, ErrorMessage = "目标价格必须大于0")]
     public decimal TargetPrice { get; set; }
+    
+    [Required(ErrorMessage = "提醒类型不能为空")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public AlertType Type { get; set; }
 }
 
