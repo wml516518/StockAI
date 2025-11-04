@@ -36,13 +36,35 @@ public class AIController : ControllerBase
         try
         {
             // 获取股票基本面和实时行情数据
-            Console.WriteLine($"[AI分析] 步骤1: 正在从东方财富获取股票 {stockCode} 的基本面信息...");
-            _logger.LogInformation("🤖 [AIController] 步骤1: 正在获取股票基本面信息...");
+            // 注意：GetFundamentalInfoAsync会自动优先使用Python服务（AKShare），如果不可用则回退到其他数据源
+            Console.WriteLine($"[AI分析] 步骤1: 正在获取股票 {stockCode} 的基本面信息（优先使用Python服务/AKShare数据源）...");
+            _logger.LogInformation("🤖 [AIController] 步骤1: 正在获取股票基本面信息（优先使用Python服务/AKShare数据源）...");
             
             StockFundamentalInfo? fundamentalInfo = null;
+            string? dataSource = null;
             try
             {
                 fundamentalInfo = await _stockDataService.GetFundamentalInfoAsync(stockCode);
+                
+                // 根据获取到的数据判断数据源
+                // 如果Python服务成功，通常会有更完整的财务数据
+                if (fundamentalInfo != null)
+                {
+                    // 检查是否有完整的财务数据（Python服务通常提供更多字段）
+                    if (fundamentalInfo.TotalRevenue.HasValue && fundamentalInfo.NetProfit.HasValue && 
+                        fundamentalInfo.ROE.HasValue && fundamentalInfo.EPS.HasValue)
+                    {
+                        dataSource = "Python服务 (AKShare)";
+                    }
+                    else if (fundamentalInfo.PE.HasValue || fundamentalInfo.PB.HasValue)
+                    {
+                        dataSource = "实时行情接口";
+                    }
+                    else
+                    {
+                        dataSource = "备用数据源";
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -54,21 +76,28 @@ public class AIController : ControllerBase
             
             if (fundamentalInfo != null)
             {
-                Console.WriteLine($"[AI分析] ✅ 成功获取基本面信息！");
+                Console.WriteLine($"[AI分析] ✅ 成功获取基本面信息！数据来源: {dataSource ?? "未知"}");
                 Console.WriteLine($"[AI分析]   股票名称: {fundamentalInfo.StockName}");
                 Console.WriteLine($"[AI分析]   报告期: {fundamentalInfo.ReportDate ?? "未知"}");
-                Console.WriteLine($"[AI分析]   报告类型: {fundamentalInfo.ReportType ?? "未知"}");
+                if (!string.IsNullOrEmpty(fundamentalInfo.ReportType))
+                {
+                    Console.WriteLine($"[AI分析]   报告类型: {fundamentalInfo.ReportType}");
+                }
                 Console.WriteLine($"[AI分析]   营业收入: {(fundamentalInfo.TotalRevenue.HasValue ? fundamentalInfo.TotalRevenue.Value.ToString("F2") + "万元" : "N/A")}");
                 Console.WriteLine($"[AI分析]   净利润: {(fundamentalInfo.NetProfit.HasValue ? fundamentalInfo.NetProfit.Value.ToString("F2") + "万元" : "N/A")}");
                 Console.WriteLine($"[AI分析]   ROE: {(fundamentalInfo.ROE.HasValue ? fundamentalInfo.ROE.Value.ToString("F2") + "%" : "N/A")}");
                 Console.WriteLine($"[AI分析]   营收增长率: {(fundamentalInfo.RevenueGrowthRate.HasValue ? fundamentalInfo.RevenueGrowthRate.Value.ToString("F2") + "%" : "N/A")}");
+                Console.WriteLine($"[AI分析]   EPS: {(fundamentalInfo.EPS.HasValue ? fundamentalInfo.EPS.Value.ToString("F3") + "元" : "N/A")}");
+                Console.WriteLine($"[AI分析]   PE: {(fundamentalInfo.PE?.ToString("F2") ?? "N/A")}");
+                Console.WriteLine($"[AI分析]   PB: {(fundamentalInfo.PB?.ToString("F2") ?? "N/A")}");
                 
-                _logger.LogInformation("🤖 [AIController] ✅ 成功获取基本面信息 - 股票: {StockName}, 报告期: {ReportDate}, 报告类型: {ReportType}", 
-                    fundamentalInfo.StockName, fundamentalInfo.ReportDate, fundamentalInfo.ReportType);
+                _logger.LogInformation("🤖 [AIController] ✅ 成功获取基本面信息 - 数据来源: {DataSource}, 股票: {StockName}, 报告期: {ReportDate}", 
+                    dataSource ?? "未知", fundamentalInfo.StockName, fundamentalInfo.ReportDate);
             }
             else
             {
                 Console.WriteLine($"[AI分析] ⚠️ 未能获取基本面信息，将使用实时行情数据");
+                Console.WriteLine($"[AI分析] 💡 提示: 如果Python服务未启动，请运行 start-all-services.ps1 启动所有服务");
                 _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取基本面信息，将使用实时行情数据");
             }
             
@@ -103,9 +132,10 @@ public class AIController : ControllerBase
                 Console.WriteLine($"[AI分析] 步骤3: 构建包含基本面信息的分析上下文...");
                 _logger.LogInformation("🤖 [AIController] 步骤3: 构建包含基本面信息的分析上下文");
                 
+                var dataSourceNote = !string.IsNullOrEmpty(dataSource) ? $"（数据来源：{dataSource}）" : "";
                 var fundamentalText = $@"
 
-【最新财务数据】（报告期：{fundamentalInfo.ReportDate ?? "未知"}，报告类型：{fundamentalInfo.ReportType ?? "未知"}）
+【最新财务数据】{dataSourceNote}（报告期：{fundamentalInfo.ReportDate ?? "未知"}，报告类型：{fundamentalInfo.ReportType ?? "未知"}）
 
 **主要财务指标：**
 - 营业收入：{(fundamentalInfo.TotalRevenue.HasValue ? fundamentalInfo.TotalRevenue.Value.ToString("F2") + "万元" : "N/A")}

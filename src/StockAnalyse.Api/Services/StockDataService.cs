@@ -921,34 +921,50 @@ public class StockDataService : IStockDataService
         _logger.LogInformation("============================================");
         
         // 尝试多个接口，按优先级顺序
-        // 方案1: 使用东方财富F10详情接口（直接获取财务快照）
-        var result = await TryGetFundamentalInfoFromF10DetailAsync(stockCode);
+        // 方案1: 使用Python服务（AKShare数据源）- 最推荐
+        var result = await TryGetFundamentalInfoFromPythonServiceAsync(stockCode);
         if (result != null)
         {
+            _logger.LogInformation("📊 [StockDataService] ✅ 从Python服务成功获取基本面信息");
+            return result;
+        }
+        
+            // 方案2: 使用东方财富F10详情接口（直接获取财务快照）
+        Console.WriteLine($"[基本面数据] 方案2: 尝试从东方财富F10详情接口获取数据...");
+        result = await TryGetFundamentalInfoFromF10DetailAsync(stockCode);
+        if (result != null)
+        {
+            Console.WriteLine($"[基本面数据] ✅ 方案2成功：从F10详情接口获取到数据");
             _logger.LogInformation("📊 [StockDataService] ✅ 从F10详情接口成功获取基本面信息");
             return result;
         }
         
-        // 方案2: 使用东方财富实时行情接口的扩展字段（从已知可用的接口获取）
+        // 方案3: 使用东方财富实时行情接口的扩展字段（从已知可用的接口获取）
+        Console.WriteLine($"[基本面数据] 方案3: 尝试从实时行情接口获取数据...");
         result = await TryGetFundamentalInfoFromRealTimeAsync(stockCode);
         if (result != null)
         {
+            Console.WriteLine($"[基本面数据] ✅ 方案3成功：从实时行情接口获取到数据");
             _logger.LogInformation("📊 [StockDataService] ✅ 从实时行情接口成功获取基本面信息");
             return result;
         }
         
-        // 方案3: 尝试使用F10资产负债表接口
+        // 方案4: 尝试使用F10资产负债表接口
+        Console.WriteLine($"[基本面数据] 方案4: 尝试从F10资产负债表接口获取数据...");
         result = await TryGetFundamentalInfoFromF10Async(stockCode);
         if (result != null)
         {
+            Console.WriteLine($"[基本面数据] ✅ 方案4成功：从F10资产负债表接口获取到数据");
             _logger.LogInformation("📊 [StockDataService] ✅ 从F10资产负债表接口成功获取基本面信息");
             return result;
         }
         
-        // 方案4: 使用财务指标接口（简化字段）
+        // 方案5: 使用财务指标接口（简化字段）
+        Console.WriteLine($"[基本面数据] 方案5: 尝试从财务指标接口获取数据...");
         result = await TryGetFundamentalInfoFromFinanceAsync(stockCode);
         if (result != null)
         {
+            Console.WriteLine($"[基本面数据] ✅ 方案5成功：从财务指标接口获取到数据");
             _logger.LogInformation("📊 [StockDataService] ✅ 从财务指标接口成功获取基本面信息");
             return result;
         }
@@ -973,7 +989,142 @@ public class StockDataService : IStockDataService
     }
     
     /// <summary>
-    /// 方案1: 从实时行情接口获取基本面信息（已知可用的接口，推荐）
+    /// 方案1: 从Python服务获取基本面信息（AKShare数据源，最推荐）
+    /// </summary>
+    private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromPythonServiceAsync(string stockCode)
+    {
+        try
+        {
+            // Python服务地址（默认localhost:5001，可通过配置修改）
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
+                ?? "http://localhost:5001";
+            
+            var url = $"{pythonServiceUrl}/api/stock/fundamental/{stockCode}";
+            
+            Console.WriteLine($"[基本面数据-方案1] 请求Python服务: {url}");
+            _logger.LogInformation("📊 [StockDataService] 尝试Python服务: {Url}", url);
+            
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.Timeout = TimeSpan.FromSeconds(30); // Python服务可能需要更长时间
+            
+            // 使用GetAsync以便检查状态码
+            var response = await _httpClient.GetAsync(url);
+            
+            // 如果返回404，说明数据未找到，不是服务不可用
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务(AKShare)无法获取股票 {stockCode} 的财务数据");
+                Console.WriteLine($"[基本面数据-方案1] 💡 这是AKShare数据源的已知限制（某些创业板/科创板股票可能没有完整数据）");
+                Console.WriteLine($"[基本面数据-方案1] 🔄 系统将自动尝试其他数据源（东方财富等）...");
+                _logger.LogInformation("📊 [StockDataService] Python服务(AKShare)无法获取股票 {StockCode} 的数据，将尝试其他数据源", stockCode);
+                return null; // 返回null，让系统尝试其他数据源
+            }
+            
+            // 检查其他错误状态码
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务返回错误状态码: {(int)response.StatusCode} - {response.StatusCode}");
+                Console.WriteLine($"[基本面数据-方案1] 错误详情: {errorContent}");
+                _logger.LogWarning("📊 [StockDataService] Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
+                return null;
+            }
+            
+            var responseContent = await response.Content.ReadAsStringAsync();
+            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(responseContent);
+            
+            if (jsonData["success"]?.ToString() == "True" && jsonData["data"] != null)
+            {
+                var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
+                if (data != null)
+                {
+                    // 同时获取股票基本信息（用于PE/PB）
+                    var stock = await GetRealTimeQuoteAsync(stockCode);
+                    
+                    var info = new StockFundamentalInfo
+                    {
+                        StockCode = stockCode,
+                        StockName = data["stockName"]?.ToString() ?? stock?.Name ?? "未知",
+                        ReportDate = data["reportDate"]?.ToString(),
+                        ReportType = null,
+                        
+                        // 主要财务指标
+                        TotalRevenue = data["totalRevenue"] != null ? SafeConvertToDecimal(data["totalRevenue"]) : null,
+                        NetProfit = data["netProfit"] != null ? SafeConvertToDecimal(data["netProfit"]) : null,
+                        
+                        // 盈利能力
+                        ROE = data["roe"] != null ? SafeConvertToDecimal(data["roe"]) : null,
+                        GrossProfitMargin = data["grossProfitMargin"] != null ? SafeConvertToDecimal(data["grossProfitMargin"]) : null,
+                        NetProfitMargin = data["netProfitMargin"] != null ? SafeConvertToDecimal(data["netProfitMargin"]) : null,
+                        
+                        // 成长性
+                        RevenueGrowthRate = data["revenueGrowthRate"] != null ? SafeConvertToDecimal(data["revenueGrowthRate"]) : null,
+                        ProfitGrowthRate = data["profitGrowthRate"] != null ? SafeConvertToDecimal(data["profitGrowthRate"]) : null,
+                        
+                        // 偿债能力
+                        AssetLiabilityRatio = data["assetLiabilityRatio"] != null ? SafeConvertToDecimal(data["assetLiabilityRatio"]) : null,
+                        CurrentRatio = data["currentRatio"] != null ? SafeConvertToDecimal(data["currentRatio"]) : null,
+                        QuickRatio = data["quickRatio"] != null ? SafeConvertToDecimal(data["quickRatio"]) : null,
+                        
+                        // 运营能力
+                        InventoryTurnover = data["inventoryTurnover"] != null ? SafeConvertToDecimal(data["inventoryTurnover"]) : null,
+                        AccountsReceivableTurnover = data["accountsReceivableTurnover"] != null ? SafeConvertToDecimal(data["accountsReceivableTurnover"]) : null,
+                        
+                        // 每股指标
+                        EPS = data["eps"] != null ? SafeConvertToDecimal(data["eps"]) : null,
+                        BPS = data["bps"] != null ? SafeConvertToDecimal(data["bps"]) : null,
+                        CashFlowPerShare = null,
+                        
+                        // 估值指标（从实时行情获取，如果Python服务没有提供）
+                        PE = stock?.PE,
+                        PB = stock?.PB,
+                        
+                        LastUpdate = DateTime.Now
+                    };
+                    
+                    Console.WriteLine($"[基本面数据-方案1] ✅ 从Python服务(AKShare)获取成功！");
+                    Console.WriteLine($"[基本面数据-方案1]   数据完整性: 营收={info.TotalRevenue.HasValue}, 净利润={info.NetProfit.HasValue}, ROE={info.ROE.HasValue}, EPS={info.EPS.HasValue}");
+                    _logger.LogInformation("📊 [StockDataService] ✅ 从Python服务(AKShare)获取成功 - 营收: {Revenue}万元, 净利润: {Profit}万元, ROE: {ROE}%, EPS: {EPS}元", 
+                        info.TotalRevenue?.ToString("F2") ?? "N/A", 
+                        info.NetProfit?.ToString("F2") ?? "N/A", 
+                        info.ROE?.ToString("F2") ?? "N/A",
+                        info.EPS?.ToString("F3") ?? "N/A");
+                    
+                    return info;
+                }
+            }
+            
+            return null;
+        }
+        catch (System.Net.Http.HttpRequestException ex)
+        {
+            // 检查是否是404错误（数据未找到）
+            if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
+            {
+                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务返回404 - 股票代码 {stockCode} 的数据未找到");
+                Console.WriteLine($"[基本面数据-方案1] 💡 提示: AKShare可能无法获取该股票的数据，将尝试其他数据源");
+                _logger.LogDebug(ex, "📊 [StockDataService] Python服务返回404 - 股票代码 {StockCode} 的数据未找到", stockCode);
+            }
+            else
+            {
+                // Python服务可能未启动，这是正常的
+                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务未启动或不可用: {ex.Message}");
+                _logger.LogDebug(ex, "📊 [StockDataService] Python服务不可用（可能未启动）");
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[基本面数据-方案1] ❌ 失败: {ex.Message}");
+            _logger.LogWarning(ex, "📊 [StockDataService] Python服务调用失败");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 方案2: 从实时行情接口获取基本面信息（已知可用的接口）
     /// </summary>
     private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromF10DetailAsync(string stockCode)
     {
