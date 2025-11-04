@@ -109,11 +109,13 @@ public class NewsBackgroundService : BackgroundService
                     {
                         _logger.LogInformation("开始定时刷新天行数据财经新闻...");
                         
-                        using var scope = _serviceProvider.CreateScope();
-                        var newsService = scope.ServiceProvider.GetRequiredService<INewsService>();
-                        
-                        // 只调用天行数据API
-                        await ((NewsService)newsService).FetchTianApiNewsOnlyAsync();
+                        using (var scope = _serviceProvider.CreateScope())
+                        {
+                            var newsService = scope.ServiceProvider.GetRequiredService<INewsService>();
+                            
+                            // 只调用天行数据API
+                            await ((NewsService)newsService).FetchTianApiNewsOnlyAsync();
+                        }
                         
                         lastTianApiNewsRefreshTime = now;
                         _logger.LogInformation("天行数据财经新闻定时刷新完成，下次刷新将在 {Interval} 分钟后", 
@@ -177,14 +179,16 @@ public class NewsService : INewsService{
     private readonly HttpClient _httpClient;
     private readonly ILogger<NewsService> _logger;
     private readonly IMemoryCache _cache;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
     private const int CacheExpirationMinutes = 30; // 缓存30分钟
 
-    public NewsService(StockDbContext context, HttpClient httpClient, ILogger<NewsService> logger, IMemoryCache cache)
+    public NewsService(StockDbContext context, HttpClient httpClient, ILogger<NewsService> logger, IMemoryCache cache, IServiceScopeFactory serviceScopeFactory)
     {
         _context = context;
         _httpClient = httpClient;
         _logger = logger;
         _cache = cache;
+        _serviceScopeFactory = serviceScopeFactory;
     }
 
     /// <summary>
@@ -454,27 +458,33 @@ public class NewsService : INewsService{
     // 保存新闻到数据库
     private async Task SaveNewsToDatabase(List<FinancialNews> newsList)
     {
-        int addedCount = 0;
-        foreach (var news in newsList)
+        // 创建一个新的作用域来确保 DbContext 在整个操作期间有效
+        using (var scope = _serviceScopeFactory.CreateScope())
         {
-            var existing = await _context.FinancialNews
-                .FirstOrDefaultAsync(n => n.Title == news.Title && n.Source == news.Source);
-                
-            if (existing == null)
+            var context = scope.ServiceProvider.GetRequiredService<StockDbContext>();
+            
+            int addedCount = 0;
+            foreach (var news in newsList)
             {
-                await _context.FinancialNews.AddAsync(news);
-                addedCount++;
+                var existing = await context.FinancialNews
+                    .FirstOrDefaultAsync(n => n.Title == news.Title && n.Source == news.Source);
+                    
+                if (existing == null)
+                {
+                    await context.FinancialNews.AddAsync(news);
+                    addedCount++;
+                }
             }
-        }
-        
-        if (addedCount > 0)
-        {
-            await _context.SaveChangesAsync();
-            _logger.LogInformation("成功保存 {Count} 条新闻到数据库", addedCount);
-        }
-        else
-        {
-            _logger.LogInformation("没有新的新闻需要保存到数据库");
+            
+            if (addedCount > 0)
+            {
+                await context.SaveChangesAsync();
+                _logger.LogInformation("成功保存 {Count} 条新闻到数据库", addedCount);
+            }
+            else
+            {
+                _logger.LogInformation("没有新的新闻需要保存到数据库");
+            }
         }
     }
     

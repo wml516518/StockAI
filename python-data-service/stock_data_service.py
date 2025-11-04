@@ -2,6 +2,16 @@
 股票数据服务 - 使用AKShare获取财务数据
 运行方式: python stock_data_service.py
 """
+import sys
+import os
+# 设置Windows控制台编码为UTF-8
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except:
+        pass
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import akshare as ak
