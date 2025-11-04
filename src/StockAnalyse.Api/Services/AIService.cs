@@ -12,16 +12,32 @@ namespace StockAnalyse.Api.Services;
 public class AIService : IAIService
 {
     private readonly StockDbContext _context;
-    private readonly HttpClient _httpClient;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<AIService> _logger;
     private readonly AIPromptConfigService _promptConfigService;
 
-    public AIService(StockDbContext context, HttpClient httpClient, ILogger<AIService> logger, AIPromptConfigService promptConfigService)
+    public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, AIPromptConfigService promptConfigService)
     {
         _context = context;
-        _httpClient = httpClient;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
         _promptConfigService = promptConfigService;
+    }
+    
+    private HttpClient GetHttpClient()
+    {
+        // 优先使用配置了长超时的HttpClient，如果不存在则使用默认的
+        try
+        {
+            return _httpClientFactory.CreateClient("AIService");
+        }
+        catch
+        {
+            // 如果"AIService"客户端不存在，使用默认客户端并设置超时
+            var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromMinutes(5);
+            return client;
+        }
     }
 
     public async Task<string> AnalyzeStockAsync(string stockCode, int? promptId = null, string? additionalContext = null, int? modelId = null)
@@ -151,7 +167,8 @@ public class AIService : IAIService
         var request = new HttpRequestMessage(HttpMethod.Post, config.SubscribeEndpoint ?? "https://api.deepseek.com/v1/chat/completions") { Content = content };
         request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
     
-        var response = await _httpClient.SendAsync(request);
+        using var httpClient = GetHttpClient();
+        var response = await httpClient.SendAsync(request);
         var json = await response.Content.ReadAsStringAsync();
     
         try
@@ -279,7 +296,8 @@ public class AIService : IAIService
         var request = new HttpRequestMessage(HttpMethod.Post, config.SubscribeEndpoint ?? "https://api.openai.com/v1/chat/completions") { Content = content };
         request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
     
-        var response = await _httpClient.SendAsync(request);
+        using var httpClient = GetHttpClient();
+        var response = await httpClient.SendAsync(request);
         var json = await response.Content.ReadAsStringAsync();
     
         try

@@ -42,6 +42,55 @@ public class NewsController : ControllerBase
     }
 
     /// <summary>
+    /// 获取最新新闻（分页）
+    /// </summary>
+    [HttpGet("latest/paged")]
+    public async Task<ActionResult<PagedResult<FinancialNews>>> GetLatestPaged(int pageIndex = 1, int pageSize = 20)
+    {
+        // 立即输出日志，确保能看到接口被调用
+        Console.WriteLine($"============================================");
+        Console.WriteLine($"[GetLatestPaged] 接口被调用！PageIndex={pageIndex}, PageSize={pageSize}");
+        Console.WriteLine($"============================================");
+        
+        _logger.LogInformation("============================================");
+        _logger.LogInformation("📰 [NewsController] GetLatestPaged 接口被调用！");
+        _logger.LogInformation("📰 [NewsController] 收到获取最新新闻请求: PageIndex={PageIndex}, PageSize={PageSize}", pageIndex, pageSize);
+        _logger.LogInformation("============================================");
+        
+        try
+        {
+            var result = await _newsService.GetLatestNewsPagedAsync(pageIndex, pageSize);
+            
+            _logger.LogInformation("📰 [NewsController] 服务返回结果: TotalCount={TotalCount}, ItemsCount={ItemsCount}, PageIndex={PageIndex}, PageSize={PageSize}", 
+                result.TotalCount, result.Items?.Count ?? 0, result.PageIndex, result.PageSize);
+            
+            // 记录返回的新闻详情
+            if (result.Items != null && result.Items.Count > 0)
+            {
+                _logger.LogInformation("📰 [NewsController] 返回的新闻列表（前3条）:");
+                foreach (var news in result.Items.Take(3))
+                {
+                    _logger.LogInformation("  - 标题: {Title}, 发布时间: {PublishTime}, 来源: {Source}", 
+                        news.Title ?? "无标题", 
+                        news.PublishTime, 
+                        news.Source ?? "未知");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("⚠️ [NewsController] 返回的新闻列表为空！TotalCount={TotalCount}", result.TotalCount);
+            }
+            
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取最新新闻失败");
+            return StatusCode(500, new { error = "获取新闻失败", message = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// 获取指定股票的新闻
     /// </summary>
     [HttpGet("stock/{stockCode}")]
@@ -64,6 +113,21 @@ public class NewsController : ControllerBase
         
         var news = await _newsService.SearchNewsAsync(keyword);
         return Ok(news);
+    }
+
+    /// <summary>
+    /// 搜索新闻（分页）
+    /// </summary>
+    [HttpGet("search/paged")]
+    public async Task<ActionResult<PagedResult<FinancialNews>>> SearchPaged(string keyword, int pageIndex = 1, int pageSize = 20)
+    {
+        if (string.IsNullOrWhiteSpace(keyword))
+        {
+            return BadRequest("关键词不能为空");
+        }
+        
+        var result = await _newsService.SearchNewsPagedAsync(keyword, pageIndex, pageSize);
+        return Ok(result);
     }
 
     /// <summary>

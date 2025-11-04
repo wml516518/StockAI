@@ -34,7 +34,15 @@ builder.Services.AddSwaggerGen(c =>
 
 // 配置数据库
 builder.Services.AddDbContext<StockDbContext>(options =>
-    options.UseSqlite("Data Source=stockanalyse.db"));
+{
+    options.UseSqlite("Data Source=stockanalyse.db");
+    // 禁用敏感数据日志和SQL查询日志
+    options.EnableSensitiveDataLogging(false);
+    if (!builder.Environment.IsDevelopment())
+    {
+        options.EnableDetailedErrors(false);
+    }
+});
 
 // 注册服务
 builder.Services.AddScoped<IStockDataService, StockDataService>();
@@ -56,7 +64,13 @@ builder.Services.AddScoped<IStrategyOptimizationService, StrategyOptimizationSer
 // 注册定时任务服务
 builder.Services.AddHostedService<NewsBackgroundService>();
 
-// 添加HttpClient
+// 添加HttpClient，为AI服务配置专门的HttpClient，设置更长的超时时间（5分钟）
+builder.Services.AddHttpClient("AIService", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(5); // 5分钟超时
+});
+
+// 默认HttpClient（用于其他服务）
 builder.Services.AddHttpClient();
 
 // 配置CORS

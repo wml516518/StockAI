@@ -53,6 +53,18 @@ public class WatchlistController : ControllerBase
     }
 
     /// <summary>
+    /// 获取所有自选股
+    /// </summary>
+    [HttpGet]
+    public async Task<ActionResult<List<WatchlistStock>>> GetWatchlist()
+    {
+        var grouped = await _watchlistService.GetWatchlistGroupedByCategoryAsync();
+        // 将所有分类的自选股合并成一个列表
+        var allStocks = grouped.Values.SelectMany(stocks => stocks).ToList();
+        return Ok(allStocks);
+    }
+
+    /// <summary>
     /// 获取所有自选股（按分类）
     /// </summary>
     [HttpGet("grouped")]
