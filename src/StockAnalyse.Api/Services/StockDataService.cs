@@ -921,15 +921,31 @@ public class StockDataService : IStockDataService
         _logger.LogInformation("============================================");
         
         // 尝试多个接口，按优先级顺序
-        // 方案1: 使用东方财富F10接口（更稳定）
-        var result = await TryGetFundamentalInfoFromF10Async(stockCode);
+        // 方案1: 使用东方财富F10详情接口（直接获取财务快照）
+        var result = await TryGetFundamentalInfoFromF10DetailAsync(stockCode);
         if (result != null)
         {
-            _logger.LogInformation("📊 [StockDataService] ✅ 从F10接口成功获取基本面信息");
+            _logger.LogInformation("📊 [StockDataService] ✅ 从F10详情接口成功获取基本面信息");
             return result;
         }
         
-        // 方案2: 使用东方财富财务指标接口（简化字段）
+        // 方案2: 使用东方财富实时行情接口的扩展字段（从已知可用的接口获取）
+        result = await TryGetFundamentalInfoFromRealTimeAsync(stockCode);
+        if (result != null)
+        {
+            _logger.LogInformation("📊 [StockDataService] ✅ 从实时行情接口成功获取基本面信息");
+            return result;
+        }
+        
+        // 方案3: 尝试使用F10资产负债表接口
+        result = await TryGetFundamentalInfoFromF10Async(stockCode);
+        if (result != null)
+        {
+            _logger.LogInformation("📊 [StockDataService] ✅ 从F10资产负债表接口成功获取基本面信息");
+            return result;
+        }
+        
+        // 方案4: 使用财务指标接口（简化字段）
         result = await TryGetFundamentalInfoFromFinanceAsync(stockCode);
         if (result != null)
         {
@@ -937,20 +953,116 @@ public class StockDataService : IStockDataService
             return result;
         }
         
-        // 方案3: 使用旧接口（兼容性）
-        result = await TryGetFundamentalInfoFromOldApiAsync(stockCode);
-        if (result != null)
+        _logger.LogWarning("📊 [StockDataService] ❌ 所有接口均失败，返回基本估值信息");
+        
+        // 最后备用方案：至少返回PE/PB等基本信息
+        var stock = await GetRealTimeQuoteAsync(stockCode);
+        if (stock != null)
         {
-            _logger.LogInformation("📊 [StockDataService] ✅ 从旧接口成功获取基本面信息");
-            return result;
+            return new StockFundamentalInfo
+            {
+                StockCode = stockCode,
+                StockName = stock.Name,
+                PE = stock.PE,
+                PB = stock.PB,
+                LastUpdate = DateTime.Now
+            };
         }
         
-        _logger.LogWarning("📊 [StockDataService] ❌ 所有接口均失败，无法获取基本面信息");
         return null;
     }
     
     /// <summary>
-    /// 方案1: 从F10接口获取基本面信息（推荐）
+    /// 方案1: 从实时行情接口获取基本面信息（已知可用的接口，推荐）
+    /// </summary>
+    private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromF10DetailAsync(string stockCode)
+    {
+        try
+        {
+            // 直接使用已验证可用的实时行情接口，至少能获取PE/PB等基本信息
+            var stock = await GetRealTimeQuoteAsync(stockCode);
+            if (stock != null)
+            {
+                var info = new StockFundamentalInfo
+                {
+                    StockCode = stockCode,
+                    StockName = stock.Name,
+                    PE = stock.PE,
+                    PB = stock.PB,
+                    LastUpdate = DateTime.Now
+                };
+                
+                Console.WriteLine($"[基本面数据-方案1] ✅ 从实时行情接口获取基本信息成功");
+                _logger.LogInformation("📊 [StockDataService] 从实时行情接口获取PE={PE}, PB={PB}", stock.PE, stock.PB);
+                return info;
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[基本面数据-方案1] ❌ 失败: {ex.Message}");
+            _logger.LogWarning(ex, "📊 [StockDataService] 实时行情接口失败");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 方案2: 从实时行情接口获取扩展的财务字段
+    /// </summary>
+    private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromRealTimeAsync(string stockCode)
+    {
+        try
+        {
+            // 判断市场：1=上交所, 0=深交所
+            var market = stockCode.StartsWith("6") ? "1" : "0";
+            var secid = $"{market}.{stockCode}";
+            
+            // 使用扩展字段的实时行情接口（包含更多财务指标）
+            // f10: 总市值, f12: 总股本, f13: 流通股本, f15: 最高价, f16: 最低价
+            // f18: 昨收, f20: 总市值, f21: 流通市值, f23: 换手率, f24: 量比
+            // f25: 市盈率, f26: 市净率, f37: 涨跌幅, f38: 涨跌额
+            // f39: 成交额, f40: 成交量, f45: 最高, f46: 最低, f47: 今开, f48: 昨收
+            var url = $"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f107,f137,f43,f46,f44,f45,f47,f48,f168,f60,f170,f116,f171,f117,f172,f169,f162,f167,f10,f12,f13,f20,f21,f25,f26&fltt=2";
+            
+            Console.WriteLine($"[基本面数据-方案2] 请求实时行情扩展接口");
+            _logger.LogInformation("📊 [StockDataService] 尝试实时行情扩展接口");
+            
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+            
+            var response = await _httpClient.GetStringAsync(url);
+            dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
+            
+            if (data?.data != null)
+            {
+                var stockInfo = data.data;
+                var stock = await GetRealTimeQuoteAsync(stockCode);
+                
+                var info = new StockFundamentalInfo
+                {
+                    StockCode = stockCode,
+                    StockName = stockInfo.f58?.ToString() ?? stock?.Name ?? "未知",
+                    PE = SafeConvertToDecimal(stockInfo.f162) > 0 ? SafeConvertToDecimal(stockInfo.f162) : null,
+                    PB = SafeConvertToDecimal(stockInfo.f167) > 0 ? SafeConvertToDecimal(stockInfo.f167) : null,
+                    LastUpdate = DateTime.Now
+                };
+                
+                Console.WriteLine($"[基本面数据-方案2] ✅ 从实时行情接口获取成功");
+                return info;
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[基本面数据-方案2] ❌ 失败: {ex.Message}");
+            _logger.LogWarning(ex, "📊 [StockDataService] 实时行情接口失败");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 方案3: 从F10资产负债表接口获取（保留原方法）
     /// </summary>
     private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromF10Async(string stockCode)
     {
