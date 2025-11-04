@@ -906,6 +906,464 @@ public class StockDataService : IStockDataService
             return stocks;
         }
     }
+    
+    /// <summary>
+    /// 获取股票基本面信息（使用多个备用接口）
+    /// </summary>
+    public async Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode)
+    {
+        Console.WriteLine($"[基本面数据] ============================================");
+        Console.WriteLine($"[基本面数据] 开始获取股票 {stockCode} 的基本面信息");
+        Console.WriteLine($"[基本面数据] ============================================");
+        
+        _logger.LogInformation("============================================");
+        _logger.LogInformation("📊 [StockDataService] 开始获取股票 {StockCode} 的基本面信息", stockCode);
+        _logger.LogInformation("============================================");
+        
+        // 尝试多个接口，按优先级顺序
+        // 方案1: 使用东方财富F10接口（更稳定）
+        var result = await TryGetFundamentalInfoFromF10Async(stockCode);
+        if (result != null)
+        {
+            _logger.LogInformation("📊 [StockDataService] ✅ 从F10接口成功获取基本面信息");
+            return result;
+        }
+        
+        // 方案2: 使用东方财富财务指标接口（简化字段）
+        result = await TryGetFundamentalInfoFromFinanceAsync(stockCode);
+        if (result != null)
+        {
+            _logger.LogInformation("📊 [StockDataService] ✅ 从财务指标接口成功获取基本面信息");
+            return result;
+        }
+        
+        // 方案3: 使用旧接口（兼容性）
+        result = await TryGetFundamentalInfoFromOldApiAsync(stockCode);
+        if (result != null)
+        {
+            _logger.LogInformation("📊 [StockDataService] ✅ 从旧接口成功获取基本面信息");
+            return result;
+        }
+        
+        _logger.LogWarning("📊 [StockDataService] ❌ 所有接口均失败，无法获取基本面信息");
+        return null;
+    }
+    
+    /// <summary>
+    /// 方案1: 从F10接口获取基本面信息（推荐）
+    /// </summary>
+    private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromF10Async(string stockCode)
+    {
+        try
+        {
+            // 判断市场：1=上交所, 0=深交所
+            var market = stockCode.StartsWith("6") ? "1" : "0";
+            var secid = $"{market}.{stockCode}";
+            
+            // 使用F10接口获取财务指标（更稳定的接口）
+            var url = $"https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_F10_FN_BALANCE&columns=SECURITY_CODE,SECURITY_NAME_ABBR,REPORT_DATE,REPORT_TYPE,TOTAL_OPERATE_INCOME,NET_PROFIT,ROE,GROSS_PROFIT_RATE,NET_PROFIT_RATE,REVENUE_YOY_RATE,PROFIT_YOY_RATE,ASSET_LIAB_RATIO,CURRENT_RATIO,QUICK_RATIO,EPS,BPS&filter=(SECURITY_CODE=%22{stockCode}%22)&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=REPORT_DATE";
+            
+            Console.WriteLine($"[基本面数据-方案1] 请求F10接口: {url}");
+            _logger.LogInformation("📊 [StockDataService] 尝试F10接口: {Url}", url);
+            
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
+            
+            var response = await _httpClient.GetStringAsync(url);
+            Console.WriteLine($"[基本面数据] API响应长度: {response.Length} 字符");
+            Console.WriteLine($"[基本面数据] API响应内容: {response}");
+            _logger.LogInformation("📊 [StockDataService] API响应长度: {Length} 字符", response.Length);
+            _logger.LogInformation("📊 [StockDataService] API响应内容: {Response}", response);
+            
+            // 先尝试解析为JObject，以便更好地处理
+            Newtonsoft.Json.Linq.JObject? jsonData = null;
+            try
+            {
+                jsonData = Newtonsoft.Json.Linq.JObject.Parse(response);
+            }
+            catch (Exception parseEx)
+            {
+                Console.WriteLine($"[基本面数据] ❌ JSON解析失败: {parseEx.Message}");
+                Console.WriteLine($"[基本面数据] 响应内容: {response}");
+                _logger.LogError(parseEx, "📊 [StockDataService] JSON解析失败");
+                return null;
+            }
+            
+            // 检查API返回的数据结构
+            if (jsonData == null)
+            {
+                Console.WriteLine($"[基本面数据] ❌ JSON解析结果为null");
+                return null;
+            }
+            
+            // 打印JSON结构以便调试
+            Console.WriteLine($"[基本面数据] JSON根节点Keys: {string.Join(", ", jsonData.Properties().Select(p => p.Name))}");
+            
+            // 检查是否有错误信息
+            if (jsonData["code"] != null)
+            {
+                var code = jsonData["code"].ToString();
+                Console.WriteLine($"[基本面数据] API返回code: {code}");
+                if (code != "0" && code != "200")
+                {
+                    var message = jsonData["message"]?.ToString() ?? "未知错误";
+                    Console.WriteLine($"[基本面数据] ❌ API返回错误: code={code}, message={message}");
+                    _logger.LogWarning("📊 [StockDataService] API返回错误: code={Code}, message={Message}", code, message);
+                    return null;
+                }
+            }
+            
+            // 尝试不同的数据结构路径
+            Newtonsoft.Json.Linq.JArray? dataArray = null;
+            
+            // 路径1: result.data
+            if (jsonData["result"]?["data"] != null)
+            {
+                if (jsonData["result"]["data"] is Newtonsoft.Json.Linq.JArray array1)
+                {
+                    dataArray = array1;
+                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: result.data (数组类型)");
+                }
+                else if (jsonData["result"]["data"] is Newtonsoft.Json.Linq.JObject)
+                {
+                    Console.WriteLine($"[基本面数据] ⚠️ result.data 是对象类型，尝试转换为数组");
+                    // 可能是单个对象，需要转换为数组
+                    dataArray = new Newtonsoft.Json.Linq.JArray { jsonData["result"]["data"] };
+                }
+            }
+            
+            // 路径2: data
+            if (dataArray == null && jsonData["data"] != null)
+            {
+                if (jsonData["data"] is Newtonsoft.Json.Linq.JArray array2)
+                {
+                    dataArray = array2;
+                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: data (数组类型)");
+                }
+            }
+            
+            // 路径3: result (直接是数组)
+            if (dataArray == null && jsonData["result"] != null)
+            {
+                if (jsonData["result"] is Newtonsoft.Json.Linq.JArray array3)
+                {
+                    dataArray = array3;
+                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: result (数组类型)");
+                }
+            }
+            
+            // 路径4: 尝试从result.records获取（某些API可能使用records）
+            if (dataArray == null && jsonData["result"]?["records"] != null)
+            {
+                if (jsonData["result"]["records"] is Newtonsoft.Json.Linq.JArray array4)
+                {
+                    dataArray = array4;
+                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: result.records (数组类型)");
+                }
+            }
+            
+            if (dataArray == null || dataArray.Count == 0)
+            {
+                Console.WriteLine($"[基本面数据] ❌ 未找到有效的财务数据数组");
+                Console.WriteLine($"[基本面数据] JSON结构: {jsonData.ToString(Newtonsoft.Json.Formatting.Indented)}");
+                _logger.LogWarning("📊 [StockDataService] ❌ 未找到股票 {Code} 的财务数据（未找到有效数组）", stockCode);
+                
+                // 如果API返回了错误，尝试使用备用方案：从实时行情获取基本信息
+                Console.WriteLine($"[基本面数据] ⚠️ 尝试使用备用方案：从实时行情获取基本信息...");
+                var fallbackStock = await GetRealTimeQuoteAsync(stockCode);
+                if (fallbackStock != null)
+                {
+                    Console.WriteLine($"[基本面数据] ⚠️ 已从实时行情获取基本信息，但无法获取详细财务数据");
+                }
+                
+                return null;
+            }
+            
+            int dataCount = dataArray.Count;
+            Console.WriteLine($"[基本面数据] ✅ 成功获取到财务数据，记录数: {dataCount}");
+            _logger.LogInformation("📊 [StockDataService] ✅ 成功获取到财务数据，记录数: {Count}", dataCount);
+            
+            var financeData = dataArray[0] as Newtonsoft.Json.Linq.JObject;
+            if (financeData == null)
+            {
+                Console.WriteLine($"[基本面数据] ❌ 无法将第一条数据转换为JObject");
+                return null;
+            }
+            
+            Console.WriteLine($"[基本面数据] 解析财务数据:");
+            
+            // 打印所有可用的字段名，便于调试
+            var availableFields = financeData.Properties().Select(p => p.Name).ToList();
+            Console.WriteLine($"[基本面数据] 可用字段: {string.Join(", ", availableFields)}");
+            
+            Console.WriteLine($"[基本面数据]   股票名称: {financeData["SECURITY_NAME_ABBR"]?.ToString() ?? "未知"}");
+            
+            // 尝试多种可能的日期和类型字段名
+            string? reportDate = financeData["REPORT_DATE"]?.ToString() 
+                ?? financeData["UPDATE_DATE"]?.ToString() 
+                ?? financeData["DATE_TYPE_NAME"]?.ToString()
+                ?? financeData["REPORTING_PERIOD"]?.ToString()
+                ?? financeData["NOTICE_DATE"]?.ToString();
+            
+            string? reportType = financeData["REPORT_TYPE_NAME"]?.ToString()
+                ?? financeData["DATE_TYPE_NAME"]?.ToString()
+                ?? financeData["TYPE"]?.ToString()
+                ?? financeData["REPORT_TYPE"]?.ToString();
+            
+            Console.WriteLine($"[基本面数据]   报告期: {reportDate ?? "未知"}");
+            Console.WriteLine($"[基本面数据]   报告类型: {reportType ?? "未知"}");
+            
+            // 同时获取股票基本信息（用于获取PE、PB等）
+            Console.WriteLine($"[基本面数据] 同时获取实时行情数据以补充PE/PB等信息...");
+            var stock = await GetRealTimeQuoteAsync(stockCode);
+            
+            var info = new StockFundamentalInfo
+            {
+                StockCode = stockCode,
+                StockName = financeData["SECURITY_NAME_ABBR"]?.ToString() ?? stock?.Name ?? "未知",
+                ReportDate = reportDate,
+                ReportType = reportType,
+                
+                // 主要财务指标（单位：万元，需要转换为万元）
+                TotalRevenue = SafeConvertToDecimal(financeData["TOTAL_OPERATE_INCOME"]) / 10000,
+                // 修复：使用NET_PROFIT替代不存在的NET_PROFIT_AFTER_DED_NRPLP，如果NET_PROFIT不存在则尝试其他字段
+                NetProfit = (financeData["NET_PROFIT"] != null && financeData["NET_PROFIT"].ToString() != "")
+                    ? SafeConvertToDecimal(financeData["NET_PROFIT"]) / 10000
+                    : ((financeData["NET_PROFIT_AFTER_DED"] != null && financeData["NET_PROFIT_AFTER_DED"].ToString() != "")
+                        ? SafeConvertToDecimal(financeData["NET_PROFIT_AFTER_DED"]) / 10000
+                        : ((financeData["NET_PROFIT_ATTRIBUTABLE"] != null && financeData["NET_PROFIT_ATTRIBUTABLE"].ToString() != "")
+                            ? SafeConvertToDecimal(financeData["NET_PROFIT_ATTRIBUTABLE"]) / 10000
+                            : null)),
+                
+                // 盈利能力（%）
+                ROE = SafeConvertToDecimal(financeData["ROE"]),
+                GrossProfitMargin = SafeConvertToDecimal(financeData["GROSS_PROFIT_RATE"]),
+                NetProfitMargin = SafeConvertToDecimal(financeData["NET_PROFIT_RATE"]),
+                
+                // 成长性（%）- 尝试多种可能的字段名
+                RevenueGrowthRate = SafeConvertToDecimal(financeData["REVENUE_YOY_RATE"]) != 0 
+                    ? SafeConvertToDecimal(financeData["REVENUE_YOY_RATE"])
+                    : SafeConvertToDecimal(financeData["YOYSTOTALOPERATEINCOME"]),
+                ProfitGrowthRate = SafeConvertToDecimal(financeData["PROFIT_YOY_RATE"]) != 0
+                    ? SafeConvertToDecimal(financeData["PROFIT_YOY_RATE"])
+                    : SafeConvertToDecimal(financeData["YOYSNETPROFIT"]),
+                
+                // 偿债能力
+                AssetLiabilityRatio = SafeConvertToDecimal(financeData["ASSET_LIAB_RATIO"]),
+                CurrentRatio = SafeConvertToDecimal(financeData["CURRENT_RATIO"]),
+                QuickRatio = SafeConvertToDecimal(financeData["QUICK_RATIO"]),
+                
+                // 运营能力（可选字段）
+                InventoryTurnover = financeData["INVENTORY_TURNOVER"] != null ? SafeConvertToDecimal(financeData["INVENTORY_TURNOVER"]) : null,
+                AccountsReceivableTurnover = financeData["ACCOUNTS_RECEIVABLE_TURNOVER"] != null ? SafeConvertToDecimal(financeData["ACCOUNTS_RECEIVABLE_TURNOVER"]) : null,
+                
+                // 每股指标
+                EPS = SafeConvertToDecimal(financeData["EPS"]),
+                BPS = SafeConvertToDecimal(financeData["BPS"]),
+                CashFlowPerShare = financeData["CASH_FLOW_PER_SHARE"] != null ? SafeConvertToDecimal(financeData["CASH_FLOW_PER_SHARE"]) : null,
+                
+                // 估值指标（从实时行情获取）
+                PE = stock?.PE,
+                PB = stock?.PB,
+                
+                LastUpdate = DateTime.Now
+            };
+            
+            Console.WriteLine($"[基本面数据-方案1] ✅ 基本面信息解析完成");
+            return info;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[基本面数据-方案1] ❌ 失败: {ex.Message}");
+            _logger.LogWarning(ex, "📊 [StockDataService] F10接口失败");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 方案2: 从财务指标接口获取（简化字段版本）
+    /// </summary>
+    private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromFinanceAsync(string stockCode)
+    {
+        try
+        {
+            // 使用更简单的财务指标接口
+            var url = $"https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_LICO_FN_CPD&columns=SECURITY_CODE,SECURITY_NAME_ABBR,UPDATE_DATE,TOTAL_OPERATE_INCOME,NET_PROFIT,ROE,GROSS_PROFIT_RATE,NET_PROFIT_RATE,REVENUE_YOY_RATE,PROFIT_YOY_RATE,EPS,BPS&filter=(SECURITY_CODE=%22{stockCode}%22)&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=UPDATE_DATE";
+            
+            Console.WriteLine($"[基本面数据-方案2] 请求财务指标接口: {url}");
+            _logger.LogInformation("📊 [StockDataService] 尝试财务指标接口: {Url}", url);
+            
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
+            
+            var response = await _httpClient.GetStringAsync(url);
+            
+            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(response);
+            
+            // 检查错误
+            if (jsonData["code"] != null && jsonData["code"].ToString() != "0" && jsonData["code"].ToString() != "200")
+            {
+                _logger.LogWarning("📊 [StockDataService] 财务指标接口返回错误: {Message}", jsonData["message"]?.ToString());
+                return null;
+            }
+            
+            // 获取数据数组
+            var dataArray = jsonData["result"]?["data"] as Newtonsoft.Json.Linq.JArray
+                ?? jsonData["data"] as Newtonsoft.Json.Linq.JArray
+                ?? jsonData["result"] as Newtonsoft.Json.Linq.JArray;
+            
+            if (dataArray == null || dataArray.Count == 0)
+                return null;
+            
+            var financeData = dataArray[0] as Newtonsoft.Json.Linq.JObject;
+            if (financeData == null)
+                return null;
+            
+            var stock = await GetRealTimeQuoteAsync(stockCode);
+            
+            var info = ParseFundamentalInfo(financeData, stockCode, stock);
+            Console.WriteLine($"[基本面数据-方案2] ✅ 解析完成");
+            return info;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[基本面数据-方案2] ❌ 失败: {ex.Message}");
+            _logger.LogWarning(ex, "📊 [StockDataService] 财务指标接口失败");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 方案3: 从旧接口获取（兼容性）
+    /// </summary>
+    private async Task<StockFundamentalInfo?> TryGetFundamentalInfoFromOldApiAsync(string stockCode)
+    {
+        try
+        {
+            // 使用旧的接口（原接口，但字段已修复）
+            var url = $"https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_LICO_FN_CPD&columns=SECURITY_CODE,SECURITY_NAME_ABBR,NOTICE_DATE,UPDATE_DATE,TOTAL_OPERATE_INCOME,NET_PROFIT,ROE,GROSS_PROFIT_RATE,NET_PROFIT_RATE,REVENUE_YOY_RATE,PROFIT_YOY_RATE,ASSET_LIAB_RATIO,CURRENT_RATIO,QUICK_RATIO,INVENTORY_TURNOVER,ACCOUNTS_RECEIVABLE_TURNOVER,EPS,BPS,CASH_FLOW_PER_SHARE&filter=(SECURITY_CODE=%22{stockCode}%22)&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=UPDATE_DATE";
+            
+            Console.WriteLine($"[基本面数据-方案3] 请求旧接口: {url}");
+            _logger.LogInformation("📊 [StockDataService] 尝试旧接口: {Url}", url);
+            
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
+            
+            var response = await _httpClient.GetStringAsync(url);
+            
+            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(response);
+            
+            // 检查错误
+            if (jsonData["code"] != null && jsonData["code"].ToString() != "0" && jsonData["code"].ToString() != "200")
+            {
+                _logger.LogWarning("📊 [StockDataService] 旧接口返回错误: {Message}", jsonData["message"]?.ToString());
+                return null;
+            }
+            
+            // 获取数据数组
+            var dataArray = jsonData["result"]?["data"] as Newtonsoft.Json.Linq.JArray
+                ?? jsonData["data"] as Newtonsoft.Json.Linq.JArray
+                ?? jsonData["result"] as Newtonsoft.Json.Linq.JArray;
+            
+            if (dataArray == null || dataArray.Count == 0)
+                return null;
+            
+            var financeData = dataArray[0] as Newtonsoft.Json.Linq.JObject;
+            if (financeData == null)
+                return null;
+            
+            var stock = await GetRealTimeQuoteAsync(stockCode);
+            
+            var info = ParseFundamentalInfo(financeData, stockCode, stock);
+            Console.WriteLine($"[基本面数据-方案3] ✅ 解析完成");
+            return info;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[基本面数据-方案3] ❌ 失败: {ex.Message}");
+            _logger.LogWarning(ex, "📊 [StockDataService] 旧接口失败");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 解析财务数据为StockFundamentalInfo（通用方法）
+    /// </summary>
+    private StockFundamentalInfo ParseFundamentalInfo(Newtonsoft.Json.Linq.JObject financeData, string stockCode, Stock? stock)
+    {
+        // 尝试多种可能的日期和类型字段名
+        string? reportDate = financeData["REPORT_DATE"]?.ToString() 
+            ?? financeData["UPDATE_DATE"]?.ToString() 
+            ?? financeData["DATE_TYPE_NAME"]?.ToString()
+            ?? financeData["REPORTING_PERIOD"]?.ToString()
+            ?? financeData["NOTICE_DATE"]?.ToString();
+        
+        string? reportType = financeData["REPORT_TYPE_NAME"]?.ToString()
+            ?? financeData["DATE_TYPE_NAME"]?.ToString()
+            ?? financeData["TYPE"]?.ToString()
+            ?? financeData["REPORT_TYPE"]?.ToString();
+        
+        var info = new StockFundamentalInfo
+        {
+            StockCode = stockCode,
+            StockName = financeData["SECURITY_NAME_ABBR"]?.ToString() ?? stock?.Name ?? "未知",
+            ReportDate = reportDate,
+            ReportType = reportType,
+            
+            // 主要财务指标（单位：万元）
+            TotalRevenue = SafeConvertToDecimal(financeData["TOTAL_OPERATE_INCOME"]) / 10000,
+            NetProfit = (financeData["NET_PROFIT"] != null && financeData["NET_PROFIT"].ToString() != "")
+                ? SafeConvertToDecimal(financeData["NET_PROFIT"]) / 10000
+                : ((financeData["NET_PROFIT_AFTER_DED"] != null && financeData["NET_PROFIT_AFTER_DED"].ToString() != "")
+                    ? SafeConvertToDecimal(financeData["NET_PROFIT_AFTER_DED"]) / 10000
+                    : ((financeData["NET_PROFIT_ATTRIBUTABLE"] != null && financeData["NET_PROFIT_ATTRIBUTABLE"].ToString() != "")
+                        ? SafeConvertToDecimal(financeData["NET_PROFIT_ATTRIBUTABLE"]) / 10000
+                        : null)),
+            
+            // 盈利能力（%）
+            ROE = SafeConvertToDecimal(financeData["ROE"]),
+            GrossProfitMargin = SafeConvertToDecimal(financeData["GROSS_PROFIT_RATE"]),
+            NetProfitMargin = SafeConvertToDecimal(financeData["NET_PROFIT_RATE"]),
+            
+            // 成长性（%）
+            RevenueGrowthRate = SafeConvertToDecimal(financeData["REVENUE_YOY_RATE"]) != 0 
+                ? SafeConvertToDecimal(financeData["REVENUE_YOY_RATE"])
+                : SafeConvertToDecimal(financeData["YOYSTOTALOPERATEINCOME"]),
+            ProfitGrowthRate = SafeConvertToDecimal(financeData["PROFIT_YOY_RATE"]) != 0
+                ? SafeConvertToDecimal(financeData["PROFIT_YOY_RATE"])
+                : SafeConvertToDecimal(financeData["YOYSNETPROFIT"]),
+            
+            // 偿债能力（可选字段）
+            AssetLiabilityRatio = financeData["ASSET_LIAB_RATIO"] != null ? SafeConvertToDecimal(financeData["ASSET_LIAB_RATIO"]) : null,
+            CurrentRatio = financeData["CURRENT_RATIO"] != null ? SafeConvertToDecimal(financeData["CURRENT_RATIO"]) : null,
+            QuickRatio = financeData["QUICK_RATIO"] != null ? SafeConvertToDecimal(financeData["QUICK_RATIO"]) : null,
+            
+            // 运营能力（可选字段）
+            InventoryTurnover = financeData["INVENTORY_TURNOVER"] != null ? SafeConvertToDecimal(financeData["INVENTORY_TURNOVER"]) : null,
+            AccountsReceivableTurnover = financeData["ACCOUNTS_RECEIVABLE_TURNOVER"] != null ? SafeConvertToDecimal(financeData["ACCOUNTS_RECEIVABLE_TURNOVER"]) : null,
+            
+            // 每股指标
+            EPS = SafeConvertToDecimal(financeData["EPS"]),
+            BPS = SafeConvertToDecimal(financeData["BPS"]),
+            CashFlowPerShare = financeData["CASH_FLOW_PER_SHARE"] != null ? SafeConvertToDecimal(financeData["CASH_FLOW_PER_SHARE"]) : null,
+            
+            // 估值指标（从实时行情获取）
+            PE = stock?.PE,
+            PB = stock?.PB,
+            
+            LastUpdate = DateTime.Now
+        };
+        
+        _logger.LogInformation("📊 [StockDataService] ✅ 成功解析基本面信息 - 营收: {Revenue}万元, 净利润: {Profit}万元, ROE: {ROE}%", 
+            info.TotalRevenue?.ToString("F2") ?? "N/A", 
+            info.NetProfit?.ToString("F2") ?? "N/A", 
+            info.ROE?.ToString("F2") ?? "N/A");
+        
+        return info;
+    }
 
     /// <summary>
     /// 生成股票代码列表
@@ -1031,9 +1489,15 @@ public class StockDataService : IStockDataService
                 
                 dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
                 
-                if (data?.data == null || data.data.diff == null)
+                if (data?.data == null)
                 {
                     _logger.LogWarning("东方财富返回数据为空，页码: {PageNum}", pageNum);
+                    break;
+                }
+                
+                if (data.data.diff == null)
+                {
+                    _logger.LogWarning("东方财富返回diff为空，页码: {PageNum}", pageNum);
                     break;
                 }
                 

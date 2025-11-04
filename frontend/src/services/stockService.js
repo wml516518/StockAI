@@ -16,6 +16,11 @@ export const stockService = {
     return api.get(`/stock/${code}/history`, {
       params: { startDate, endDate }
     })
+  },
+
+  // 获取基本面信息
+  getFundamental(code) {
+    return api.get(`/stock/${code}/fundamental`)
   }
 }
 

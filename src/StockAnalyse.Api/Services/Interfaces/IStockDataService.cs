@@ -53,6 +53,11 @@ public interface IStockDataService
     /// 从腾讯财经获取指定市场的所有股票实时行情（用于选股，数据更准确）
     /// </summary>
     Task<List<Stock>> FetchAllStocksFromTencentAsync(string? market = null, int maxCount = 2000);
+    
+    /// <summary>
+    /// 获取股票基本面信息（财务数据）
+    /// </summary>
+    Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode);
 }
 
 

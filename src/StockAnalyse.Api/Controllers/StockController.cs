@@ -73,5 +73,19 @@ public class StockController : ControllerBase
         var result = await _stockDataService.CalculateMACDAsync(code);
         return Ok(new { Macd = result.macd, Signal = result.signal, Histogram = result.histogram });
     }
+
+    /// <summary>
+    /// 获取股票基本面信息
+    /// </summary>
+    [HttpGet("{code}/fundamental")]
+    public async Task<ActionResult<StockFundamentalInfo>> GetFundamental(string code)
+    {
+        var info = await _stockDataService.GetFundamentalInfoAsync(code);
+        if (info == null)
+        {
+            return NotFound();
+        }
+        return Ok(info);
+    }
 }
 

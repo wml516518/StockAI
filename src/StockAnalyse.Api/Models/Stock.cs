@@ -270,6 +270,58 @@ public class PagedResult<T>
 }
 
 /// <summary>
+/// 股票基本面信息
+/// </summary>
+public class StockFundamentalInfo
+{
+    public string StockCode { get; set; } = string.Empty;
+    public string StockName { get; set; } = string.Empty;
+    
+    // 财务数据（最新年报或季报）
+    public string? ReportDate { get; set; } // 报告期
+    public string? ReportType { get; set; } // 报告类型（年报/季报）
+    
+    // 主要财务指标
+    public decimal? TotalRevenue { get; set; } // 营业收入（万元）
+    public decimal? NetProfit { get; set; } // 净利润（万元）
+    public decimal? TotalAssets { get; set; } // 总资产（万元）
+    public decimal? TotalLiabilities { get; set; } // 总负债（万元）
+    public decimal? NetAssets { get; set; } // 净资产（万元）
+    
+    // 盈利能力
+    public decimal? ROE { get; set; } // 净资产收益率（%）
+    public decimal? ROA { get; set; } // 总资产收益率（%）
+    public decimal? GrossProfitMargin { get; set; } // 毛利率（%）
+    public decimal? NetProfitMargin { get; set; } // 净利率（%）
+    
+    // 成长性
+    public decimal? RevenueGrowthRate { get; set; } // 营收增长率（%）
+    public decimal? ProfitGrowthRate { get; set; } // 净利润增长率（%）
+    
+    // 偿债能力
+    public decimal? AssetLiabilityRatio { get; set; } // 资产负债率（%）
+    public decimal? CurrentRatio { get; set; } // 流动比率
+    public decimal? QuickRatio { get; set; } // 速动比率
+    
+    // 运营能力
+    public decimal? InventoryTurnover { get; set; } // 存货周转率
+    public decimal? AccountsReceivableTurnover { get; set; } // 应收账款周转率
+    
+    // 每股指标
+    public decimal? EPS { get; set; } // 每股收益（元）
+    public decimal? BPS { get; set; } // 每股净资产（元）
+    public decimal? CashFlowPerShare { get; set; } // 每股现金流（元）
+    
+    // 估值指标（动态）
+    public decimal? PE { get; set; } // 市盈率
+    public decimal? PB { get; set; } // 市净率
+    public decimal? PS { get; set; } // 市销率
+    public decimal? PEG { get; set; } // PEG比率
+    
+    public DateTime LastUpdate { get; set; } // 最后更新时间
+}
+
+/// <summary>
 /// 选股条件
 /// </summary>
 public class ScreenCriteria
