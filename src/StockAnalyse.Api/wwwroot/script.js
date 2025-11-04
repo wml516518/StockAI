@@ -293,20 +293,24 @@ function applyScreenSearch() {
 // 条件选股
 async function screenStocks(pageIndex = 1) {
     // 构建新的条件
-    const newCriteria = {
+        const newCriteria = {
         market: document.getElementById('market').value || null,
         minPrice: parseFloat(document.getElementById('minPrice').value) || null,
         maxPrice: parseFloat(document.getElementById('maxPrice').value) || null,
-        minChangePercent: parseFloat(document.getElementById('minChange').value) || null,
-        maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,
-        minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,
-        maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,
-        minVolume: parseFloat(document.getElementById('minVolume').value) || null,
-        maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,
-        minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,
-        maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
-        minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
-        maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,
+        minChangePercent: parseFloat(document.getElementById('minChange').value) || null,                                                                       
+        maxChangePercent: parseFloat(document.getElementById('maxChange').value) || null,                                                                       
+        minTurnoverRate: parseFloat(document.getElementById('minTurnover').value) || null,                                                                      
+        maxTurnoverRate: parseFloat(document.getElementById('maxTurnover').value) || null,                                                                      
+        minVolume: parseFloat(document.getElementById('minVolume').value) || null,                                                                              
+        maxVolume: parseFloat(document.getElementById('maxVolume').value) || null,                                                                              
+        minMarketValue: parseFloat(document.getElementById('minMarketValue').value) || null,                                                                    
+        maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,                                                                    
+        minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,                                                                
+        maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,                                                                
+        minPE: parseFloat(document.getElementById('minPE').value) || null,
+        maxPE: parseFloat(document.getElementById('maxPE').value) || null,
+        minPB: parseFloat(document.getElementById('minPB').value) || null,
+        maxPB: parseFloat(document.getElementById('maxPB').value) || null,
         pageIndex: pageIndex,
         pageSize: currentScreenPageSize
     };
@@ -329,20 +333,24 @@ async function screenStocks(pageIndex = 1) {
             return aVal === bVal;
         };
         
-        criteriaChanged = 
+                criteriaChanged =
             newCriteria.market !== currentScreenCriteria.market ||
-            !compareValue(newCriteria.minPrice, currentScreenCriteria.minPrice) ||
-            !compareValue(newCriteria.maxPrice, currentScreenCriteria.maxPrice) ||
-            !compareValue(newCriteria.minChangePercent, currentScreenCriteria.minChangePercent) ||
-            !compareValue(newCriteria.maxChangePercent, currentScreenCriteria.maxChangePercent) ||
-            !compareValue(newCriteria.minTurnoverRate, currentScreenCriteria.minTurnoverRate) ||
-            !compareValue(newCriteria.maxTurnoverRate, currentScreenCriteria.maxTurnoverRate) ||
-            !compareValue(newCriteria.minVolume, currentScreenCriteria.minVolume) ||
-            !compareValue(newCriteria.maxVolume, currentScreenCriteria.maxVolume) ||
-            !compareValue(newCriteria.minMarketValue, currentScreenCriteria.minMarketValue) ||
-            !compareValue(newCriteria.maxMarketValue, currentScreenCriteria.maxMarketValue) ||
-            !compareValue(newCriteria.minDividendYield, currentScreenCriteria.minDividendYield) ||
-            !compareValue(newCriteria.maxDividendYield, currentScreenCriteria.maxDividendYield);
+            !compareValue(newCriteria.minPrice, currentScreenCriteria.minPrice) ||                                                                              
+            !compareValue(newCriteria.maxPrice, currentScreenCriteria.maxPrice) ||                                                                              
+            !compareValue(newCriteria.minChangePercent, currentScreenCriteria.minChangePercent) ||                                                              
+            !compareValue(newCriteria.maxChangePercent, currentScreenCriteria.maxChangePercent) ||                                                              
+            !compareValue(newCriteria.minTurnoverRate, currentScreenCriteria.minTurnoverRate) ||                                                                
+            !compareValue(newCriteria.maxTurnoverRate, currentScreenCriteria.maxTurnoverRate) ||                                                                
+            !compareValue(newCriteria.minVolume, currentScreenCriteria.minVolume) ||                                                                            
+            !compareValue(newCriteria.maxVolume, currentScreenCriteria.maxVolume) ||                                                                            
+            !compareValue(newCriteria.minMarketValue, currentScreenCriteria.minMarketValue) ||                                                                  
+            !compareValue(newCriteria.maxMarketValue, currentScreenCriteria.maxMarketValue) ||                                                                  
+            !compareValue(newCriteria.minDividendYield, currentScreenCriteria.minDividendYield) ||                                                              
+            !compareValue(newCriteria.maxDividendYield, currentScreenCriteria.maxDividendYield) ||
+            !compareValue(newCriteria.minPE, currentScreenCriteria.minPE) ||
+            !compareValue(newCriteria.maxPE, currentScreenCriteria.maxPE) ||
+            !compareValue(newCriteria.minPB, currentScreenCriteria.minPB) ||
+            !compareValue(newCriteria.maxPB, currentScreenCriteria.maxPB);
     }
     
     // 如果是第一页或者条件改变，强制刷新（重新从接口获取数据）
@@ -1804,6 +1812,10 @@ class ScreenTemplateManager {
         document.getElementById('maxMarketValue').value = template.maxMarketValue || '';
         document.getElementById('minDividendYield').value = template.minDividendYield || '';
         document.getElementById('maxDividendYield').value = template.maxDividendYield || '';
+        document.getElementById('minPE').value = template.minPE || '';
+        document.getElementById('maxPE').value = template.maxPE || '';
+        document.getElementById('minPB').value = template.minPB || '';
+        document.getElementById('maxPB').value = template.maxPB || '';
     }
 
     showSaveDialog() {
@@ -1856,6 +1868,10 @@ class ScreenTemplateManager {
             maxMarketValue: parseFloat(document.getElementById('maxMarketValue').value) || null,
             minDividendYield: parseFloat(document.getElementById('minDividendYield').value) || null,
             maxDividendYield: parseFloat(document.getElementById('maxDividendYield').value) || null,
+            minPE: parseFloat(document.getElementById('minPE').value) || null,
+            maxPE: parseFloat(document.getElementById('maxPE').value) || null,
+            minPB: parseFloat(document.getElementById('minPB').value) || null,
+            maxPB: parseFloat(document.getElementById('maxPB').value) || null,
             isDefault: document.getElementById('setAsDefault').checked
         };
 
@@ -1918,21 +1934,25 @@ class ScreenTemplateManager {
         }
     }
 
-    clearForm() {
-        document.getElementById('templateSelect').value = '';
+        clearForm() {
+        document.getElementById('templateSelect').value = '';  
         document.getElementById('market').value = '';
-        document.getElementById('minPrice').value = '';
-        document.getElementById('maxPrice').value = '';
-        document.getElementById('minChange').value = '';
-        document.getElementById('maxChange').value = '';
-        document.getElementById('minTurnover').value = '';
-        document.getElementById('maxTurnover').value = '';
-        document.getElementById('minVolume').value = '';
-        document.getElementById('maxVolume').value = '';
-        document.getElementById('minMarketValue').value = '';
-        document.getElementById('maxMarketValue').value = '';
-        document.getElementById('minDividendYield').value = '';
+        document.getElementById('minPrice').value = '';        
+        document.getElementById('maxPrice').value = '';        
+        document.getElementById('minChange').value = '';       
+        document.getElementById('maxChange').value = '';       
+        document.getElementById('minTurnover').value = '';     
+        document.getElementById('maxTurnover').value = '';     
+        document.getElementById('minVolume').value = '';       
+        document.getElementById('maxVolume').value = '';       
+        document.getElementById('minMarketValue').value = '';  
+        document.getElementById('maxMarketValue').value = '';  
+        document.getElementById('minDividendYield').value = ''; 
         document.getElementById('maxDividendYield').value = '';
+        document.getElementById('minPE').value = '';
+        document.getElementById('maxPE').value = '';
+        document.getElementById('minPB').value = '';
+        document.getElementById('maxPB').value = '';
     }
 
     hideSaveDialog() {
