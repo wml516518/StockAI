@@ -32,26 +32,44 @@ public class WatchlistService : IWatchlistService
             throw new InvalidOperationException("该股票已存在于此分类");
         }
         
-        // 获取股票数据
-        var stock = await _stockDataService.GetRealTimeQuoteAsync(stockCode);
-        
-        // 如果API获取失败，尝试从数据库获取
-        if (stock == null)
+        // 重要：先检查并分离可能被跟踪的 Stock 实体，避免跟踪冲突
+        // 这是因为 StockDataService 和 WatchlistService 共享同一个 DbContext
+        var potentiallyTrackedStock = await _context.Stocks.FindAsync(stockCode);
+        if (potentiallyTrackedStock != null)
         {
-            stock = await _context.Stocks.FirstOrDefaultAsync(s => s.Code == stockCode);
+            var entry = _context.Entry(potentiallyTrackedStock);
+            if (entry.State != EntityState.Detached)
+            {
+                // 分离已跟踪的实体，让 StockDataService 可以重新查询和跟踪
+                entry.State = EntityState.Detached;
+            }
         }
         
-        // 如果仍然没有数据，创建基本股票记录
-        if (stock == null)
+        // 调用 API 获取股票数据（会自动保存到数据库）
+        // StockDataService.SaveStockDataAsync 会查询并跟踪 Stock，所以我们需要先分离
+        await _stockDataService.GetRealTimeQuoteAsync(stockCode);
+        
+        // 重新从数据库查询 Stock（StockDataService 已经保存并跟踪了它）
+        // 使用 Find 会优先返回已跟踪的实体
+        var dbStock = await _context.Stocks.FindAsync(stockCode);
+        
+        // 如果 Find 返回 null（理论上不应该），使用 FirstOrDefault 查询
+        if (dbStock == null)
         {
-            stock = new Stock
+            dbStock = await _context.Stocks.FirstOrDefaultAsync(s => s.Code == stockCode);
+        }
+        
+        // 如果数据库中仍然不存在，创建基本股票记录
+        if (dbStock == null)
+        {
+            dbStock = new Stock
             {
                 Code = stockCode,
                 Name = "未知",
                 Market = stockCode.StartsWith("6") ? "SH" : "SZ",
                 LastUpdate = DateTime.Now
             };
-            await _context.Stocks.AddAsync(stock);
+            await _context.Stocks.AddAsync(dbStock);
             await _context.SaveChangesAsync();
         }
         
@@ -69,6 +87,12 @@ public class WatchlistService : IWatchlistService
         await _context.WatchlistStocks.AddAsync(watchlistStock);
         await _context.SaveChangesAsync();
         
+        // 重新加载以包含导航属性（使用 Include 加载 Stock，确保使用被跟踪的实体）
+        watchlistStock = await _context.WatchlistStocks
+            .Include(w => w.Category)
+            .Include(w => w.Stock)
+            .FirstOrDefaultAsync(w => w.Id == watchlistStock.Id);
+        
         // 计算盈亏
         watchlistStock = await CalculateProfitLossAsync(watchlistStock.Id);
         
@@ -77,15 +101,85 @@ public class WatchlistService : IWatchlistService
 
     public async Task<bool> RemoveFromWatchlistAsync(int watchlistStockId)
     {
-        var item = await _context.WatchlistStocks.FindAsync(watchlistStockId);
-        if (item == null)
+        try
         {
-            return false;
+            // 先查询要删除的自选股，获取 StockCode
+            var watchlistItem = await _context.WatchlistStocks
+                .AsNoTracking()
+                .Where(w => w.Id == watchlistStockId)
+                .Select(w => new { w.Id, w.StockCode })
+                .FirstOrDefaultAsync();
+            
+            if (watchlistItem == null)
+            {
+                _logger.LogWarning("删除自选股失败：未找到 ID 为 {Id} 的自选股", watchlistStockId);
+                return false;
+            }
+            
+            var stockCode = watchlistItem.StockCode;
+            
+            // 删除 WatchlistStock
+            var deleted = await _context.WatchlistStocks
+                .Where(w => w.Id == watchlistStockId)
+                .ExecuteDeleteAsync();
+            
+            if (deleted == 0)
+            {
+                _logger.LogWarning("删除自选股失败：ExecuteDelete 返回 0，ID: {Id}", watchlistStockId);
+                return false;
+            }
+            
+            _logger.LogInformation("成功删除自选股，ID: {Id}，股票代码: {StockCode}", watchlistStockId, stockCode);
+            
+            // 检查该股票是否还有其他自选股记录
+            var hasOtherWatchlist = await _context.WatchlistStocks
+                .AnyAsync(w => w.StockCode == stockCode);
+            
+            if (!hasOtherWatchlist)
+            {
+                // 没有其他自选股记录，检查是否有历史数据
+                var hasHistory = await _context.StockHistories
+                    .AnyAsync(h => h.StockCode == stockCode);
+                
+                if (!hasHistory)
+                {
+                    // 既没有其他自选股，也没有历史数据，删除 Stock
+                    // 先检查并分离可能被跟踪的 Stock 实体，避免跟踪冲突
+                    var trackedStock = _context.ChangeTracker.Entries<Stock>()
+                        .FirstOrDefault(e => e.Entity.Code == stockCode);
+                    
+                    if (trackedStock != null && trackedStock.State != EntityState.Detached)
+                    {
+                        trackedStock.State = EntityState.Detached;
+                    }
+                    
+                    // 使用 ExecuteDeleteAsync 直接执行 SQL，不加载实体，避免跟踪冲突
+                    var stockDeleted = await _context.Stocks
+                        .Where(s => s.Code == stockCode)
+                        .ExecuteDeleteAsync();
+                    
+                    if (stockDeleted > 0)
+                    {
+                        _logger.LogInformation("成功删除股票记录，股票代码: {StockCode}（已无自选股和历史数据）", stockCode);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("保留股票记录，股票代码: {StockCode}（存在历史数据）", stockCode);
+                }
+            }
+            else
+            {
+                _logger.LogInformation("保留股票记录，股票代码: {StockCode}（仍有其他自选股记录）", stockCode);
+            }
+            
+            return true;
         }
-        
-        _context.WatchlistStocks.Remove(item);
-        await _context.SaveChangesAsync();
-        return true;
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "删除自选股时发生异常，ID: {Id}，错误: {Message}", watchlistStockId, ex.Message);
+            throw;
+        }
     }
 
     public async Task<WatchlistStock> UpdateCostInfoAsync(int id, decimal? costPrice, decimal? quantity)
@@ -129,16 +223,46 @@ public class WatchlistService : IWatchlistService
 
     public async Task<Dictionary<string, List<WatchlistStock>>> GetWatchlistGroupedByCategoryAsync()
     {
+        // 使用 AsNoTracking 避免跟踪实体，防止后续设置 Stock 时冲突
         var items = await _context.WatchlistStocks
             .Include(w => w.Category)
+            .AsNoTracking()
             .ToListAsync();
             
-        // 为每个自选股获取实时行情数据，而不是使用数据库中的缓存数据
+        // 批量获取所有股票代码的实时行情（并行处理，提高性能）
+        var stockCodes = items.Select(w => w.StockCode).Distinct().ToList();
+        var realTimeStocks = await _stockDataService.GetBatchQuotesAsync(stockCodes);
+        
+        // 创建 Stock 字典，确保 Stock 对象未被跟踪
+        // GetBatchQuotesAsync 返回的 Stock 是新创建的对象，不应该被跟踪
+        // 但为了安全起见，我们仍然检查并分离可能被跟踪的实体
+        var stockDict = new Dictionary<string, Stock>();
+        foreach (var stock in realTimeStocks)
+        {
+            if (stock != null)
+            {
+                // 检查 Stock 是否已被跟踪，如果已跟踪则分离
+                // 使用 ChangeTracker 来检查实体是否被跟踪
+                var trackedEntity = _context.ChangeTracker.Entries<Stock>()
+                    .FirstOrDefault(e => e.Entity.Code == stock.Code);
+                
+                if (trackedEntity != null && trackedEntity.State != EntityState.Detached)
+                {
+                    trackedEntity.State = EntityState.Detached;
+                }
+                
+                stockDict[stock.Code] = stock;
+            }
+        }
+        
+        // 为每个自选股设置实时行情数据
         foreach (var item in items)
         {
-            var realTimeStock = await _stockDataService.GetWatchlistRealTimeQuoteAsync(item.StockCode);
-            if (realTimeStock != null)
+            if (stockDict.TryGetValue(item.StockCode, out var realTimeStock))
             {
+                // 直接设置 Stock 对象
+                // 因为使用了 AsNoTracking，WatchlistStock 未被跟踪
+                // Stock 对象也是新创建的，未被跟踪
                 item.Stock = realTimeStock;
             }
         }
@@ -159,15 +283,44 @@ public class WatchlistService : IWatchlistService
     {
         var item = await _context.WatchlistStocks
             .Include(w => w.Stock)
+            .Include(w => w.Category)
             .FirstOrDefaultAsync(w => w.Id == id);
             
-        if (item?.Stock == null)
+        if (item == null)
         {
             throw new KeyNotFoundException("自选股不存在");
         }
         
         // 获取最新价格（使用专门的自选股实时数据方法）
         var stock = await _stockDataService.GetWatchlistRealTimeQuoteAsync(item.StockCode);
+        
+        // 更新Stock数据
+        if (stock != null)
+        {
+            // 检查并分离可能被跟踪的 Stock 实体，避免冲突
+            // 先分离 item.Stock（如果存在且被跟踪）
+            if (item.Stock != null)
+            {
+                var trackedStock = _context.ChangeTracker.Entries<Stock>()
+                    .FirstOrDefault(e => e.Entity.Code == item.Stock.Code);
+                
+                if (trackedStock != null && trackedStock.State != EntityState.Detached)
+                {
+                    trackedStock.State = EntityState.Detached;
+                }
+            }
+            
+            // 分离新获取的 stock（如果被跟踪）
+            var trackedNewStock = _context.ChangeTracker.Entries<Stock>()
+                .FirstOrDefault(e => e.Entity.Code == stock.Code);
+            
+            if (trackedNewStock != null && trackedNewStock.State != EntityState.Detached)
+            {
+                trackedNewStock.State = EntityState.Detached;
+            }
+            
+            item.Stock = stock;
+        }
         
         if (stock != null && item.CostPrice.HasValue && item.Quantity.HasValue && item.CostPrice.Value > 0)
         {
@@ -230,6 +383,7 @@ public class WatchlistService : IWatchlistService
     {
         var item = await _context.WatchlistStocks
             .Include(w => w.Category)
+            .Include(w => w.Stock)
             .FirstOrDefaultAsync(w => w.Id == id);
             
         if (item == null)
@@ -257,6 +411,43 @@ public class WatchlistService : IWatchlistService
         item.LastUpdate = DateTime.Now;
         
         await _context.SaveChangesAsync();
+        
+        // 重新加载以获取更新后的Category
+        item = await _context.WatchlistStocks
+            .Include(w => w.Category)
+            .Include(w => w.Stock)
+            .FirstOrDefaultAsync(w => w.Id == id);
+        
+        // 如果Stock数据不存在，获取实时行情
+        if (item != null && item.Stock == null)
+        {
+            var stock = await _stockDataService.GetWatchlistRealTimeQuoteAsync(item.StockCode);
+            if (stock != null)
+            {
+                // 检查并分离可能被跟踪的 Stock 实体，避免冲突
+                var trackedStock = _context.ChangeTracker.Entries<Stock>()
+                    .FirstOrDefault(e => e.Entity.Code == stock.Code);
+                
+                if (trackedStock != null && trackedStock.State != EntityState.Detached)
+                {
+                    trackedStock.State = EntityState.Detached;
+                }
+                
+                // 如果 item.Stock 已被跟踪，也分离它
+                if (item.Stock != null)
+                {
+                    var trackedItemStock = _context.ChangeTracker.Entries<Stock>()
+                        .FirstOrDefault(e => e.Entity.Code == item.Stock.Code);
+                    
+                    if (trackedItemStock != null && trackedItemStock.State != EntityState.Detached)
+                    {
+                        trackedItemStock.State = EntityState.Detached;
+                    }
+                }
+                
+                item.Stock = stock;
+            }
+        }
         
         return item;
     }
@@ -336,4 +527,5 @@ public class WatchlistService : IWatchlistService
         return item;
     }
 }
+
 

@@ -93,23 +93,37 @@ public class StockDataService : IStockDataService
     public async Task<List<Stock>> GetBatchQuotesAsync(IEnumerable<string> stockCodes)
     {
         var codes = stockCodes.ToList();
-        var stocks = new List<Stock>();
         
-        foreach (var code in codes)
+        // 并行获取所有股票行情，提高性能
+        var tasks = codes.Select(async code =>
         {
-            var stock = await GetRealTimeQuoteAsync(code);
-            if (stock != null)
+            try
             {
-                stocks.Add(stock);
+                // 使用 GetWatchlistRealTimeQuoteAsync 获取实时行情（不保存到数据库）
+                return await GetWatchlistRealTimeQuoteAsync(code);
             }
-        }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "批量获取股票 {Code} 行情失败", code);
+                return null;
+            }
+        });
         
-        return stocks;
+        var results = await Task.WhenAll(tasks);
+        
+        return results.Where(s => s != null).ToList();
     }
 
     public async Task SaveStockDataAsync(Stock stock)
     {
-        var existing = await _context.Stocks.FirstOrDefaultAsync(s => s.Code == stock.Code);
+        // 优先使用 Find 方法获取已跟踪的实体，避免跟踪冲突
+        var existing = await _context.Stocks.FindAsync(stock.Code);
+        
+        // 如果 Find 返回 null，说明实体未被跟踪，使用 FirstOrDefault 查询
+        if (existing == null)
+        {
+            existing = await _context.Stocks.FirstOrDefaultAsync(s => s.Code == stock.Code);
+        }
         
         if (existing != null)
         {
@@ -132,8 +146,19 @@ public class StockDataService : IStockDataService
         }
         else
         {
-            stock.LastUpdate = DateTime.Now;
-            await _context.Stocks.AddAsync(stock);
+            // 检查传入的 stock 是否已被跟踪
+            var entry = _context.Entry(stock);
+            if (entry.State == EntityState.Detached)
+            {
+                // 如果传入的 stock 未被跟踪，直接添加
+                stock.LastUpdate = DateTime.Now;
+                await _context.Stocks.AddAsync(stock);
+            }
+            else
+            {
+                // 如果传入的 stock 已被跟踪，更新它
+                stock.LastUpdate = DateTime.Now;
+            }
         }
         
         await _context.SaveChangesAsync();

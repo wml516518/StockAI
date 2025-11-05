@@ -291,7 +291,8 @@ const loadSettings = () => {
   
   if (savedInterval) {
     const interval = parseFloat(savedInterval)
-    watchlistStore.refreshInterval = interval
+    // 直接更新 store 中的 ref，避免写入 computed 属性
+    watchlistStore.$patch({ refreshInterval: interval })
     refreshInterval.value = interval
   } else {
     refreshInterval.value = watchlistStore.refreshInterval
@@ -307,11 +308,20 @@ const loadSettings = () => {
 }
 
 const startAutoRefresh = () => {
-  if (refreshTimer) clearInterval(refreshTimer)
+  // 先清除现有定时器，避免重复创建
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+  
   if (autoRefreshEnabled.value) {
     const intervalSeconds = refreshInterval.value || watchlistStore.refreshInterval || 3
+    console.log('启动自动刷新，间隔:', intervalSeconds, '秒')
     refreshTimer = setInterval(() => {
-      watchlistStore.refreshPrices()
+      // 只有在有股票时才刷新
+      if (watchlistStore.stocks.length > 0) {
+        watchlistStore.refreshPrices()
+      }
     }, intervalSeconds * 1000)
   }
 }
@@ -348,7 +358,27 @@ const handleAddStock = async () => {
     )
     form.value = { stockCode: '', categoryId: '', costPrice: null, quantity: null }
   } catch (error) {
-    alert('添加失败: ' + (error.response?.data?.message || error.message))
+    // 提取友好的错误消息
+    let errorMessage = '添加失败，请稍后重试'
+    
+    if (error.response) {
+      const responseData = error.response.data
+      
+      // 后端返回的字符串错误消息（如："该股票已存在于此分类"）
+      if (typeof responseData === 'string' && responseData.trim()) {
+        errorMessage = responseData
+      } 
+      // JSON格式的错误响应
+      else if (responseData && typeof responseData === 'object') {
+        errorMessage = responseData.message || responseData.error || errorMessage
+      }
+    } else if (error.message && !error.message.includes('status code')) {
+      // 如果不是技术性错误消息，使用原始消息
+      errorMessage = error.message
+    }
+    
+    // 显示友好的错误提示
+    alert(errorMessage)
   }
 }
 

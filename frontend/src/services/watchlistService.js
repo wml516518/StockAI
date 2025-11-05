@@ -1,9 +1,11 @@
 import api from './api'
 
 export const watchlistService = {
-  // 获取所有自选股
+  // 获取所有自选股（增加超时时间）
   getWatchlist() {
-    return api.get('/watchlist')
+    return api.get('/watchlist', {
+      timeout: 90000 // 90秒超时，因为批量获取可能需要较长时间
+    })
   },
 
   // 添加自选股

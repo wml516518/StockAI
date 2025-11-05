@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000, // 默认30秒，特定请求可以覆盖
+  timeout: 60000, // 增加到60秒，因为批量获取自选股可能需要更长时间
   headers: {
     'Content-Type': 'application/json'
   },
@@ -27,6 +27,12 @@ api.interceptors.response.use(
     return response.data
   },
   error => {
+    // 如果是400错误且返回的是字符串，保持原始格式以便前端解析
+    if (error.response?.status === 400 && typeof error.response.data === 'string') {
+      // 保持原始错误格式，让前端可以访问error.response.data
+      return Promise.reject(error)
+    }
+    
     console.error('API Error:', error)
     console.error('错误代码:', error.code)
     console.error('错误消息:', error.message)

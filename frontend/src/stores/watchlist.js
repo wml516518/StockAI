@@ -81,10 +81,20 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   // 添加自选股
   async function addStock(stockCode, categoryId, costPrice, quantity) {
     try {
-      await watchlistService.addStock(stockCode, categoryId, costPrice, quantity)
-      await fetchWatchlist()
+      const newStock = await watchlistService.addStock(stockCode, categoryId, costPrice, quantity)
+      // 直接将新股票添加到列表，不重新获取整个列表
+      // 获取实时行情数据（单独获取，不触发批量刷新）
+      const realTimeStock = await stockService.getStock(stockCode)
+      if (realTimeStock) {
+        newStock.stock = realTimeStock
+      }
+      // 添加到列表
+      stocks.value.push(newStock)
+      // 注意：不要在这里调用 refreshPrices，因为自动刷新定时器会处理
+      return newStock
     } catch (error) {
       console.error('添加自选股失败:', error)
+      // 保持原始错误信息，让调用方处理
       throw error
     }
   }
@@ -93,7 +103,11 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   async function removeStock(id) {
     try {
       await watchlistService.removeStock(id)
-      await fetchWatchlist()
+      // 只从列表中移除，不重新获取整个列表
+      const index = stocks.value.findIndex(s => s.id === id)
+      if (index !== -1) {
+        stocks.value.splice(index, 1)
+      }
     } catch (error) {
       console.error('删除自选股失败:', error)
       throw error
@@ -125,8 +139,16 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   // 更新自选股分类
   async function updateCategory(id, categoryId) {
     try {
-      await watchlistService.updateCategory(id, categoryId)
-      await fetchWatchlist()
+      const updatedStock = await watchlistService.updateCategory(id, categoryId)
+      // 只更新对应的股票项，不重新获取整个列表
+      const index = stocks.value.findIndex(s => s.id === id)
+      if (index !== -1) {
+        // 更新分类相关字段
+        stocks.value[index].watchlistCategoryId = updatedStock.watchlistCategoryId
+        stocks.value[index].category = updatedStock.category || updatedStock.Category
+        stocks.value[index].lastUpdate = updatedStock.lastUpdate
+      }
+      return updatedStock
     } catch (error) {
       console.error('更新分类失败:', error)
       throw error
@@ -155,12 +177,22 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   }
 
   // 刷新股票价格
+  // 防止并发刷新
+  let isRefreshing = false
+  
   async function refreshPrices() {
-    if (!autoRefreshEnabled.value || stocks.value.length === 0) return
+    // 如果正在刷新或未启用自动刷新或没有股票，直接返回
+    if (isRefreshing || !autoRefreshEnabled.value || stocks.value.length === 0) {
+      return
+    }
     
     try {
+      isRefreshing = true
       const codes = stocks.value.map(s => s.stockCode)
-      if (codes.length === 0) return
+      if (codes.length === 0) {
+        isRefreshing = false
+        return
+      }
       
       const updatedStocks = await stockService.getBatchStocks(codes)
       
@@ -271,6 +303,8 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       })
     } catch (error) {
       console.error('刷新价格失败:', error)
+    } finally {
+      isRefreshing = false
     }
   }
 
