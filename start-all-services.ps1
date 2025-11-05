@@ -203,6 +203,11 @@ if ($dotnetCmd) {
 }
 Write-Host ""
 
+# 等待5秒，确保Python和后端服务已完全启动
+Write-Host "  等待5秒，确保Python和后端服务已完全启动..." -ForegroundColor Gray
+Start-Sleep -Seconds 5
+Write-Host ""
+
 # [3/3] 启动前端开发服务器
 Write-Step "[3/3] 启动前端开发服务器..."
 if (-not $skipFrontend) {

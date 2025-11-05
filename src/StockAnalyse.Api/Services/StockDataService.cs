@@ -211,12 +211,12 @@ public class StockDataService : IStockDataService
             }
             
             var name = parts[0]; // 股票名称在第一个位置
-            // 新浪财经API返回的价格单位是"分"，需要除以100转换为"元"
-            var open = SafeConvertToDecimal(parts[1]) / 100;
-            var prevClose = SafeConvertToDecimal(parts[2]) / 100;
-            var current = SafeConvertToDecimal(parts[3]) / 100;
-            var high = SafeConvertToDecimal(parts[4]) / 100;
-            var low = SafeConvertToDecimal(parts[5]) / 100;
+            // 新浪财经API返回的价格单位已经是"元"，直接使用
+            var open = SafeConvertToDecimal(parts[1]);
+            var prevClose = SafeConvertToDecimal(parts[2]);
+            var current = SafeConvertToDecimal(parts[3]);
+            var high = SafeConvertToDecimal(parts[4]);
+            var low = SafeConvertToDecimal(parts[5]);
             var volume = SafeConvertToDecimal(parts[8]);
             var turnover = SafeConvertToDecimal(parts[9]);
             
