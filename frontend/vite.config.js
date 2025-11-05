@@ -32,7 +32,6 @@ export default defineConfig({
             }
           });
           proxy.on('proxyReq', (proxyReq, req, res) => {
-            console.log('代理请求:', req.method, req.url);
             // 对于AI分析请求，设置更长的超时
             if (req.url.includes('/ai/analyze')) {
               proxyReq.setTimeout(600000); // 10分钟
@@ -40,7 +39,6 @@ export default defineConfig({
             }
           });
           proxy.on('proxyRes', (proxyRes, req, res) => {
-            console.log('代理响应:', req.url, '状态码:', proxyRes.statusCode);
             // 记录响应大小
             const contentLength = proxyRes.headers['content-length'];
             if (contentLength) {

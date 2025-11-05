@@ -199,13 +199,11 @@ onMounted(async () => {
   })
 })
 
-// 组件激活时重新加载数据（用于路由切换回来时，keep-alive 会触发此钩子）
-onActivated(async () => {
+// 组件激活时恢复自动刷新（用于路由切换回来时，keep-alive 会触发此钩子）
+onActivated(() => {
   // 重新加载设置，确保使用最新的刷新间隔
   loadSettings()
-  // 重新加载数据以确保数据是最新的
-  await watchlistStore.fetchWatchlist()
-  await watchlistStore.fetchCategories()
+  // 只恢复自动刷新，不重新获取数据
   startAutoRefresh()
 })
 
