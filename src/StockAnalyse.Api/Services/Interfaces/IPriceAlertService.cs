@@ -23,5 +23,10 @@ public interface IPriceAlertService
     /// 删除提醒
     /// </summary>
     Task<bool> DeleteAlertAsync(int id);
+    
+    /// <summary>
+    /// 检查自选股建议价格提醒
+    /// </summary>
+    Task CheckSuggestedPriceAlertsAsync();
 }
 

@@ -58,10 +58,19 @@ public class WatchlistController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<List<WatchlistStock>>> GetWatchlist()
     {
-        var grouped = await _watchlistService.GetWatchlistGroupedByCategoryAsync();
-        // 将所有分类的自选股合并成一个列表
-        var allStocks = grouped.Values.SelectMany(stocks => stocks).ToList();
-        return Ok(allStocks);
+        try
+        {
+            var grouped = await _watchlistService.GetWatchlistGroupedByCategoryAsync();
+            // 将所有分类的自选股合并成一个列表
+            var allStocks = grouped.Values.SelectMany(stocks => stocks).ToList();
+            _logger.LogInformation("获取自选股列表，共 {Count} 条", allStocks.Count);
+            return Ok(allStocks);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取自选股列表失败");
+            return StatusCode(500, new { error = "获取自选股列表失败", message = ex.Message });
+        }
     }
 
     /// <summary>
@@ -175,6 +184,61 @@ public class WatchlistController : ControllerBase
             return BadRequest(ex.Message);
         }
     }
+
+    /// <summary>
+    /// 更新自选股分类
+    /// </summary>
+    [HttpPut("{id}/category")]
+    public async Task<ActionResult<WatchlistStock>> UpdateCategory(int id, [FromBody] UpdateCategoryRequest request)
+    {
+        try
+        {
+            var stock = await _watchlistService.UpdateCategoryAsync(id, request.CategoryId);
+            return Ok(stock);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 更新自选股建议价格
+    /// </summary>
+    [HttpPut("{id}/suggested-price")]
+    public async Task<ActionResult<WatchlistStock>> UpdateSuggestedPrice(int id, [FromBody] UpdateSuggestedPriceRequest request)
+    {
+        try
+        {
+            var stock = await _watchlistService.UpdateSuggestedPriceAsync(id, request.SuggestedBuyPrice, request.SuggestedSellPrice);
+            return Ok(stock);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 重置自选股提醒标志
+    /// </summary>
+    [HttpPost("{id}/reset-alerts")]
+    public async Task<ActionResult<WatchlistStock>> ResetAlertFlags(int id, [FromBody] ResetAlertFlagsRequest request)
+    {
+        try
+        {
+            var stock = await _watchlistService.ResetAlertFlagsAsync(id, request.CurrentPrice);
+            return Ok(stock);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
 }
 
 public class AddWatchlistRequest
@@ -202,5 +266,21 @@ public class CreateCategoryRequest
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string Color { get; set; } = "#1890ff";
+}
+
+public class UpdateCategoryRequest
+{
+    public int CategoryId { get; set; }
+}
+
+public class UpdateSuggestedPriceRequest
+{
+    public decimal? SuggestedBuyPrice { get; set; }
+    public decimal? SuggestedSellPrice { get; set; }
+}
+
+public class ResetAlertFlagsRequest
+{
+    public decimal CurrentPrice { get; set; }
 }
 

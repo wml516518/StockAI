@@ -41,6 +41,28 @@ export const watchlistService = {
       description,
       color
     })
+  },
+
+  // 更新自选股分类
+  updateCategory(id, categoryId) {
+    return api.put(`/watchlist/${id}/category`, {
+      categoryId
+    })
+  },
+
+  // 更新建议价格
+  updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice) {
+    return api.put(`/watchlist/${id}/suggested-price`, {
+      suggestedBuyPrice,
+      suggestedSellPrice
+    })
+  },
+
+  // 重置提醒标志
+  resetAlertFlags(id, currentPrice) {
+    return api.post(`/watchlist/${id}/reset-alerts`, {
+      currentPrice
+    })
   }
 }
 

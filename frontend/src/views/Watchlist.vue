@@ -88,6 +88,16 @@
                     <div class="stock-code">{{ stock.stockCode }}</div>
                   </div>
                   <div class="stock-actions">
+                    <select 
+                      :value="stock.watchlistCategoryId || stock.category?.id || stock.Category?.id" 
+                      @change="handleCategoryChange(stock.id, $event.target.value)"
+                      class="category-select"
+                      title="切换分类"
+                    >
+                      <option v-for="cat in categories" :key="cat.id" :value="cat.id">
+                        {{ cat.name || cat.Name }}
+                      </option>
+                    </select>
                     <button class="btn btn-small btn-info" @click="handleAIAnalyze(stock.stockCode)" title="AI分析">🤖 AI分析</button>
                     <button class="btn btn-small btn-danger" @click="handleRemoveStock(stock.id)">删除</button>
                   </div>
@@ -128,6 +138,64 @@
                   </div>
                   <div v-else>
                     未设置成本价
+                  </div>
+                </div>
+                <div class="suggested-price-section">
+                  <div class="suggested-price-header">
+                    <span>建议价格</span>
+                    <button 
+                      class="btn-icon" 
+                      @click="toggleSuggestedPriceEdit(stock.id)"
+                      :title="editingSuggestedPrice[stock.id] ? '取消编辑' : '编辑建议价格'"
+                    >
+                      {{ editingSuggestedPrice[stock.id] ? '✕' : '✎' }}
+                    </button>
+                  </div>
+                  <div v-if="editingSuggestedPrice[stock.id]" class="suggested-price-edit">
+                    <div class="price-input-group">
+                      <label>买入价:</label>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        v-model.number="suggestedPriceForm[stock.id].buyPrice"
+                        placeholder="建议买入价"
+                        class="price-input"
+                      />
+                    </div>
+                    <div class="price-input-group">
+                      <label>卖出价:</label>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        v-model.number="suggestedPriceForm[stock.id].sellPrice"
+                        placeholder="建议卖出价"
+                        class="price-input"
+                      />
+                    </div>
+                    <button 
+                      class="btn btn-small" 
+                      @click="handleSaveSuggestedPrice(stock.id)"
+                      :disabled="savingSuggestedPrice[stock.id]"
+                    >
+                      {{ savingSuggestedPrice[stock.id] ? '保存中...' : '保存' }}
+                    </button>
+                  </div>
+                  <div v-else class="suggested-price-display">
+                    <div v-if="stock.suggestedBuyPrice" class="suggested-price-item buy-price">
+                      <span class="price-label">买入:</span>
+                      <span class="price-value">{{ formatPrice(stock.suggestedBuyPrice) }}</span>
+                      <span v-if="stock.buyAlertSent" class="alert-badge" title="已达到买入价，已提醒">✓</span>
+                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) <= stock.suggestedBuyPrice" class="alert-badge alert-triggered" title="当前价格已达到买入价">🔔</span>
+                    </div>
+                    <div v-if="stock.suggestedSellPrice" class="suggested-price-item sell-price">
+                      <span class="price-label">卖出:</span>
+                      <span class="price-value">{{ formatPrice(stock.suggestedSellPrice) }}</span>
+                      <span v-if="stock.sellAlertSent" class="alert-badge" title="已达到卖出价，已提醒">✓</span>
+                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) >= stock.suggestedSellPrice" class="alert-badge alert-triggered" title="当前价格已达到卖出价">🔔</span>
+                    </div>
+                    <div v-if="!stock.suggestedBuyPrice && !stock.suggestedSellPrice" class="no-suggested-price">
+                      未设置建议价格
+                    </div>
                   </div>
                 </div>
               </div>
@@ -173,6 +241,11 @@ const categoryForm = ref({
 
 const showCreateCategory = ref(false)
 let refreshTimer = null
+
+// 建议价格编辑相关
+const editingSuggestedPrice = ref({})
+const suggestedPriceForm = ref({})
+const savingSuggestedPrice = ref({})
 
 // 组件挂载时加载数据
 onMounted(async () => {
@@ -306,9 +379,54 @@ const handleCreateCategory = async () => {
   }
 }
 
+const handleCategoryChange = async (stockId, categoryId) => {
+  try {
+    await watchlistStore.updateCategory(stockId, parseInt(categoryId))
+  } catch (error) {
+    alert('更新分类失败: ' + (error.response?.data?.message || error.message))
+    // 如果失败，重新加载数据以恢复原状态
+    await watchlistStore.fetchWatchlist()
+  }
+}
+
+const toggleSuggestedPriceEdit = (stockId) => {
+  if (editingSuggestedPrice.value[stockId]) {
+    // 取消编辑
+    delete editingSuggestedPrice.value[stockId]
+    delete suggestedPriceForm.value[stockId]
+  } else {
+    // 开始编辑
+    const stock = stocks.value.find(s => s.id === stockId)
+    editingSuggestedPrice.value[stockId] = true
+    suggestedPriceForm.value[stockId] = {
+      buyPrice: stock?.suggestedBuyPrice || null,
+      sellPrice: stock?.suggestedSellPrice || null
+    }
+  }
+}
+
+const handleSaveSuggestedPrice = async (stockId) => {
+  try {
+    savingSuggestedPrice.value[stockId] = true
+    const form = suggestedPriceForm.value[stockId]
+    await watchlistStore.updateSuggestedPrice(
+      stockId,
+      form.buyPrice || null,
+      form.sellPrice || null
+    )
+    // 立即关闭编辑模式，不等待列表刷新
+    delete editingSuggestedPrice.value[stockId]
+    delete suggestedPriceForm.value[stockId]
+  } catch (error) {
+    alert('保存建议价格失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    delete savingSuggestedPrice.value[stockId]
+  }
+}
+
 const getCategoryColor = (categoryName) => {
-  const category = categories.value.find(c => c.name === categoryName)
-  return category?.color || '#667eea'
+  const category = categories.value.find(c => (c.name || c.Name) === categoryName)
+  return category?.color || category?.Color || '#667eea'
 }
 
 const getPriceClass = (value) => {
@@ -475,6 +593,27 @@ const getStockLow = (stock) => {
   background: #138496;
 }
 
+.category-select {
+  padding: 6px 12px;
+  font-size: 0.85em;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  min-width: 100px;
+  transition: all 0.3s;
+}
+
+.category-select:hover {
+  border-color: #1890ff;
+}
+
+.category-select:focus {
+  outline: none;
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
 .price-section {
   margin: 15px 0;
 }
@@ -535,6 +674,131 @@ const getStockLow = (stock) => {
 .cost-neutral {
   background: #f5f5f5;
   color: #666;
+}
+
+.suggested-price-section {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.suggested-price-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: bold;
+  font-size: 0.9em;
+  color: #333;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.2em;
+  color: #666;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.btn-icon:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.suggested-price-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.price-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.price-input-group label {
+  min-width: 60px;
+  font-size: 0.85em;
+  color: #666;
+}
+
+.price-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.price-input:focus {
+  outline: none;
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
+.suggested-price-display {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggested-price-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+  padding: 4px 0;
+}
+
+.suggested-price-item.buy-price .price-value {
+  color: #4caf50;
+  font-weight: bold;
+}
+
+.suggested-price-item.sell-price .price-value {
+  color: #f44336;
+  font-weight: bold;
+}
+
+.price-label {
+  min-width: 50px;
+  color: #666;
+}
+
+.price-value {
+  flex: 1;
+}
+
+.alert-badge {
+  color: #4caf50;
+  font-weight: bold;
+  font-size: 1.1em;
+}
+
+.alert-badge.alert-triggered {
+  color: #ff9800;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.no-suggested-price {
+  color: #999;
+  font-size: 0.85em;
+  font-style: italic;
 }
 
 .modal {

@@ -53,5 +53,20 @@ public interface IWatchlistService
     /// 删除分类
     /// </summary>
     Task<bool> DeleteCategoryAsync(int id);
+    
+    /// <summary>
+    /// 更新自选股分类
+    /// </summary>
+    Task<WatchlistStock> UpdateCategoryAsync(int id, int categoryId);
+    
+    /// <summary>
+    /// 更新自选股建议价格
+    /// </summary>
+    Task<WatchlistStock> UpdateSuggestedPriceAsync(int id, decimal? suggestedBuyPrice, decimal? suggestedSellPrice);
+    
+    /// <summary>
+    /// 重置自选股提醒标志（当价格偏离建议价格时）
+    /// </summary>
+    Task<WatchlistStock> ResetAlertFlagsAsync(int id, decimal currentPrice);
 }
 

@@ -14,7 +14,9 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   const stocksByCategory = computed(() => {
     const grouped = {}
     stocks.value.forEach(stock => {
-      const categoryName = stock.category?.name || '未分类'
+      // 兼容PascalCase和camelCase两种命名方式
+      const category = stock.category || stock.Category
+      const categoryName = category?.name || category?.Name || '未分类'
       if (!grouped[categoryName]) {
         grouped[categoryName] = []
       }
@@ -27,9 +29,41 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   async function fetchWatchlist() {
     loading.value = true
     try {
-      stocks.value = await watchlistService.getWatchlist()
+      console.log('开始获取自选股...')
+      const response = await watchlistService.getWatchlist()
+      console.log('API返回的原始数据:', response)
+      console.log('数据类型:', typeof response)
+      console.log('是否为数组:', Array.isArray(response))
+      
+      let dataArray = []
+      
+      if (Array.isArray(response)) {
+        dataArray = response
+      } else if (response && typeof response === 'object') {
+        // 如果返回的是对象，尝试提取数组
+        dataArray = response.data || response.items || response.stocks || []
+      }
+      
+      stocks.value = dataArray
+      console.log('最终设置的自选股数量:', stocks.value.length)
+      
+      if (stocks.value.length > 0) {
+        console.log('第一条股票数据:', JSON.stringify(stocks.value[0], null, 2))
+      } else {
+        console.warn('自选股列表为空，可能的原因：')
+        console.warn('1. 数据库中确实没有自选股数据')
+        console.warn('2. API返回的数据格式不正确')
+        console.warn('3. 需要先添加自选股')
+      }
     } catch (error) {
       console.error('获取自选股失败:', error)
+      console.error('错误类型:', error.constructor.name)
+      console.error('错误消息:', error.message)
+      if (error.response) {
+        console.error('响应状态:', error.response.status)
+        console.error('响应数据:', error.response.data)
+      }
+      stocks.value = []
     } finally {
       loading.value = false
     }
@@ -84,6 +118,38 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       await fetchCategories()
     } catch (error) {
       console.error('创建分类失败:', error)
+      throw error
+    }
+  }
+
+  // 更新自选股分类
+  async function updateCategory(id, categoryId) {
+    try {
+      await watchlistService.updateCategory(id, categoryId)
+      await fetchWatchlist()
+    } catch (error) {
+      console.error('更新分类失败:', error)
+      throw error
+    }
+  }
+
+  // 更新建议价格
+  async function updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice) {
+    try {
+      const updatedStock = await watchlistService.updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice)
+      // 只更新对应的股票项，不重新获取整个列表
+      const index = stocks.value.findIndex(s => s.id === id)
+      if (index !== -1) {
+        // 更新建议价格字段，保留其他数据不变
+        stocks.value[index].suggestedBuyPrice = updatedStock.suggestedBuyPrice
+        stocks.value[index].suggestedSellPrice = updatedStock.suggestedSellPrice
+        stocks.value[index].buyAlertSent = updatedStock.buyAlertSent
+        stocks.value[index].sellAlertSent = updatedStock.sellAlertSent
+        stocks.value[index].lastUpdate = updatedStock.lastUpdate
+      }
+      return updatedStock
+    } catch (error) {
+      console.error('更新建议价格失败:', error)
       throw error
     }
   }
@@ -180,6 +246,27 @@ export const useWatchlistStore = defineStore('watchlist', () => {
           if (closePrice !== undefined && closePrice !== null) {
             stock.stock.closePrice = closePrice
           }
+          
+          // 检查并重置提醒标志（当价格偏离建议价格时）
+          if (currentPrice > 0) {
+            // 如果当前价格高于建议买入价，重置买入提醒
+            if (stock.suggestedBuyPrice && stock.buyAlertSent && currentPrice > stock.suggestedBuyPrice) {
+              stock.buyAlertSent = false
+              // 异步调用API更新后端，不等待结果（避免阻塞刷新）
+              watchlistService.resetAlertFlags(stock.id, currentPrice).catch(err => {
+                console.warn('重置买入提醒标志失败:', err)
+              })
+            }
+            
+            // 如果当前价格低于建议卖出价，重置卖出提醒
+            if (stock.suggestedSellPrice && stock.sellAlertSent && currentPrice < stock.suggestedSellPrice) {
+              stock.sellAlertSent = false
+              // 异步调用API更新后端，不等待结果（避免阻塞刷新）
+              watchlistService.resetAlertFlags(stock.id, currentPrice).catch(err => {
+                console.warn('重置卖出提醒标志失败:', err)
+              })
+            }
+          }
         }
       })
     } catch (error) {
@@ -200,6 +287,8 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     removeStock,
     updateStock,
     createCategory,
+    updateCategory,
+    updateSuggestedPrice,
     refreshPrices
   }
 })

@@ -73,6 +73,7 @@ public class AlertController : ControllerBase
     public async Task<ActionResult> CheckAlerts()
     {
         await _alertService.CheckAndTriggerAlertsAsync();
+        await _alertService.CheckSuggestedPriceAlertsAsync();
         return Ok(new { message = "检查完成" });
     }
 }

@@ -225,5 +225,115 @@ public class WatchlistService : IWatchlistService
         await _context.SaveChangesAsync();
         return true;
     }
+
+    public async Task<WatchlistStock> UpdateCategoryAsync(int id, int categoryId)
+    {
+        var item = await _context.WatchlistStocks
+            .Include(w => w.Category)
+            .FirstOrDefaultAsync(w => w.Id == id);
+            
+        if (item == null)
+        {
+            throw new KeyNotFoundException("自选股不存在");
+        }
+        
+        // 检查目标分类是否存在
+        var category = await _context.WatchlistCategories.FindAsync(categoryId);
+        if (category == null)
+        {
+            throw new KeyNotFoundException("分类不存在");
+        }
+        
+        // 检查该股票是否已在目标分类中存在
+        var existing = await _context.WatchlistStocks
+            .FirstOrDefaultAsync(w => w.StockCode == item.StockCode && w.WatchlistCategoryId == categoryId && w.Id != id);
+            
+        if (existing != null)
+        {
+            throw new InvalidOperationException("该股票已存在于目标分类中");
+        }
+        
+        item.WatchlistCategoryId = categoryId;
+        item.LastUpdate = DateTime.Now;
+        
+        await _context.SaveChangesAsync();
+        
+        return item;
+    }
+
+    public async Task<WatchlistStock> UpdateSuggestedPriceAsync(int id, decimal? suggestedBuyPrice, decimal? suggestedSellPrice)
+    {
+        var item = await _context.WatchlistStocks
+            .Include(w => w.Category)
+            .FirstOrDefaultAsync(w => w.Id == id);
+            
+        if (item == null)
+        {
+            throw new KeyNotFoundException("自选股不存在");
+        }
+        
+        // 保存旧值用于比较
+        var oldBuyPrice = item.SuggestedBuyPrice;
+        var oldSellPrice = item.SuggestedSellPrice;
+        
+        item.SuggestedBuyPrice = suggestedBuyPrice;
+        item.SuggestedSellPrice = suggestedSellPrice;
+        
+        // 如果更新了建议价格，重置提醒标志，允许重新提醒
+        if (suggestedBuyPrice.HasValue && oldBuyPrice != suggestedBuyPrice)
+        {
+            item.BuyAlertSent = false;
+        }
+        if (suggestedSellPrice.HasValue && oldSellPrice != suggestedSellPrice)
+        {
+            item.SellAlertSent = false;
+        }
+        
+        item.LastUpdate = DateTime.Now;
+        
+        await _context.SaveChangesAsync();
+        
+        return item;
+    }
+
+    public async Task<WatchlistStock> ResetAlertFlagsAsync(int id, decimal currentPrice)
+    {
+        var item = await _context.WatchlistStocks
+            .Include(w => w.Category)
+            .FirstOrDefaultAsync(w => w.Id == id);
+            
+        if (item == null)
+        {
+            throw new KeyNotFoundException("自选股不存在");
+        }
+        
+        bool needSave = false;
+        
+        // 如果当前价格高于建议买入价，重置买入提醒标志
+        if (item.SuggestedBuyPrice.HasValue && 
+            item.BuyAlertSent && 
+            currentPrice > item.SuggestedBuyPrice.Value)
+        {
+            item.BuyAlertSent = false;
+            needSave = true;
+        }
+        
+        // 如果当前价格低于建议卖出价，重置卖出提醒标志
+        if (item.SuggestedSellPrice.HasValue && 
+            item.SellAlertSent && 
+            currentPrice < item.SuggestedSellPrice.Value)
+        {
+            item.SellAlertSent = false;
+            needSave = true;
+        }
+        
+        if (needSave)
+        {
+            item.LastUpdate = DateTime.Now;
+            await _context.SaveChangesAsync();
+        }
+        
+        return item;
+    }
 }
 
