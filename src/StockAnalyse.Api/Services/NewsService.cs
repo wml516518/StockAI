@@ -374,7 +374,7 @@ public class NewsService : INewsService{
     public async Task<PagedResult<FinancialNews>> GetLatestNewsPagedAsync(int pageIndex = 1, int pageSize = 20)
     {
         // 立即输出到控制台，确保能看到
-        Console.WriteLine($"[NewsService] GetLatestNewsPagedAsync 开始: PageIndex={pageIndex}, PageSize={pageSize}");
+        _logger.LogDebug("GetLatestNewsPagedAsync 开始: PageIndex={PageIndex}, PageSize={PageSize}", pageIndex, pageSize);
         
         pageIndex = Math.Max(1, pageIndex);
         pageSize = Math.Max(1, Math.Min(100, pageSize)); // 限制每页最多100条

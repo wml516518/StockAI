@@ -912,64 +912,54 @@ public class StockDataService : IStockDataService
     /// </summary>
     public async Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode)
     {
-        Console.WriteLine($"[基本面数据] ============================================");
-        Console.WriteLine($"[基本面数据] 开始获取股票 {stockCode} 的基本面信息");
-        Console.WriteLine($"[基本面数据] ============================================");
-        
-        _logger.LogInformation("============================================");
-        _logger.LogInformation("📊 [StockDataService] 开始获取股票 {StockCode} 的基本面信息", stockCode);
-        _logger.LogInformation("============================================");
+        _logger.LogInformation("开始获取股票 {StockCode} 的基本面信息", stockCode);
         
         // 尝试多个接口，按优先级顺序
         // 方案1: 使用Python服务（AKShare数据源）- 最推荐
         var result = await TryGetFundamentalInfoFromPythonServiceAsync(stockCode);
         if (result != null)
         {
-            _logger.LogInformation("📊 [StockDataService] ✅ 从Python服务成功获取基本面信息");
+            _logger.LogInformation("从Python服务成功获取基本面信息");
             return result;
         }
         
-            // 方案2: 使用东方财富F10详情接口（直接获取财务快照）
-        Console.WriteLine($"[基本面数据] 方案2: 尝试从东方财富F10详情接口获取数据...");
+        // 方案2: 使用东方财富F10详情接口（直接获取财务快照）
+        _logger.LogDebug("方案1失败，尝试方案2：从东方财富F10详情接口获取数据");
         result = await TryGetFundamentalInfoFromF10DetailAsync(stockCode);
         if (result != null)
         {
-            Console.WriteLine($"[基本面数据] ✅ 方案2成功：从F10详情接口获取到数据");
-            _logger.LogInformation("📊 [StockDataService] ✅ 从F10详情接口成功获取基本面信息");
+            _logger.LogInformation("从F10详情接口成功获取基本面信息");
             return result;
         }
         
         // 方案3: 使用东方财富实时行情接口的扩展字段（从已知可用的接口获取）
-        Console.WriteLine($"[基本面数据] 方案3: 尝试从实时行情接口获取数据...");
+        _logger.LogDebug("方案2失败，尝试方案3：从实时行情接口获取数据");
         result = await TryGetFundamentalInfoFromRealTimeAsync(stockCode);
         if (result != null)
         {
-            Console.WriteLine($"[基本面数据] ✅ 方案3成功：从实时行情接口获取到数据");
-            _logger.LogInformation("📊 [StockDataService] ✅ 从实时行情接口成功获取基本面信息");
+            _logger.LogInformation("从实时行情接口成功获取基本面信息");
             return result;
         }
         
         // 方案4: 尝试使用F10资产负债表接口
-        Console.WriteLine($"[基本面数据] 方案4: 尝试从F10资产负债表接口获取数据...");
+        _logger.LogDebug("方案3失败，尝试方案4：从F10资产负债表接口获取数据");
         result = await TryGetFundamentalInfoFromF10Async(stockCode);
         if (result != null)
         {
-            Console.WriteLine($"[基本面数据] ✅ 方案4成功：从F10资产负债表接口获取到数据");
-            _logger.LogInformation("📊 [StockDataService] ✅ 从F10资产负债表接口成功获取基本面信息");
+            _logger.LogInformation("从F10资产负债表接口成功获取基本面信息");
             return result;
         }
         
         // 方案5: 使用财务指标接口（简化字段）
-        Console.WriteLine($"[基本面数据] 方案5: 尝试从财务指标接口获取数据...");
+        _logger.LogDebug("方案4失败，尝试方案5：从财务指标接口获取数据");
         result = await TryGetFundamentalInfoFromFinanceAsync(stockCode);
         if (result != null)
         {
-            Console.WriteLine($"[基本面数据] ✅ 方案5成功：从财务指标接口获取到数据");
-            _logger.LogInformation("📊 [StockDataService] ✅ 从财务指标接口成功获取基本面信息");
+            _logger.LogInformation("从财务指标接口成功获取基本面信息");
             return result;
         }
         
-        _logger.LogWarning("📊 [StockDataService] ❌ 所有接口均失败，返回基本估值信息");
+        _logger.LogWarning("所有接口均失败，返回基本估值信息");
         
         // 最后备用方案：至少返回PE/PB等基本信息
         var stock = await GetRealTimeQuoteAsync(stockCode);
@@ -1001,8 +991,7 @@ public class StockDataService : IStockDataService
             
             var url = $"{pythonServiceUrl}/api/stock/fundamental/{stockCode}";
             
-            Console.WriteLine($"[基本面数据-方案1] 请求Python服务: {url}");
-            _logger.LogInformation("📊 [StockDataService] 尝试Python服务: {Url}", url);
+            _logger.LogDebug("尝试Python服务获取基本面信息: {Url}", url);
             
             // 创建独立的HttpClient，设置更长的超时时间（AKShare可能需要较长时间）
             using var pythonClient = new HttpClient();
@@ -1015,11 +1004,7 @@ public class StockDataService : IStockDataService
             // 如果返回404，说明数据未找到，不是服务不可用
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务(AKShare)无法获取股票 {stockCode} 的财务数据");
-                Console.WriteLine($"[基本面数据-方案1] 💡 这是AKShare数据源的已知限制（某些创业板/科创板股票可能没有完整数据）");
-                Console.WriteLine($"[基本面数据-方案1] 🔄 系统将自动尝试其他数据源（东方财富等）...");
-                _logger.LogInformation("📊 [StockDataService] Python服务(AKShare)无法获取股票 {StockCode} 的数据，将尝试其他数据源", stockCode);
+                _logger.LogInformation("Python服务(AKShare)无法获取股票 {StockCode} 的财务数据，将尝试其他数据源", stockCode);
                 return null; // 返回null，让系统尝试其他数据源
             }
             
@@ -1027,9 +1012,7 @@ public class StockDataService : IStockDataService
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务返回错误状态码: {(int)response.StatusCode} - {response.StatusCode}");
-                Console.WriteLine($"[基本面数据-方案1] 错误详情: {errorContent}");
-                _logger.LogWarning("📊 [StockDataService] Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
+                _logger.LogWarning("Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
                 return null;
             }
             
@@ -1102,9 +1085,7 @@ public class StockDataService : IStockDataService
                         LastUpdate = DateTime.Now
                     };
                     
-                    Console.WriteLine($"[基本面数据-方案1] ✅ 从Python服务(AKShare)获取成功！");
-                    Console.WriteLine($"[基本面数据-方案1]   数据完整性: 营收={info.TotalRevenue.HasValue}, 净利润={info.NetProfit.HasValue}, ROE={info.ROE.HasValue}, EPS={info.EPS.HasValue}");
-                    _logger.LogInformation("📊 [StockDataService] ✅ 从Python服务(AKShare)获取成功 - 营收: {Revenue}万元, 净利润: {Profit}万元, ROE: {ROE}%, EPS: {EPS}元", 
+                    _logger.LogInformation("从Python服务(AKShare)获取成功 - 营收: {Revenue}万元, 净利润: {Profit}万元, ROE: {ROE}%, EPS: {EPS}元", 
                         info.TotalRevenue?.ToString("F2") ?? "N/A", 
                         info.NetProfit?.ToString("F2") ?? "N/A", 
                         info.ROE?.ToString("F2") ?? "N/A",
@@ -1121,33 +1102,23 @@ public class StockDataService : IStockDataService
             // 检查是否是404错误（数据未找到）
             if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
             {
-                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务返回404 - 股票代码 {stockCode} 的数据未找到");
-                Console.WriteLine($"[基本面数据-方案1] 💡 提示: AKShare可能无法获取该股票的数据，将尝试其他数据源");
-                _logger.LogDebug(ex, "📊 [StockDataService] Python服务返回404 - 股票代码 {StockCode} 的数据未找到", stockCode);
+                _logger.LogDebug(ex, "Python服务返回404 - 股票代码 {StockCode} 的数据未找到", stockCode);
             }
             else
             {
                 // Python服务可能未启动，这是正常的
-                Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务未启动或不可用: {ex.Message}");
-                _logger.LogDebug(ex, "📊 [StockDataService] Python服务不可用（可能未启动）");
+                _logger.LogDebug(ex, "Python服务不可用（可能未启动）");
             }
             return null;
         }
         catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
         {
-            Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务请求超时（已设置120秒超时）");
-            Console.WriteLine($"[基本面数据-方案1] 💡 提示: AKShare获取数据可能需要较长时间，系统将尝试其他数据源");
-            Console.WriteLine($"[基本面数据-方案1] 💡 如果经常超时，可以：");
-            Console.WriteLine($"[基本面数据-方案1]     1. 检查Python服务是否正常运行");
-            Console.WriteLine($"[基本面数据-方案1]     2. 检查网络连接是否正常");
-            Console.WriteLine($"[基本面数据-方案1]     3. 检查AKShare数据源是否可访问");
-            _logger.LogWarning(ex, "📊 [StockDataService] Python服务请求超时");
+            _logger.LogWarning(ex, "Python服务请求超时");
             return null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[基本面数据-方案1] ❌ 失败: {ex.Message}");
-            _logger.LogWarning(ex, "📊 [StockDataService] Python服务调用失败");
+            _logger.LogWarning(ex, "Python服务调用失败");
             return null;
         }
     }
@@ -1172,16 +1143,14 @@ public class StockDataService : IStockDataService
                     LastUpdate = DateTime.Now
                 };
                 
-                Console.WriteLine($"[基本面数据-方案1] ✅ 从实时行情接口获取基本信息成功");
-                _logger.LogInformation("📊 [StockDataService] 从实时行情接口获取PE={PE}, PB={PB}", stock.PE, stock.PB);
+                _logger.LogInformation("从实时行情接口获取PE={PE}, PB={PB}", stock.PE, stock.PB);
                 return info;
             }
             return null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[基本面数据-方案1] ❌ 失败: {ex.Message}");
-            _logger.LogWarning(ex, "📊 [StockDataService] 实时行情接口失败");
+            _logger.LogWarning(ex, "实时行情接口失败");
             return null;
         }
     }
@@ -1204,8 +1173,7 @@ public class StockDataService : IStockDataService
             // f39: 成交额, f40: 成交量, f45: 最高, f46: 最低, f47: 今开, f48: 昨收
             var url = $"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f107,f137,f43,f46,f44,f45,f47,f48,f168,f60,f170,f116,f171,f117,f172,f169,f162,f167,f10,f12,f13,f20,f21,f25,f26&fltt=2";
             
-            Console.WriteLine($"[基本面数据-方案2] 请求实时行情扩展接口");
-            _logger.LogInformation("📊 [StockDataService] 尝试实时行情扩展接口");
+            _logger.LogDebug("尝试实时行情扩展接口");
             
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
@@ -1228,15 +1196,14 @@ public class StockDataService : IStockDataService
                     LastUpdate = DateTime.Now
                 };
                 
-                Console.WriteLine($"[基本面数据-方案2] ✅ 从实时行情接口获取成功");
+                _logger.LogDebug("从实时行情接口获取成功");
                 return info;
             }
             return null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[基本面数据-方案2] ❌ 失败: {ex.Message}");
-            _logger.LogWarning(ex, "📊 [StockDataService] 实时行情接口失败");
+            _logger.LogWarning(ex, "实时行情接口失败");
             return null;
         }
     }
@@ -1255,18 +1222,14 @@ public class StockDataService : IStockDataService
             // 使用F10接口获取财务指标（更稳定的接口）
             var url = $"https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_F10_FN_BALANCE&columns=SECURITY_CODE,SECURITY_NAME_ABBR,REPORT_DATE,REPORT_TYPE,TOTAL_OPERATE_INCOME,NET_PROFIT,ROE,GROSS_PROFIT_RATE,NET_PROFIT_RATE,REVENUE_YOY_RATE,PROFIT_YOY_RATE,ASSET_LIAB_RATIO,CURRENT_RATIO,QUICK_RATIO,EPS,BPS&filter=(SECURITY_CODE=%22{stockCode}%22)&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=REPORT_DATE";
             
-            Console.WriteLine($"[基本面数据-方案1] 请求F10接口: {url}");
-            _logger.LogInformation("📊 [StockDataService] 尝试F10接口: {Url}", url);
+            _logger.LogDebug("尝试F10接口获取基本面信息: {Url}", url);
             
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
             
             var response = await _httpClient.GetStringAsync(url);
-            Console.WriteLine($"[基本面数据] API响应长度: {response.Length} 字符");
-            Console.WriteLine($"[基本面数据] API响应内容: {response}");
-            _logger.LogInformation("📊 [StockDataService] API响应长度: {Length} 字符", response.Length);
-            _logger.LogInformation("📊 [StockDataService] API响应内容: {Response}", response);
+            _logger.LogDebug("F10接口响应长度: {Length} 字符", response.Length);
             
             // 先尝试解析为JObject，以便更好地处理
             Newtonsoft.Json.Linq.JObject? jsonData = null;
@@ -1276,32 +1239,25 @@ public class StockDataService : IStockDataService
             }
             catch (Exception parseEx)
             {
-                Console.WriteLine($"[基本面数据] ❌ JSON解析失败: {parseEx.Message}");
-                Console.WriteLine($"[基本面数据] 响应内容: {response}");
-                _logger.LogError(parseEx, "📊 [StockDataService] JSON解析失败");
+                _logger.LogError(parseEx, "F10接口JSON解析失败");
                 return null;
             }
             
             // 检查API返回的数据结构
             if (jsonData == null)
             {
-                Console.WriteLine($"[基本面数据] ❌ JSON解析结果为null");
+                _logger.LogWarning("F10接口JSON解析结果为null");
                 return null;
             }
-            
-            // 打印JSON结构以便调试
-            Console.WriteLine($"[基本面数据] JSON根节点Keys: {string.Join(", ", jsonData.Properties().Select(p => p.Name))}");
             
             // 检查是否有错误信息
             if (jsonData["code"] != null)
             {
                 var code = jsonData["code"].ToString();
-                Console.WriteLine($"[基本面数据] API返回code: {code}");
                 if (code != "0" && code != "200")
                 {
                     var message = jsonData["message"]?.ToString() ?? "未知错误";
-                    Console.WriteLine($"[基本面数据] ❌ API返回错误: code={code}, message={message}");
-                    _logger.LogWarning("📊 [StockDataService] API返回错误: code={Code}, message={Message}", code, message);
+                    _logger.LogWarning("F10接口返回错误: code={Code}, message={Message}", code, message);
                     return null;
                 }
             }
@@ -1315,11 +1271,9 @@ public class StockDataService : IStockDataService
                 if (jsonData["result"]["data"] is Newtonsoft.Json.Linq.JArray array1)
                 {
                     dataArray = array1;
-                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: result.data (数组类型)");
                 }
                 else if (jsonData["result"]["data"] is Newtonsoft.Json.Linq.JObject)
                 {
-                    Console.WriteLine($"[基本面数据] ⚠️ result.data 是对象类型，尝试转换为数组");
                     // 可能是单个对象，需要转换为数组
                     dataArray = new Newtonsoft.Json.Linq.JArray { jsonData["result"]["data"] };
                 }
@@ -1331,7 +1285,6 @@ public class StockDataService : IStockDataService
                 if (jsonData["data"] is Newtonsoft.Json.Linq.JArray array2)
                 {
                     dataArray = array2;
-                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: data (数组类型)");
                 }
             }
             
@@ -1341,7 +1294,6 @@ public class StockDataService : IStockDataService
                 if (jsonData["result"] is Newtonsoft.Json.Linq.JArray array3)
                 {
                     dataArray = array3;
-                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: result (数组类型)");
                 }
             }
             
@@ -1351,45 +1303,24 @@ public class StockDataService : IStockDataService
                 if (jsonData["result"]["records"] is Newtonsoft.Json.Linq.JArray array4)
                 {
                     dataArray = array4;
-                    Console.WriteLine($"[基本面数据] ✅ 找到数据路径: result.records (数组类型)");
                 }
             }
             
             if (dataArray == null || dataArray.Count == 0)
             {
-                Console.WriteLine($"[基本面数据] ❌ 未找到有效的财务数据数组");
-                Console.WriteLine($"[基本面数据] JSON结构: {jsonData.ToString(Newtonsoft.Json.Formatting.Indented)}");
-                _logger.LogWarning("📊 [StockDataService] ❌ 未找到股票 {Code} 的财务数据（未找到有效数组）", stockCode);
-                
-                // 如果API返回了错误，尝试使用备用方案：从实时行情获取基本信息
-                Console.WriteLine($"[基本面数据] ⚠️ 尝试使用备用方案：从实时行情获取基本信息...");
-                var fallbackStock = await GetRealTimeQuoteAsync(stockCode);
-                if (fallbackStock != null)
-                {
-                    Console.WriteLine($"[基本面数据] ⚠️ 已从实时行情获取基本信息，但无法获取详细财务数据");
-                }
-                
+                _logger.LogWarning("未找到股票 {Code} 的财务数据（未找到有效数组）", stockCode);
                 return null;
             }
             
             int dataCount = dataArray.Count;
-            Console.WriteLine($"[基本面数据] ✅ 成功获取到财务数据，记录数: {dataCount}");
-            _logger.LogInformation("📊 [StockDataService] ✅ 成功获取到财务数据，记录数: {Count}", dataCount);
+            _logger.LogDebug("成功获取到财务数据，记录数: {Count}", dataCount);
             
             var financeData = dataArray[0] as Newtonsoft.Json.Linq.JObject;
             if (financeData == null)
             {
-                Console.WriteLine($"[基本面数据] ❌ 无法将第一条数据转换为JObject");
+                _logger.LogWarning("无法将第一条数据转换为JObject");
                 return null;
             }
-            
-            Console.WriteLine($"[基本面数据] 解析财务数据:");
-            
-            // 打印所有可用的字段名，便于调试
-            var availableFields = financeData.Properties().Select(p => p.Name).ToList();
-            Console.WriteLine($"[基本面数据] 可用字段: {string.Join(", ", availableFields)}");
-            
-            Console.WriteLine($"[基本面数据]   股票名称: {financeData["SECURITY_NAME_ABBR"]?.ToString() ?? "未知"}");
             
             // 尝试多种可能的日期和类型字段名
             string? reportDate = financeData["REPORT_DATE"]?.ToString() 
@@ -1403,11 +1334,7 @@ public class StockDataService : IStockDataService
                 ?? financeData["TYPE"]?.ToString()
                 ?? financeData["REPORT_TYPE"]?.ToString();
             
-            Console.WriteLine($"[基本面数据]   报告期: {reportDate ?? "未知"}");
-            Console.WriteLine($"[基本面数据]   报告类型: {reportType ?? "未知"}");
-            
             // 同时获取股票基本信息（用于获取PE、PB等）
-            Console.WriteLine($"[基本面数据] 同时获取实时行情数据以补充PE/PB等信息...");
             var stock = await GetRealTimeQuoteAsync(stockCode);
             
             var info = new StockFundamentalInfo
@@ -1462,13 +1389,12 @@ public class StockDataService : IStockDataService
                 LastUpdate = DateTime.Now
             };
             
-            Console.WriteLine($"[基本面数据-方案1] ✅ 基本面信息解析完成");
+            _logger.LogDebug("基本面信息解析完成");
             return info;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[基本面数据-方案1] ❌ 失败: {ex.Message}");
-            _logger.LogWarning(ex, "📊 [StockDataService] F10接口失败");
+            _logger.LogWarning(ex, "F10接口失败");
             return null;
         }
     }
@@ -1483,8 +1409,7 @@ public class StockDataService : IStockDataService
             // 使用更简单的财务指标接口
             var url = $"https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_LICO_FN_CPD&columns=SECURITY_CODE,SECURITY_NAME_ABBR,UPDATE_DATE,TOTAL_OPERATE_INCOME,NET_PROFIT,ROE,GROSS_PROFIT_RATE,NET_PROFIT_RATE,REVENUE_YOY_RATE,PROFIT_YOY_RATE,EPS,BPS&filter=(SECURITY_CODE=%22{stockCode}%22)&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=UPDATE_DATE";
             
-            Console.WriteLine($"[基本面数据-方案2] 请求财务指标接口: {url}");
-            _logger.LogInformation("📊 [StockDataService] 尝试财务指标接口: {Url}", url);
+            _logger.LogDebug("尝试财务指标接口: {Url}", url);
             
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
@@ -1516,13 +1441,12 @@ public class StockDataService : IStockDataService
             var stock = await GetRealTimeQuoteAsync(stockCode);
             
             var info = ParseFundamentalInfo(financeData, stockCode, stock);
-            Console.WriteLine($"[基本面数据-方案2] ✅ 解析完成");
+            _logger.LogDebug("财务指标接口解析完成");
             return info;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[基本面数据-方案2] ❌ 失败: {ex.Message}");
-            _logger.LogWarning(ex, "📊 [StockDataService] 财务指标接口失败");
+            _logger.LogWarning(ex, "财务指标接口失败");
             return null;
         }
     }
@@ -1537,8 +1461,7 @@ public class StockDataService : IStockDataService
             // 使用旧的接口（原接口，但字段已修复）
             var url = $"https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_LICO_FN_CPD&columns=SECURITY_CODE,SECURITY_NAME_ABBR,NOTICE_DATE,UPDATE_DATE,TOTAL_OPERATE_INCOME,NET_PROFIT,ROE,GROSS_PROFIT_RATE,NET_PROFIT_RATE,REVENUE_YOY_RATE,PROFIT_YOY_RATE,ASSET_LIAB_RATIO,CURRENT_RATIO,QUICK_RATIO,INVENTORY_TURNOVER,ACCOUNTS_RECEIVABLE_TURNOVER,EPS,BPS,CASH_FLOW_PER_SHARE&filter=(SECURITY_CODE=%22{stockCode}%22)&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=UPDATE_DATE";
             
-            Console.WriteLine($"[基本面数据-方案3] 请求旧接口: {url}");
-            _logger.LogInformation("📊 [StockDataService] 尝试旧接口: {Url}", url);
+            _logger.LogDebug("尝试旧接口: {Url}", url);
             
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
@@ -1570,13 +1493,12 @@ public class StockDataService : IStockDataService
             var stock = await GetRealTimeQuoteAsync(stockCode);
             
             var info = ParseFundamentalInfo(financeData, stockCode, stock);
-            Console.WriteLine($"[基本面数据-方案3] ✅ 解析完成");
+            _logger.LogDebug("旧接口解析完成");
             return info;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[基本面数据-方案3] ❌ 失败: {ex.Message}");
-            _logger.LogWarning(ex, "📊 [StockDataService] 旧接口失败");
+            _logger.LogWarning(ex, "旧接口失败");
             return null;
         }
     }
@@ -1649,7 +1571,7 @@ public class StockDataService : IStockDataService
             LastUpdate = DateTime.Now
         };
         
-        _logger.LogInformation("📊 [StockDataService] ✅ 成功解析基本面信息 - 营收: {Revenue}万元, 净利润: {Profit}万元, ROE: {ROE}%", 
+        _logger.LogDebug("成功解析基本面信息 - 营收: {Revenue}万元, 净利润: {Profit}万元, ROE: {ROE}%", 
             info.TotalRevenue?.ToString("F2") ?? "N/A", 
             info.NetProfit?.ToString("F2") ?? "N/A", 
             info.ROE?.ToString("F2") ?? "N/A");

@@ -200,6 +200,8 @@
 
 ### 环境要求
 - .NET 8.0 SDK
+- Node.js 18+ (前端开发需要)
+- Python 3.8+ (可选，用于Python数据服务)
 - Visual Studio 2022 或 VS Code
 
 ### 安装步骤
@@ -210,20 +212,65 @@ git clone <your-repo-url>
 cd StockAnalyse
 ```
 
-2. **还原依赖**
-```bash
-dotnet restore
-```
-
-3. **运行项目**
+2. **还原后端依赖**
 ```bash
 cd src/StockAnalyse.Api
-dotnet run
+dotnet restore
+cd ../..
 ```
 
-4. **访问系统**
-- Web界面：http://localhost:5000 或 https://localhost:5001
+3. **安装前端依赖（可选）**
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+4. **启动服务**
+
+**方式1：一键启动所有服务（推荐）**
+```bash
+# Windows
+start-all-services.bat
+
+# PowerShell
+.\start-all-services.ps1
+```
+
+**方式2：分别启动各个服务**
+```bash
+# 启动后端API服务
+start-backend.bat
+# 或
+cd src/StockAnalyse.Api
+dotnet run
+
+# 启动前端开发服务器（新终端）
+start-frontend-only.bat
+# 或
+cd frontend
+npm run dev
+
+# 启动Python数据服务（可选，新终端）
+cd python-data-service
+python stock_data_service.py
+```
+
+5. **访问系统**
+- 前端界面：http://localhost:5173
+- 后端API：http://localhost:5000
 - API文档：http://localhost:5000/swagger
+- Python数据服务：http://localhost:5001（如果已启动）
+
+### 脚本说明
+
+项目提供了多个便捷脚本：
+
+- `start-all-services.bat/ps1` - 一键启动所有服务（后端、前端、Python服务）
+- `start-backend.bat` - 仅启动后端API服务
+- `start-frontend-only.bat` - 仅启动前端开发服务器
+- `stop-all-services.bat/ps1` - 停止所有服务
+- `check-services.bat` - 检查各服务运行状态
 
 ## 📁 项目结构
 
@@ -582,9 +629,10 @@ POST /api/news/analyze-latest
    - API内部使用：`sz000001`、`sh600000`（系统会自动转换）
 
 2. **数据来源：**
-   - 股票行情数据来自新浪财经（仅供学习使用）
+   - 股票行情数据来自新浪财经、东方财富、腾讯财经等（仅供学习使用）
    - 实际生产环境建议使用官方或授权的数据接口
    - 新闻数据来自财联社、新浪财经等
+   - Python服务使用AKShare数据源（可选，提供更完整的财务数据）
 
 3. **定时任务：**
    - 价格提醒每60秒检查一次（可在 `Program.cs` 中调整）
@@ -600,6 +648,12 @@ POST /api/news/analyze-latest
    - 使用AI功能前必须配置至少一个AI模型
    - API Key需要妥善保管，不要提交到代码仓库
    - 建议使用环境变量或配置文件存储敏感信息
+
+6. **日志系统：**
+   - 系统使用结构化日志（ILogger），支持不同日志级别
+   - 开发环境：详细日志输出
+   - 生产环境：仅输出警告和错误日志
+   - 所有调试日志已统一使用 `_logger.LogDebug()` 而非 `Console.WriteLine()`
 
 ## 🔒 安全提示
 

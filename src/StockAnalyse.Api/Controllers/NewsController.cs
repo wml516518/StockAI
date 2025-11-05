@@ -48,9 +48,7 @@ public class NewsController : ControllerBase
     public async Task<ActionResult<PagedResult<FinancialNews>>> GetLatestPaged(int pageIndex = 1, int pageSize = 20)
     {
         // 立即输出日志，确保能看到接口被调用
-        Console.WriteLine($"============================================");
-        Console.WriteLine($"[GetLatestPaged] 接口被调用！PageIndex={pageIndex}, PageSize={pageSize}");
-        Console.WriteLine($"============================================");
+        _logger.LogInformation("GetLatestPaged 接口被调用: PageIndex={PageIndex}, PageSize={PageSize}", pageIndex, pageSize);
         
         _logger.LogInformation("============================================");
         _logger.LogInformation("📰 [NewsController] GetLatestPaged 接口被调用！");

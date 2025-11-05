@@ -32,20 +32,13 @@ public class AIController : ControllerBase
     [HttpPost("analyze/{stockCode}")]
     public async Task<ActionResult<string>> AnalyzeStock(string stockCode, [FromBody] AnalyzeRequest request)
     {
-        Console.WriteLine("============================================");
-        Console.WriteLine($"[AI分析] 开始分析股票: {stockCode}");
-        Console.WriteLine($"============================================");
-        
-        _logger.LogInformation("============================================");
-        _logger.LogInformation("🤖 [AIController] 开始分析股票: {StockCode}", stockCode);
-        _logger.LogInformation("============================================");
+        _logger.LogInformation("开始分析股票: {StockCode}", stockCode);
         
         try
         {
             // 获取股票基本面和实时行情数据
             // 注意：GetFundamentalInfoAsync会自动优先使用Python服务（AKShare），如果不可用则回退到其他数据源
-            Console.WriteLine($"[AI分析] 步骤1: 正在获取股票 {stockCode} 的基本面信息（优先使用Python服务/AKShare数据源）...");
-            _logger.LogInformation("🤖 [AIController] 步骤1: 正在获取股票基本面信息（优先使用Python服务/AKShare数据源）...");
+            _logger.LogInformation("步骤1: 正在获取股票基本面信息（优先使用Python服务/AKShare数据源）...");
             
             StockFundamentalInfo? fundamentalInfo = null;
             string? dataSource = null;
@@ -75,65 +68,36 @@ public class AIController : ControllerBase
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AI分析] ❌ 获取基本面信息时发生异常: {ex.Message}");
-                Console.WriteLine($"[AI分析] 异常类型: {ex.GetType().Name}");
-                _logger.LogError(ex, "🤖 [AIController] ❌ 获取基本面信息时发生异常");
+                _logger.LogError(ex, "获取基本面信息时发生异常");
                 // 继续执行，使用null值
             }
             
             if (fundamentalInfo != null)
             {
-                Console.WriteLine($"[AI分析] ✅ 成功获取基本面信息！数据来源: {dataSource ?? "未知"}");
-                Console.WriteLine($"[AI分析]   股票名称: {fundamentalInfo.StockName}");
-                Console.WriteLine($"[AI分析]   报告期: {fundamentalInfo.ReportDate ?? "未知"}");
-                if (!string.IsNullOrEmpty(fundamentalInfo.ReportType))
-                {
-                    Console.WriteLine($"[AI分析]   报告类型: {fundamentalInfo.ReportType}");
-                }
-                Console.WriteLine($"[AI分析]   营业收入: {(fundamentalInfo.TotalRevenue.HasValue ? fundamentalInfo.TotalRevenue.Value.ToString("F2") + "万元" : "N/A")}");
-                Console.WriteLine($"[AI分析]   净利润: {(fundamentalInfo.NetProfit.HasValue ? fundamentalInfo.NetProfit.Value.ToString("F2") + "万元" : "N/A")}");
-                Console.WriteLine($"[AI分析]   ROE: {(fundamentalInfo.ROE.HasValue ? fundamentalInfo.ROE.Value.ToString("F2") + "%" : "N/A")}");
-                Console.WriteLine($"[AI分析]   营收增长率: {(fundamentalInfo.RevenueGrowthRate.HasValue ? fundamentalInfo.RevenueGrowthRate.Value.ToString("F2") + "%" : "N/A")}");
-                Console.WriteLine($"[AI分析]   EPS: {(fundamentalInfo.EPS.HasValue ? fundamentalInfo.EPS.Value.ToString("F3") + "元" : "N/A")}");
-                Console.WriteLine($"[AI分析]   PE: {(fundamentalInfo.PE?.ToString("F2") ?? "N/A")}");
-                Console.WriteLine($"[AI分析]   PB: {(fundamentalInfo.PB?.ToString("F2") ?? "N/A")}");
-                
-                _logger.LogInformation("🤖 [AIController] ✅ 成功获取基本面信息 - 数据来源: {DataSource}, 股票: {StockName}, 报告期: {ReportDate}", 
+                _logger.LogInformation("成功获取基本面信息 - 数据来源: {DataSource}, 股票: {StockName}, 报告期: {ReportDate}", 
                     dataSource ?? "未知", fundamentalInfo.StockName, fundamentalInfo.ReportDate);
             }
             else
             {
-                Console.WriteLine($"[AI分析] ⚠️ 未能获取基本面信息，将使用实时行情数据");
-                Console.WriteLine($"[AI分析] 💡 提示: 如果Python服务未启动，请运行 start-all-services.ps1 启动所有服务");
-                _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取基本面信息，将使用实时行情数据");
+                _logger.LogWarning("未能获取基本面信息，将使用实时行情数据");
             }
             
-            Console.WriteLine($"[AI分析] 步骤2: 正在获取股票 {stockCode} 的实时行情...");
-            _logger.LogInformation("🤖 [AIController] 步骤2: 正在获取实时行情...");
+            _logger.LogInformation("步骤2: 正在获取实时行情...");
             
             var stock = await _stockDataService.GetRealTimeQuoteAsync(stockCode);
             
             if (stock != null)
             {
-                Console.WriteLine($"[AI分析] ✅ 成功获取实时行情！");
-                Console.WriteLine($"[AI分析]   股票名称: {stock.Name}");
-                Console.WriteLine($"[AI分析]   当前价格: {stock.CurrentPrice:F2}元");
-                Console.WriteLine($"[AI分析]   涨跌幅: {stock.ChangePercent:F2}%");
-                Console.WriteLine($"[AI分析]   PE: {(stock.PE?.ToString("F2") ?? "N/A")}");
-                Console.WriteLine($"[AI分析]   PB: {(stock.PB?.ToString("F2") ?? "N/A")}");
-                
-                _logger.LogInformation("🤖 [AIController] ✅ 成功获取实时行情 - 股票: {StockName}, 价格: {Price}, 涨跌幅: {ChangePercent}%", 
+                _logger.LogInformation("成功获取实时行情 - 股票: {StockName}, 价格: {Price}, 涨跌幅: {ChangePercent}%", 
                     stock.Name, stock.CurrentPrice, stock.ChangePercent);
             }
             else
             {
-                Console.WriteLine($"[AI分析] ⚠️ 未能获取实时行情");
-                _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取实时行情");
+                _logger.LogWarning("未能获取实时行情");
             }
             
             // 步骤2.4: 获取近3个月的历史交易数据
-            Console.WriteLine($"[AI分析] 步骤2.4: 正在获取股票 {stockCode} 近3个月的历史交易数据...");
-            _logger.LogInformation("🤖 [AIController] 步骤2.4: 正在获取近3个月历史交易数据...");
+            _logger.LogInformation("步骤2.4: 正在获取近3个月历史交易数据...");
             
             var endDate = DateTime.Now;
             var startDate = endDate.AddMonths(-3);
@@ -152,27 +116,17 @@ public class AIController : ControllerBase
                 }
                 int theoreticalTradingDays = totalDays - weekendDays; // 理论上限（不考虑节假日）
                 
-                Console.WriteLine($"[AI分析] 📊 数据统计：");
-                Console.WriteLine($"[AI分析]   查询时间范围：{startDate:yyyy-MM-dd} 至 {endDate:yyyy-MM-dd}");
-                Console.WriteLine($"[AI分析]   总天数：{totalDays}天");
-                Console.WriteLine($"[AI分析]   周末天数：{weekendDays}天");
-                Console.WriteLine($"[AI分析]   理论交易日（上限）：约{theoreticalTradingDays}天（实际交易日会因节假日减少）");
-                
                 // 先从数据库获取历史数据
                 historyData = await _stockDataService.GetDailyDataAsync(stockCode, startDate, endDate);
-                
-                Console.WriteLine($"[AI分析]   数据库中的历史数据：{historyData.Count}条");
                 
                 // 如果数据不足（少于理论交易日的70%），则从API拉取
                 int minExpectedDays = (int)(theoreticalTradingDays * 0.7); // 至少应该有理论交易日的70%
                 if (historyData.Count < minExpectedDays)
                 {
-                    Console.WriteLine($"[AI分析] ⚠️ 数据库中的历史数据不足（仅{historyData.Count}条，期望至少{minExpectedDays}条），正在从API拉取...");
-                    _logger.LogInformation("🤖 [AIController] 数据库历史数据不足（{Count}条，期望{Expected}条），从API拉取", historyData.Count, minExpectedDays);
+                    _logger.LogInformation("数据库历史数据不足（{Count}条，期望{Expected}条），从API拉取", historyData.Count, minExpectedDays);
                     
                     int fetchedCount = await _stockDataService.FetchAndStoreDailyHistoryAsync(stockCode, startDate, endDate);
-                    Console.WriteLine($"[AI分析] ✅ 从API拉取了 {fetchedCount} 条历史数据");
-                    _logger.LogInformation("🤖 [AIController] 从API拉取了 {Count} 条历史数据", fetchedCount);
+                    _logger.LogInformation("从API拉取了 {Count} 条历史数据", fetchedCount);
                     
                     // 重新从数据库获取
                     historyData = await _stockDataService.GetDailyDataAsync(stockCode, startDate, endDate);
@@ -203,58 +157,25 @@ public class AIController : ControllerBase
                         }
                     }
                     
-                    Console.WriteLine($"[AI分析] ✅ 成功获取 {historyData.Count} 条历史交易数据");
-                    Console.WriteLine($"[AI分析] 📊 数据验证信息：");
-                    Console.WriteLine($"[AI分析]   最早交易日：{firstDate:yyyy-MM-dd}");
-                    Console.WriteLine($"[AI分析]   最新交易日：{lastDate:yyyy-MM-dd}");
-                    Console.WriteLine($"[AI分析]   实际时间跨度：{actualDateRange:F0}天");
-                    Console.WriteLine($"[AI分析]   数据完整性：{historyData.Count}/{theoreticalTradingDays} ({historyData.Count * 100.0 / theoreticalTradingDays:F1}%)");
+                    // 数据可靠性评估
+                    double completenessRatio = historyData.Count * 100.0 / theoreticalTradingDays;
+                    
+                    _logger.LogInformation("成功获取 {Count} 条历史交易数据（时间范围：{FirstDate} 至 {LastDate}，完整度：{Completeness:F1}%）", 
+                        historyData.Count, firstDate, lastDate, completenessRatio);
                     
                     if (gaps > 0)
                     {
-                        Console.WriteLine($"[AI分析]   ⚠️ 检测到 {gaps} 个工作日可能缺失数据（可能是节假日、停牌等）");
-                        if (missingDates.Count <= 10)
-                        {
-                            Console.WriteLine($"[AI分析]   缺失日期：{string.Join(", ", missingDates.Select(d => d.ToString("yyyy-MM-dd")))}");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[AI分析]   缺失日期（前10个）：{string.Join(", ", missingDates.Take(10).Select(d => d.ToString("yyyy-MM-dd")))}...");
-                        }
+                        _logger.LogDebug("检测到 {Gaps} 个工作日可能缺失数据", gaps);
                     }
-                    else
-                    {
-                        Console.WriteLine($"[AI分析]   ✅ 数据连续性良好，无明显的日期缺失");
-                    }
-                    
-                    // 数据可靠性评估
-                    double completenessRatio = historyData.Count * 100.0 / theoreticalTradingDays;
-                    if (completenessRatio >= 85)
-                    {
-                        Console.WriteLine($"[AI分析]   ✅ 数据可靠性：优秀（完整度{completenessRatio:F1}%）");
-                    }
-                    else if (completenessRatio >= 70)
-                    {
-                        Console.WriteLine($"[AI分析]   ⚠️ 数据可靠性：良好（完整度{completenessRatio:F1}%，可能缺少部分交易日数据）");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[AI分析]   ❌ 数据可靠性：不足（完整度{completenessRatio:F1}%，建议检查数据源）");
-                    }
-                    
-                    _logger.LogInformation("🤖 [AIController] ✅ 成功获取 {Count} 条历史交易数据（时间范围：{FirstDate} 至 {LastDate}，完整度：{Completeness:F1}%）", 
-                        historyData.Count, firstDate, lastDate, completenessRatio);
                 }
                 else
                 {
-                    Console.WriteLine($"[AI分析] ⚠️ 未能获取历史交易数据");
-                    _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取历史交易数据");
+                    _logger.LogWarning("未能获取历史交易数据");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AI分析] ❌ 获取历史交易数据时发生异常: {ex.Message}");
-                _logger.LogError(ex, "🤖 [AIController] ❌ 获取历史交易数据时发生异常");
+                _logger.LogError(ex, "获取历史交易数据时发生异常");
                 // 继续执行，使用空列表
             }
             
@@ -262,8 +183,7 @@ public class AIController : ControllerBase
             string tradeDataText = "";
             try
             {
-                Console.WriteLine($"[AI分析] 步骤2.5: 获取交易数据（分时成交、买卖盘口）...");
-                _logger.LogInformation("🤖 [AIController] 步骤2.5: 获取交易数据");
+                _logger.LogInformation("步骤2.5: 获取交易数据");
                 
                 // 检查缓存（缓存5分钟）
                 var cacheKey = $"trade_data_{stockCode}";
@@ -470,7 +390,7 @@ public class AIController : ControllerBase
                                     // 缓存5分钟
                                     _cache.Set(cacheKey, tradeDataText, TimeSpan.FromMinutes(5));
                                     
-                                    Console.WriteLine($"[AI分析] ✅ 交易数据获取完成！数据长度: {tradeDataText.Length} 字符");
+                                    _logger.LogDebug("交易数据获取完成，数据长度: {Length} 字符", tradeDataText.Length);
                                     _logger.LogInformation("🤖 [AIController] ✅ 交易数据获取完成，已缓存");
                                 }
                             }
@@ -480,13 +400,13 @@ public class AIController : ControllerBase
                 else
                 {
                     tradeDataText = cachedTradeData ?? "";
-                    Console.WriteLine($"[AI分析] ✅ 使用缓存的交易数据");
+                    _logger.LogDebug("使用缓存的交易数据");
                     _logger.LogInformation("🤖 [AIController] ✅ 使用缓存的交易数据");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AI分析] ⚠️ 获取交易数据时发生异常: {ex.Message}");
+                _logger.LogWarning(ex, "获取交易数据时发生异常");
                 _logger.LogWarning(ex, "🤖 [AIController] ⚠️ 获取交易数据时发生异常");
                 // 继续执行，不影响其他分析
             }
@@ -495,7 +415,7 @@ public class AIController : ControllerBase
             string pythonAnalysisText = "";
             try
             {
-                Console.WriteLine($"[AI分析] 步骤2.6: 调用Python服务进行大数据分析（AKShare数据源）...");
+                _logger.LogInformation("步骤2.6: 调用Python服务进行大数据分析");
                 _logger.LogInformation("🤖 [AIController] 步骤2.6: 调用Python服务进行大数据分析");
                 
                 var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
@@ -508,7 +428,7 @@ public class AIController : ControllerBase
                 pythonClient.Timeout = TimeSpan.FromSeconds(180); // 增加到180秒（3分钟），因为需要获取历史数据+分析
                 pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
                 
-                Console.WriteLine($"[AI分析] 正在调用Python分析服务（超时时间：180秒）...");
+                _logger.LogDebug("正在调用Python分析服务（超时时间：180秒）");
                 var analyzeResponse = await pythonClient.GetAsync(analyzeUrl);
                 
                 if (analyzeResponse.IsSuccessStatusCode)
@@ -605,34 +525,31 @@ public class AIController : ControllerBase
 **提示：请结合以上Python大数据分析结果（技术指标、趋势分析等），结合基本面信息和历史交易数据，给出综合的投资建议和未来走势预测。**
 ";
                             
-                            Console.WriteLine($"[AI分析] ✅ Python大数据分析完成！分析结果长度: {pythonAnalysisText.Length} 字符");
+                            _logger.LogInformation("Python大数据分析完成，分析结果长度: {Length} 字符", pythonAnalysisText.Length);
                             _logger.LogInformation("🤖 [AIController] ✅ Python大数据分析完成，结果长度: {Length} 字符", pythonAnalysisText.Length);
                         }
                     }
                     else
                     {
-                        Console.WriteLine($"[AI分析] ⚠️ Python分析服务返回失败: {analyzeJson["error"]?.ToString() ?? "未知错误"}");
+                        _logger.LogWarning("Python分析服务返回失败: {Error}", analyzeJson["error"]?.ToString() ?? "未知错误");
                         _logger.LogWarning("🤖 [AIController] ⚠️ Python分析服务返回失败");
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"[AI分析] ⚠️ Python分析服务不可用（状态码: {(int)analyzeResponse.StatusCode}），将使用基础分析");
+                    _logger.LogWarning("Python分析服务不可用（状态码: {StatusCode}），将使用基础分析", (int)analyzeResponse.StatusCode);
                     _logger.LogWarning("🤖 [AIController] ⚠️ Python分析服务不可用（状态码: {StatusCode}）", (int)analyzeResponse.StatusCode);
                 }
             }
             catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
             {
-                Console.WriteLine($"[AI分析] ⚠️ Python分析服务请求超时（已设置180秒超时）");
-                Console.WriteLine($"[AI分析] 💡 提示: Python服务需要获取历史数据并计算技术指标，可能需要较长时间");
-                Console.WriteLine($"[AI分析] 💡 系统将继续使用基础历史数据分析，不会影响AI分析结果");
+                _logger.LogWarning("Python分析服务请求超时（已设置180秒超时），将使用基础历史数据分析");
                 _logger.LogWarning(ex, "🤖 [AIController] ⚠️ Python分析服务请求超时");
                 // 继续执行，使用基础分析
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AI分析] ⚠️ 调用Python分析服务时发生异常: {ex.Message}");
-                Console.WriteLine($"[AI分析] 💡 系统将继续使用基础历史数据分析");
+                _logger.LogWarning(ex, "调用Python分析服务时发生异常，将使用基础历史数据分析");
                 _logger.LogWarning(ex, "🤖 [AIController] ⚠️ 调用Python分析服务时发生异常");
                 // 继续执行，使用基础分析
             }
@@ -644,7 +561,7 @@ public class AIController : ControllerBase
             string historyText = "";
             if (historyData != null && historyData.Count > 0)
             {
-                Console.WriteLine($"[AI分析] 步骤3: 格式化历史交易数据...");
+                _logger.LogDebug("步骤3: 格式化历史交易数据");
                 _logger.LogInformation("🤖 [AIController] 步骤3: 格式化历史交易数据");
                 
                 // 按日期排序（从旧到新）
@@ -735,13 +652,13 @@ public class AIController : ControllerBase
 ";
                 }
                 
-                Console.WriteLine($"[AI分析] ✅ 已格式化历史交易数据，数据长度: {historyText.Length} 字符");
+                _logger.LogDebug("已格式化历史交易数据，数据长度: {Length} 字符", historyText.Length);
                 _logger.LogInformation("🤖 [AIController] ✅ 已格式化历史交易数据，长度: {Length} 字符", historyText.Length);
             }
             
             if (fundamentalInfo != null)
             {
-                Console.WriteLine($"[AI分析] 步骤4: 构建包含基本面信息的分析上下文...");
+                _logger.LogDebug("步骤4: 构建包含基本面信息的分析上下文");
                 _logger.LogInformation("🤖 [AIController] 步骤4: 构建包含基本面信息的分析上下文");
                 
                 var dataSourceNote = !string.IsNullOrEmpty(dataSource) ? $"（数据来源：{dataSource}）" : "";
@@ -782,12 +699,12 @@ public class AIController : ControllerBase
                     ? fundamentalText + historyText + pythonAnalysisText + tradeDataText
                     : enhancedContext + fundamentalText + historyText + pythonAnalysisText + tradeDataText;
                 
-                Console.WriteLine($"[AI分析] ✅ 已构建包含基本面信息和历史数据的上下文，上下文长度: {enhancedContext.Length} 字符");
+                _logger.LogDebug("已构建包含基本面信息和历史数据的上下文，上下文长度: {Length} 字符", enhancedContext.Length);
                 _logger.LogInformation("🤖 [AIController] ✅ 已构建包含基本面信息和历史数据的上下文，长度: {Length} 字符", enhancedContext.Length);
             }
             else if (stock != null)
             {
-                Console.WriteLine($"[AI分析] ⚠️ 使用实时行情数据构建分析上下文（未获取到基本面数据）");
+                _logger.LogDebug("使用实时行情数据构建分析上下文（未获取到基本面数据）");
                 _logger.LogInformation("🤖 [AIController] ⚠️ 使用实时行情数据构建分析上下文（未获取到基本面数据）");
                 
                 // 如果没有基本面数据，至少提供实时行情数据
@@ -806,7 +723,7 @@ public class AIController : ControllerBase
             }
             else
             {
-                Console.WriteLine($"[AI分析] ⚠️ 既未获取到基本面数据，也未获取到实时行情数据，将使用原始上下文");
+                _logger.LogWarning("既未获取到基本面数据，也未获取到实时行情数据，将使用原始上下文");
                 _logger.LogWarning("🤖 [AIController] ⚠️ 既未获取到基本面数据，也未获取到实时行情数据，将使用原始上下文");
                 
                 // 即使没有基本面和实时行情，也尝试添加历史数据
@@ -818,12 +735,12 @@ public class AIController : ControllerBase
                 }
             }
             
-            Console.WriteLine($"[AI分析] 步骤5: 调用AI服务进行分析...");
+            _logger.LogInformation("步骤5: 调用AI服务进行分析");
             _logger.LogInformation("🤖 [AIController] 步骤5: 调用AI服务进行分析");
             
             var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, enhancedContext, request?.ModelId);
             
-            Console.WriteLine($"[AI分析] ✅ AI分析完成！结果长度: {result?.Length ?? 0} 字符");
+            _logger.LogInformation("AI分析完成，结果长度: {Length} 字符", result?.Length ?? 0);
             _logger.LogInformation("🤖 [AIController] ✅ AI分析完成，结果长度: {Length} 字符", result?.Length ?? 0);
             
             // 确保返回正确的响应格式
@@ -835,7 +752,7 @@ public class AIController : ControllerBase
             
             // 记录响应大小（用于调试）
             var responseSizeKB = (result.Length * 2) / 1024.0; // 估算JSON大小（UTF-8，每个中文字符约2字节）
-            Console.WriteLine($"[AI分析] 📊 响应大小估算: {responseSizeKB:F2} KB");
+            _logger.LogDebug("响应大小估算: {SizeKB:F2} KB", responseSizeKB);
             _logger.LogInformation("🤖 [AIController] 📊 响应大小估算: {SizeKB:F2} KB", responseSizeKB);
             
             // 如果响应太大，给出警告
@@ -855,14 +772,7 @@ public class AIController : ControllerBase
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[AI分析] ❌ 分析过程中发生错误: {ex.Message}");
-            Console.WriteLine($"[AI分析] 异常堆栈: {ex.StackTrace}");
-            
-            _logger.LogError(ex, "🤖 [AIController] ❌ 分析股票 {StockCode} 失败", stockCode);
-            
-            // 如果获取基本面数据失败，仍然尝试使用原有方式分析
-            Console.WriteLine($"[AI分析] 尝试使用原始上下文进行降级分析...");
-            _logger.LogInformation("🤖 [AIController] 尝试使用原始上下文进行降级分析");
+            _logger.LogError(ex, "分析股票 {StockCode} 失败，尝试使用原始上下文进行降级分析", stockCode);
             
             try
             {
