@@ -10,13 +10,47 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 
+// 添加响应压缩服务（支持大响应）
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
+
+// 配置压缩选项
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = System.IO.Compression.CompressionLevel.Optimal;
+});
+
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(options =>
+{
+    options.Level = System.IO.Compression.CompressionLevel.Optimal;
+});
+
 // 添加服务
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
         options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        // 增加JSON序列化大小限制，支持大响应
+        options.JsonSerializerOptions.MaxDepth = 64;
     });
+
+// 配置Kestrel服务器选项，增加请求/响应大小限制
+builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(options =>
+{
+    options.Limits.MaxRequestBodySize = 100 * 1024 * 1024; // 100MB
+    options.Limits.MaxResponseBufferSize = 100 * 1024 * 1024; // 100MB
+});
+
+// 配置请求大小限制
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 100 * 1024 * 1024; // 100MB
+});
     
 // 添加内存缓存服务（用于缓存选股结果）
 builder.Services.AddMemoryCache();
@@ -114,6 +148,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseResponseCompression(); // 启用响应压缩（支持大响应）
 app.UseStaticFiles();
 app.UseRouting();
 app.MapControllers();

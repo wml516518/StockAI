@@ -1004,12 +1004,13 @@ public class StockDataService : IStockDataService
             Console.WriteLine($"[基本面数据-方案1] 请求Python服务: {url}");
             _logger.LogInformation("📊 [StockDataService] 尝试Python服务: {Url}", url);
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.Timeout = TimeSpan.FromSeconds(30); // Python服务可能需要更长时间
+            // 创建独立的HttpClient，设置更长的超时时间（AKShare可能需要较长时间）
+            using var pythonClient = new HttpClient();
+            pythonClient.Timeout = TimeSpan.FromSeconds(120); // 增加到120秒
+            pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             
             // 使用GetAsync以便检查状态码
-            var response = await _httpClient.GetAsync(url);
+            var response = await pythonClient.GetAsync(url);
             
             // 如果返回404，说明数据未找到，不是服务不可用
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -1130,6 +1131,17 @@ public class StockDataService : IStockDataService
                 Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务未启动或不可用: {ex.Message}");
                 _logger.LogDebug(ex, "📊 [StockDataService] Python服务不可用（可能未启动）");
             }
+            return null;
+        }
+        catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
+        {
+            Console.WriteLine($"[基本面数据-方案1] ⚠️ Python服务请求超时（已设置120秒超时）");
+            Console.WriteLine($"[基本面数据-方案1] 💡 提示: AKShare获取数据可能需要较长时间，系统将尝试其他数据源");
+            Console.WriteLine($"[基本面数据-方案1] 💡 如果经常超时，可以：");
+            Console.WriteLine($"[基本面数据-方案1]     1. 检查Python服务是否正常运行");
+            Console.WriteLine($"[基本面数据-方案1]     2. 检查网络连接是否正常");
+            Console.WriteLine($"[基本面数据-方案1]     3. 检查AKShare数据源是否可访问");
+            _logger.LogWarning(ex, "📊 [StockDataService] Python服务请求超时");
             return null;
         }
         catch (Exception ex)

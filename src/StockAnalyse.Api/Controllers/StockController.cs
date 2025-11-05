@@ -87,5 +87,99 @@ public class StockController : ControllerBase
         }
         return Ok(info);
     }
+
+    /// <summary>
+    /// 验证历史数据的完整性和可靠性
+    /// </summary>
+    [HttpGet("{code}/history/validate")]
+    public async Task<ActionResult<object>> ValidateHistoryData(string code, DateTime? startDate, DateTime? endDate, int? months = 3)
+    {
+        var end = endDate ?? DateTime.Now;
+        var start = startDate ?? end.AddMonths(-(months ?? 3));
+        
+        // 计算理论交易日数量
+        int totalDays = (int)(end - start).TotalDays;
+        int weekendDays = 0;
+        for (var date = start; date <= end; date = date.AddDays(1))
+        {
+            if (date.DayOfWeek == DayOfWeek.Saturday || date.DayOfWeek == DayOfWeek.Sunday)
+                weekendDays++;
+        }
+        int theoreticalTradingDays = totalDays - weekendDays;
+        
+        // 获取实际数据
+        var histories = await _stockDataService.GetDailyDataAsync(code, start, end);
+        
+        if (histories.Count == 0)
+        {
+            return Ok(new
+            {
+                StockCode = code,
+                StartDate = start,
+                EndDate = end,
+                ActualCount = 0,
+                TheoreticalCount = theoreticalTradingDays,
+                CompletenessRatio = 0.0,
+                Status = "无数据",
+                Message = "未找到历史数据，建议从API拉取",
+                MissingDates = new List<string>()
+            });
+        }
+        
+        // 检查数据连续性
+        var sortedHistory = histories.OrderBy(h => h.TradeDate).ToList();
+        var firstDate = sortedHistory.First().TradeDate;
+        var lastDate = sortedHistory.Last().TradeDate;
+        var dateSet = sortedHistory.Select(h => h.TradeDate.Date).ToHashSet();
+        
+        var missingDates = new List<DateTime>();
+        for (var date = firstDate.Date; date <= lastDate.Date; date = date.AddDays(1))
+        {
+            if (date.DayOfWeek != DayOfWeek.Saturday && date.DayOfWeek != DayOfWeek.Sunday)
+            {
+                if (!dateSet.Contains(date))
+                {
+                    missingDates.Add(date);
+                }
+            }
+        }
+        
+        double completenessRatio = histories.Count * 100.0 / theoreticalTradingDays;
+        string status;
+        string message;
+        
+        if (completenessRatio >= 85)
+        {
+            status = "优秀";
+            message = $"数据完整度{completenessRatio:F1}%，数据可靠性高";
+        }
+        else if (completenessRatio >= 70)
+        {
+            status = "良好";
+            message = $"数据完整度{completenessRatio:F1}%，可能缺少部分交易日数据（节假日、停牌等）";
+        }
+        else
+        {
+            status = "不足";
+            message = $"数据完整度{completenessRatio:F1}%，建议检查数据源或重新拉取数据";
+        }
+        
+        return Ok(new
+        {
+            StockCode = code,
+            StartDate = start,
+            EndDate = end,
+            ActualCount = histories.Count,
+            TheoreticalCount = theoreticalTradingDays,
+            CompletenessRatio = Math.Round(completenessRatio, 2),
+            Status = status,
+            Message = message,
+            FirstTradeDate = firstDate,
+            LastTradeDate = lastDate,
+            MissingDates = missingDates.Select(d => d.ToString("yyyy-MM-dd")).ToList(),
+            MissingCount = missingDates.Count,
+            DataQuality = completenessRatio >= 85 ? "优秀" : completenessRatio >= 70 ? "良好" : "需改进"
+        });
+    }
 }
 

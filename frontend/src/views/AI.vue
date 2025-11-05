@@ -172,19 +172,62 @@ const handleAnalyze = async () => {
     const context = getAnalysisContext(analysisType.value, stockData, dataDate)
     
     // 后端接口路径是 /api/ai/analyze/{stockCode}
-    // AI分析可能需要较长时间，设置超时时间为5分钟
+    // AI分析可能需要较长时间，设置超时时间为10分钟
+    console.log('开始调用AI分析接口...')
     const response = await api.post(`/ai/analyze/${code}`, {
       context: context
     }, {
-      timeout: 300000 // 5分钟 = 300000毫秒
+      timeout: 600000 // 10分钟 = 600000毫秒（AI分析可能包含大量数据）
     })
-    result.value = response.analysis || response || '分析完成'
+    
+    console.log('AI分析响应:', response)
+    console.log('响应类型:', typeof response)
+    
+    // 后端现在返回JSON对象 { success: true, analysis: "...", length: xxx }
+    if (response && typeof response === 'object') {
+      // 优先使用analysis字段
+      if (response.analysis) {
+        result.value = response.analysis
+      } else if (response.result) {
+        result.value = response.result
+      } else if (response.message) {
+        result.value = response.message
+      } else if (typeof response === 'string') {
+        // 如果整个响应是字符串（旧格式兼容）
+        result.value = response
+      } else {
+        // 其他情况，尝试转换为字符串
+        result.value = JSON.stringify(response, null, 2)
+      }
+    } else if (typeof response === 'string') {
+      // 如果后端直接返回字符串（向后兼容）
+      result.value = response
+    } else {
+      result.value = '分析完成，但响应格式异常'
+    }
+    
+    console.log('AI分析结果已设置，长度:', result.value?.length || 0)
   } catch (error) {
     console.error('AI分析失败:', error)
+    console.error('错误详情:', {
+      code: error.code,
+      message: error.message,
+      response: error.response,
+      status: error.response?.status,
+      data: error.response?.data
+    })
+    
     if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-      result.value = '分析超时: AI分析时间过长，请稍后重试或检查AI服务配置'
+      result.value = '分析超时: AI分析时间过长（已设置10分钟超时），请稍后重试或检查AI服务配置'
+    } else if (error.message?.includes('Network Error') || error.code === 'ERR_NETWORK') {
+      result.value = '网络错误: 无法连接到后端服务。请检查：\n1. 后端服务是否正常运行\n2. 网络连接是否正常\n3. 查看浏览器控制台获取详细错误信息'
+    } else if (error.response) {
+      // HTTP错误响应
+      const status = error.response.status
+      const data = error.response.data
+      result.value = `分析失败 (HTTP ${status}): ${data?.message || data || error.message || '未知错误'}`
     } else {
-      result.value = '分析失败: ' + (error.response?.data?.message || error.message || '未知错误')
+      result.value = '分析失败: ' + (error.message || '未知错误')
     }
   } finally {
     analyzing.value = false
