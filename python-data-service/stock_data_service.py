@@ -41,63 +41,106 @@ def get_fundamental(stock_code):
     try:
         print(f"[{datetime.now()}] 请求股票基本面数据: {stock_code}")
         
-        # 方法1: 获取财务指标数据
+        # 方法1: 使用stock_financial_abstract获取财务摘要（优先方法，稳定可用）
         try:
-            # AKShare需要特定格式：6位数字代码
-            # 确保代码格式正确（去除空格，确保是6位）
             clean_code = stock_code.strip().zfill(6)
-            print(f"[{datetime.now()}] 方法1: 尝试使用股票代码: {clean_code}")
+            print(f"[{datetime.now()}] 方法1: 使用stock_financial_abstract，股票代码: {clean_code}")
             
-            # 尝试使用财务分析指标接口
-            df = ak.stock_financial_analysis_indicator_em(symbol=clean_code)
+            # 获取财务摘要数据（返回格式：行是指标，列是日期）
+            df = ak.stock_financial_abstract(symbol=clean_code)
             
-            # 检查返回结果
-            if df is None:
-                print(f"[{datetime.now()}] ⚠️ 方法1: AKShare返回None（数据源可能没有该股票的数据）")
-                raise ValueError(f"AKShare返回None，股票代码 {clean_code} 可能没有财务数据")
+            if df is None or df.empty:
+                print(f"[{datetime.now()}] ⚠️ 方法1: AKShare返回空数据")
+                raise ValueError(f"AKShare返回空数据，股票代码 {clean_code} 可能没有财务数据")
             
-            if not df.empty:
-                # 获取最新一条数据
-                latest = df.iloc[0]
-                
-                # 转换为字典
-                result = {
-                    'stockCode': stock_code,
-                    'stockName': latest.get('股票简称', '未知'),
-                    'reportDate': str(latest.get('报告期', '')),
+            # 获取股票基本信息
+            try:
+                df_info = ak.stock_individual_info_em(symbol=clean_code)
+                stock_name = '未知'
+                if df_info is not None and not df_info.empty:
+                    name_row = df_info[df_info['item'] == '股票简称']
+                    if not name_row.empty:
+                        stock_name = name_row.iloc[0]['value']
+            except:
+                stock_name = '未知'
+            
+            # 找到最新的报告期（第一列是'选项'，第二列是'指标'，后面是日期列）
+            date_columns = [col for col in df.columns if col not in ['选项', '指标']]
+            if not date_columns:
+                raise ValueError("无法找到日期列")
+            
+            # 获取最新日期（列名格式：YYYYMMDD）
+            latest_date_col = sorted(date_columns, reverse=True)[0]
+            report_date = latest_date_col
+            
+            # 定义要提取的指标及其对应的中文字段名
+            indicators_map = {
+                '归母净利润': 'netProfit',
+                '营业总收入': 'totalRevenue',
+                '基本每股收益': 'eps',
+                '每股净资产': 'bps',
+                '净资产收益率(ROE)': 'roe',  # 注意：指标名称包含(ROE)
+                '毛利率': 'grossProfitMargin',  # 注意：是"毛利率"而不是"销售毛利率"
+                '销售净利率': 'netProfitMargin',
+                '资产负债率': 'assetLiabilityRatio',
+                '流动比率': 'currentRatio',
+                '速动比率': 'quickRatio',
+                '存货周转率': 'inventoryTurnover',
+                '应收账款周转率': 'accountsReceivableTurnover',
+            }
+            
+            # 从DataFrame中提取数据
+            result = {
+                'stockCode': stock_code,
+                'stockName': stock_name,
+                'reportDate': report_date,
+                'lastUpdate': datetime.now().isoformat(),
+                'source': 'AKShare (stock_financial_abstract)'
+            }
+            
+            # 提取各项指标
+            for indicator_name, field_name in indicators_map.items():
+                indicator_row = df[df['指标'] == indicator_name]
+                if not indicator_row.empty:
+                    value = indicator_row.iloc[0][latest_date_col]
+                    if pd.notna(value):
+                        try:
+                            if field_name in ['netProfit', 'totalRevenue']:
+                                # 净利润和营业收入转换为万元
+                                result[field_name] = float(value) / 10000
+                            else:
+                                result[field_name] = float(value)
+                        except (ValueError, TypeError):
+                            result[field_name] = None
+                    else:
+                        result[field_name] = None
+                else:
+                    result[field_name] = None
+            
+            # 计算同比增长率（如果有上一期数据）
+            if len(date_columns) >= 2:
+                prev_date_col = sorted(date_columns, reverse=True)[1]
+                try:
+                    # 营业收入同比增长率
+                    revenue_row = df[df['指标'] == '营业总收入']
+                    if not revenue_row.empty:
+                        current_revenue = revenue_row.iloc[0][latest_date_col]
+                        prev_revenue = revenue_row.iloc[0][prev_date_col]
+                        if pd.notna(current_revenue) and pd.notna(prev_revenue) and prev_revenue != 0:
+                            result['revenueGrowthRate'] = ((current_revenue - prev_revenue) / prev_revenue) * 100
                     
-                    # 盈利能力
-                    'roe': float(latest.get('净资产收益率', 0)) if pd.notna(latest.get('净资产收益率')) else None,
-                    'grossProfitMargin': float(latest.get('销售毛利率', 0)) if pd.notna(latest.get('销售毛利率')) else None,
-                    'netProfitMargin': float(latest.get('销售净利率', 0)) if pd.notna(latest.get('销售净利率')) else None,
-                    
-                    # 每股指标
-                    'eps': float(latest.get('基本每股收益', 0)) if pd.notna(latest.get('基本每股收益')) else None,
-                    'bps': float(latest.get('每股净资产', 0)) if pd.notna(latest.get('每股净资产')) else None,
-                    
-                    # 营业收入和净利润（单位：万元）
-                    'totalRevenue': float(latest.get('营业总收入', 0)) / 10000 if pd.notna(latest.get('营业总收入')) else None,
-                    'netProfit': float(latest.get('净利润', 0)) / 10000 if pd.notna(latest.get('净利润')) else None,
-                    
-                    # 成长性
-                    'revenueGrowthRate': float(latest.get('营业总收入同比增长率', 0)) if pd.notna(latest.get('营业总收入同比增长率')) else None,
-                    'profitGrowthRate': float(latest.get('净利润同比增长率', 0)) if pd.notna(latest.get('净利润同比增长率')) else None,
-                    
-                    # 偿债能力
-                    'assetLiabilityRatio': float(latest.get('资产负债率', 0)) if pd.notna(latest.get('资产负债率')) else None,
-                    'currentRatio': float(latest.get('流动比率', 0)) if pd.notna(latest.get('流动比率')) else None,
-                    'quickRatio': float(latest.get('速动比率', 0)) if pd.notna(latest.get('速动比率')) else None,
-                    
-                    # 运营能力
-                    'inventoryTurnover': float(latest.get('存货周转率', 0)) if pd.notna(latest.get('存货周转率')) else None,
-                    'accountsReceivableTurnover': float(latest.get('应收账款周转率', 0)) if pd.notna(latest.get('应收账款周转率')) else None,
-                    
-                    'lastUpdate': datetime.now().isoformat(),
-                    'source': 'AKShare'
-                }
-                
-                print(f"[{datetime.now()}] ✅ 成功获取数据: {stock_code}")
-                return jsonify({'success': True, 'data': result})
+                    # 净利润同比增长率
+                    profit_row = df[df['指标'] == '归母净利润']
+                    if not profit_row.empty:
+                        current_profit = profit_row.iloc[0][latest_date_col]
+                        prev_profit = profit_row.iloc[0][prev_date_col]
+                        if pd.notna(current_profit) and pd.notna(prev_profit) and prev_profit != 0:
+                            result['profitGrowthRate'] = ((current_profit - prev_profit) / prev_profit) * 100
+                except:
+                    pass
+            
+            print(f"[{datetime.now()}] ✅ 成功获取数据: {stock_code} ({stock_name})")
+            return jsonify({'success': True, 'data': result})
         except Exception as e1:
             print(f"[{datetime.now()}] ⚠️ 方法1失败: {str(e1)}")
             print(f"[{datetime.now()}] 错误详情: {traceback.format_exc()}")

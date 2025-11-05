@@ -1043,6 +1043,23 @@ public class StockDataService : IStockDataService
                     // 同时获取股票基本信息（用于PE/PB）
                     var stock = await GetRealTimeQuoteAsync(stockCode);
                     
+                    // 辅助方法：安全地从JObject获取decimal值
+                    decimal? SafeGetDecimal(Newtonsoft.Json.Linq.JObject obj, string key)
+                    {
+                        var token = obj[key];
+                        if (token == null || token.Type == Newtonsoft.Json.Linq.JTokenType.Null)
+                            return null;
+                        try
+                        {
+                            var value = token.ToObject<decimal?>();
+                            return value;
+                        }
+                        catch
+                        {
+                            return null;
+                        }
+                    }
+                    
                     var info = new StockFundamentalInfo
                     {
                         StockCode = stockCode,
@@ -1051,30 +1068,30 @@ public class StockDataService : IStockDataService
                         ReportType = null,
                         
                         // 主要财务指标
-                        TotalRevenue = data["totalRevenue"] != null ? SafeConvertToDecimal(data["totalRevenue"]) : null,
-                        NetProfit = data["netProfit"] != null ? SafeConvertToDecimal(data["netProfit"]) : null,
+                        TotalRevenue = SafeGetDecimal(data, "totalRevenue"),
+                        NetProfit = SafeGetDecimal(data, "netProfit"),
                         
                         // 盈利能力
-                        ROE = data["roe"] != null ? SafeConvertToDecimal(data["roe"]) : null,
-                        GrossProfitMargin = data["grossProfitMargin"] != null ? SafeConvertToDecimal(data["grossProfitMargin"]) : null,
-                        NetProfitMargin = data["netProfitMargin"] != null ? SafeConvertToDecimal(data["netProfitMargin"]) : null,
+                        ROE = SafeGetDecimal(data, "roe"),
+                        GrossProfitMargin = SafeGetDecimal(data, "grossProfitMargin"),
+                        NetProfitMargin = SafeGetDecimal(data, "netProfitMargin"),
                         
                         // 成长性
-                        RevenueGrowthRate = data["revenueGrowthRate"] != null ? SafeConvertToDecimal(data["revenueGrowthRate"]) : null,
-                        ProfitGrowthRate = data["profitGrowthRate"] != null ? SafeConvertToDecimal(data["profitGrowthRate"]) : null,
+                        RevenueGrowthRate = SafeGetDecimal(data, "revenueGrowthRate"),
+                        ProfitGrowthRate = SafeGetDecimal(data, "profitGrowthRate"),
                         
                         // 偿债能力
-                        AssetLiabilityRatio = data["assetLiabilityRatio"] != null ? SafeConvertToDecimal(data["assetLiabilityRatio"]) : null,
-                        CurrentRatio = data["currentRatio"] != null ? SafeConvertToDecimal(data["currentRatio"]) : null,
-                        QuickRatio = data["quickRatio"] != null ? SafeConvertToDecimal(data["quickRatio"]) : null,
+                        AssetLiabilityRatio = SafeGetDecimal(data, "assetLiabilityRatio"),
+                        CurrentRatio = SafeGetDecimal(data, "currentRatio"),
+                        QuickRatio = SafeGetDecimal(data, "quickRatio"),
                         
                         // 运营能力
-                        InventoryTurnover = data["inventoryTurnover"] != null ? SafeConvertToDecimal(data["inventoryTurnover"]) : null,
-                        AccountsReceivableTurnover = data["accountsReceivableTurnover"] != null ? SafeConvertToDecimal(data["accountsReceivableTurnover"]) : null,
+                        InventoryTurnover = SafeGetDecimal(data, "inventoryTurnover"),
+                        AccountsReceivableTurnover = SafeGetDecimal(data, "accountsReceivableTurnover"),
                         
                         // 每股指标
-                        EPS = data["eps"] != null ? SafeConvertToDecimal(data["eps"]) : null,
-                        BPS = data["bps"] != null ? SafeConvertToDecimal(data["bps"]) : null,
+                        EPS = SafeGetDecimal(data, "eps"),
+                        BPS = SafeGetDecimal(data, "bps"),
                         CashFlowPerShare = null,
                         
                         // 估值指标（从实时行情获取，如果Python服务没有提供）

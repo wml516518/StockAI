@@ -56,8 +56,71 @@ if (-not (Test-Path "frontend\package.json")) {
 # [1/3] 启动Python数据服务
 Write-Step "[1/3] 启动Python数据服务..."
 if (-not $skipPython) {
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($pythonCmd) {
+    # 尝试多种方式检测Python
+    $pythonExe = $null
+    $pythonCommands = @("python", "py", "python3")
+    
+    # 首先尝试命令检测
+    foreach ($cmd in $pythonCommands) {
+        $pythonCmd = Get-Command $cmd -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+            # 验证Python版本
+            try {
+                $version = & $cmd --version 2>&1
+                if ($version -match "Python (\d+)\.(\d+)") {
+                    $major = [int]$matches[1]
+                    $minor = [int]$matches[2]
+                    if ($major -ge 3 -and $minor -ge 8) {
+                        $pythonExe = $cmd
+                        Write-Host "  检测到Python: $version" -ForegroundColor Gray
+                        break
+                    }
+                }
+            } catch {
+                continue
+            }
+        }
+    }
+    
+    # 如果命令检测失败，尝试常见安装路径
+    if (-not $pythonExe) {
+        $commonPaths = @(
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python39\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python38\python.exe",
+            "C:\Python312\python.exe",
+            "C:\Python311\python.exe",
+            "C:\Python310\python.exe",
+            "C:\Python39\python.exe",
+            "C:\Python38\python.exe",
+            "C:\Program Files\Python312\python.exe",
+            "C:\Program Files\Python311\python.exe",
+            "C:\Program Files\Python310\python.exe"
+        )
+        
+        foreach ($path in $commonPaths) {
+            if (Test-Path $path) {
+                try {
+                    $version = & $path --version 2>&1
+                    if ($version -match "Python (\d+)\.(\d+)") {
+                        $major = [int]$matches[1]
+                        $minor = [int]$matches[2]
+                        if ($major -ge 3 -and $minor -ge 8) {
+                            $pythonExe = $path
+                            Write-Host "  从路径检测到Python: $version" -ForegroundColor Gray
+                            break
+                        }
+                    }
+                } catch {
+                    continue
+                }
+            }
+        }
+    }
+    
+    if ($pythonExe) {
         # 检查服务是否已经在运行
         try {
             $response = Invoke-WebRequest -Uri "http://localhost:5001/health" -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
@@ -68,7 +131,16 @@ if (-not $skipPython) {
         
         if (-not $serviceRunning) {
             $pythonServicePath = Join-Path $PSScriptRoot "python-data-service"
-            Start-Process python -ArgumentList "stock_data_service.py" -WorkingDirectory $pythonServicePath -WindowStyle Minimized
+            
+            # 使用检测到的Python可执行文件启动服务
+            if ($pythonExe -match "^[a-zA-Z]+$") {
+                # 如果是命令名（如python、py），直接使用
+                Start-Process $pythonExe -ArgumentList "stock_data_service.py" -WorkingDirectory $pythonServicePath -WindowStyle Minimized
+            } else {
+                # 如果是完整路径，使用Start-Process
+                Start-Process -FilePath $pythonExe -ArgumentList "stock_data_service.py" -WorkingDirectory $pythonServicePath -WindowStyle Minimized
+            }
+            
             Start-Sleep -Seconds 3
             
             # 检查服务是否启动成功
@@ -77,12 +149,16 @@ if (-not $skipPython) {
                 Write-Success "Python服务已启动 (http://localhost:5001)"
             } catch {
                 Write-Warning "Python服务可能未完全启动，请检查"
+                Write-Host "  提示: 如果服务启动失败，请手动运行: cd python-data-service && python stock_data_service.py" -ForegroundColor Gray
             }
         } else {
             Write-Success "Python服务已在运行"
         }
     } else {
-        Write-Warning "未检测到Python，跳过Python服务"
+        Write-Warning "未检测到Python，Python服务将无法启动"
+        Write-Host "  请先安装Python 3.8+: https://www.python.org/downloads/" -ForegroundColor Yellow
+        Write-Host "  或刷新环境变量后重新打开命令行窗口" -ForegroundColor Yellow
+        Write-Host "  提示: 安装Python时请勾选 'Add Python to PATH' 选项" -ForegroundColor Gray
         $skipPython = $true
     }
 } else {
