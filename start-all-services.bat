@@ -14,7 +14,7 @@ set FRONTEND_STARTED=0
 REM 启动Python数据服务
 if exist "python-data-service\stock_data_service.py" (
     echo [1/3] 启动Python数据服务...
-    start "Python数据服务" cmd /k "cd /d %~dp0python-data-service && python stock_data_service.py"
+    start "Python数据服务" cmd /k "%~dp0python-data-service\start-service-simple.bat"
     timeout /t 2 /nobreak >nul
     echo   Python服务已启动 ^(http://localhost:5001^)
     echo.
