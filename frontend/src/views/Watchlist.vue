@@ -176,13 +176,33 @@ let refreshTimer = null
 
 // 组件挂载时加载数据
 onMounted(async () => {
+  // 从localStorage加载设置
+  loadSettings()
   await watchlistStore.fetchWatchlist()
   await watchlistStore.fetchCategories()
   startAutoRefresh()
+  
+  // 监听store中的refreshInterval变化，重新创建定时器
+  watch(() => watchlistStore.refreshInterval, (newInterval) => {
+    if (autoRefreshEnabled.value) {
+      startAutoRefresh()
+    }
+  })
+  
+  // 监听store中的autoRefreshEnabled变化
+  watch(() => watchlistStore.autoRefreshEnabled, (enabled) => {
+    if (enabled) {
+      startAutoRefresh()
+    } else {
+      stopAutoRefresh()
+    }
+  })
 })
 
 // 组件激活时重新加载数据（用于路由切换回来时，keep-alive 会触发此钩子）
 onActivated(async () => {
+  // 重新加载设置，确保使用最新的刷新间隔
+  loadSettings()
   // 重新加载数据以确保数据是最新的
   await watchlistStore.fetchWatchlist()
   await watchlistStore.fetchCategories()
@@ -193,12 +213,35 @@ onUnmounted(() => {
   stopAutoRefresh()
 })
 
+// 加载设置
+const loadSettings = () => {
+  const savedInterval = localStorage.getItem('refreshInterval')
+  const savedEnabled = localStorage.getItem('autoRefreshEnabled')
+  
+  if (savedInterval) {
+    const interval = parseFloat(savedInterval)
+    watchlistStore.refreshInterval = interval
+    refreshInterval.value = interval
+  } else {
+    refreshInterval.value = watchlistStore.refreshInterval
+  }
+  
+  if (savedEnabled !== null) {
+    const enabled = savedEnabled === 'true'
+    watchlistStore.autoRefreshEnabled = enabled
+    autoRefreshEnabled.value = enabled
+  } else {
+    autoRefreshEnabled.value = watchlistStore.autoRefreshEnabled
+  }
+}
+
 const startAutoRefresh = () => {
   if (refreshTimer) clearInterval(refreshTimer)
   if (autoRefreshEnabled.value) {
+    const intervalSeconds = refreshInterval.value || watchlistStore.refreshInterval || 3
     refreshTimer = setInterval(() => {
       watchlistStore.refreshPrices()
-    }, refreshInterval.value * 1000)
+    }, intervalSeconds * 1000)
   }
 }
 
@@ -211,6 +254,8 @@ const stopAutoRefresh = () => {
 
 const toggleAutoRefresh = () => {
   autoRefreshEnabled.value = !autoRefreshEnabled.value
+  watchlistStore.autoRefreshEnabled = autoRefreshEnabled.value
+  localStorage.setItem('autoRefreshEnabled', autoRefreshEnabled.value.toString())
   if (autoRefreshEnabled.value) {
     startAutoRefresh()
   } else {

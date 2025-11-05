@@ -333,7 +333,7 @@ const saveSettings = () => {
   localStorage.setItem('refreshInterval', refreshInterval.value.toString())
   localStorage.setItem('autoRefreshEnabled', autoRefreshEnabled.value.toString())
   updateLastRefreshTime()
-  alert('设置已保存')
+  alert('设置已保存！刷新间隔将在下次刷新时生效。')
 }
 
 // 更新最后刷新时间

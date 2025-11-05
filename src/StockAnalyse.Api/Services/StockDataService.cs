@@ -211,11 +211,12 @@ public class StockDataService : IStockDataService
             }
             
             var name = parts[0]; // 股票名称在第一个位置
-            var open = SafeConvertToDecimal(parts[1]);
-            var prevClose = SafeConvertToDecimal(parts[2]);
+            // 新浪财经API返回的价格单位是"分"，需要除以100转换为"元"
+            var open = SafeConvertToDecimal(parts[1]) / 100;
+            var prevClose = SafeConvertToDecimal(parts[2]) / 100;
             var current = SafeConvertToDecimal(parts[3]) / 100;
-            var high = SafeConvertToDecimal(parts[4]);
-            var low = SafeConvertToDecimal(parts[5]);
+            var high = SafeConvertToDecimal(parts[4]) / 100;
+            var low = SafeConvertToDecimal(parts[5]) / 100;
             var volume = SafeConvertToDecimal(parts[8]);
             var turnover = SafeConvertToDecimal(parts[9]);
             
@@ -349,7 +350,7 @@ public class StockDataService : IStockDataService
             // 根据股票代码确定市场前缀
             var marketPrefix = stockCode.StartsWith("6") ? "sh" : "sz";
             var url = $"http://hq.sinajs.cn/list={marketPrefix}{stockCode}";
-            _logger.LogInformation("请求新浪财经接口: {Url}", url);
+            _logger.LogDebug("请求新浪财经接口: {Url}", url);
             
             // 设置请求头
             _httpClient.DefaultRequestHeaders.Clear();
@@ -357,13 +358,13 @@ public class StockDataService : IStockDataService
             _httpClient.DefaultRequestHeaders.Add("Referer", "http://finance.sina.com.cn");
             
             var response = await _httpClient.GetStringAsync(url);
-            _logger.LogInformation("新浪财经返回数据: {Response}", response);
+            _logger.LogDebug("新浪财经返回数据: {Response}", response);
             
             var stock = ParseSinaData(response, stockCode);
             
             if (stock != null)
             {
-                _logger.LogInformation("成功从新浪财经获取: {Code} {Name}", stock.Code, stock.Name);
+                _logger.LogDebug("成功从新浪财经获取: {Code} {Name} 当前价: {Price}", stock.Code, stock.Name, stock.CurrentPrice);
             }
             else
             {
@@ -374,7 +375,7 @@ public class StockDataService : IStockDataService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "新浪财经获取失败: {Code}", stockCode);
+            _logger.LogWarning(ex, "新浪财经获取失败: {Code}", stockCode);
             return null;
         }
     }
@@ -1744,18 +1745,13 @@ public class StockDataService : IStockDataService
                         if (stockCode.StartsWith("90") || stockCode.StartsWith("20"))
                             continue;
                         
-                        // clist接口的价格格式：通常直接是元，但某些字段可能需要除以100
-                        // f43: 最新价（可能需要除以100）, f60: 昨收（可能需要除以100）
-                        // 其他价格字段（f44,f45,f46）格式一致
-                        decimal currentPriceRaw = SafeConvertToDecimal(stockInfo.f43);
-                        decimal closePriceRaw = SafeConvertToDecimal(stockInfo.f60);
-                        
-                        // clist接口的价格通常需要除以100（单位是分）
-                        decimal currentPrice = currentPriceRaw / 100;
-                        decimal closePrice = closePriceRaw / 100;
-                        decimal openPrice = SafeConvertToDecimal(stockInfo.f46) / 100;
-                        decimal highPrice = SafeConvertToDecimal(stockInfo.f44) / 100;
-                        decimal lowPrice = SafeConvertToDecimal(stockInfo.f45) / 100;
+                        // clist接口的价格格式：东方财富API返回的价格单位就是"元"，不需要除以100
+                        // f43: 最新价, f60: 昨收, f44: 最高, f45: 最低, f46: 今开
+                        decimal currentPrice = SafeConvertToDecimal(stockInfo.f43);
+                        decimal closePrice = SafeConvertToDecimal(stockInfo.f60);
+                        decimal openPrice = SafeConvertToDecimal(stockInfo.f46);
+                        decimal highPrice = SafeConvertToDecimal(stockInfo.f44);
+                        decimal lowPrice = SafeConvertToDecimal(stockInfo.f45);
                         
                         // 价格回退逻辑：非交易时间使用昨收价
                         if (currentPrice == 0 && closePrice > 0)
@@ -1783,7 +1779,7 @@ public class StockDataService : IStockDataService
                             LowPrice = lowPrice,
                             Volume = SafeConvertToDecimal(stockInfo.f47),
                             Turnover = SafeConvertToDecimal(stockInfo.f48),
-                            ChangeAmount = SafeConvertToDecimal(stockInfo.f169) / 100, // 涨跌额也需要除以100
+                            ChangeAmount = SafeConvertToDecimal(stockInfo.f169), // 涨跌额单位也是"元"，不需要除以100
                             ChangePercent = SafeConvertToDecimal(stockInfo.f170),
                             TurnoverRate = SafeConvertToDecimal(stockInfo.f168),
                             PE = peValue > 0 ? peValue : null,

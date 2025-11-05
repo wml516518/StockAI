@@ -49,14 +49,26 @@ public class PriceAlertService : IPriceAlertService
     {
         var activeAlerts = await GetActiveAlertsAsync();
         
+        // 如果没有活跃提醒，直接返回，避免不必要的API调用
+        if (activeAlerts.Count == 0)
+        {
+            return;
+        }
+        
+        _logger.LogDebug("检查 {Count} 个价格提醒", activeAlerts.Count);
+        
         foreach (var alert in activeAlerts)
         {
             try
             {
-                var stock = await _stockDataService.GetRealTimeQuoteAsync(alert.StockCode);
+                // 使用GetWatchlistRealTimeQuoteAsync，避免保存到数据库，减少数据库操作
+                var stock = await _stockDataService.GetWatchlistRealTimeQuoteAsync(alert.StockCode);
                 
                 if (stock == null)
+                {
+                    _logger.LogDebug("无法获取股票 {StockCode} 的实时行情，跳过提醒检查", alert.StockCode);
                     continue;
+                }
                 
                 bool shouldTrigger = false;
                 string message = string.Empty;

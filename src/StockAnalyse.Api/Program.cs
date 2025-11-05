@@ -35,6 +35,8 @@ builder.Services.AddControllers()
     {
         options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
         options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        // 配置为camelCase命名策略，与前端保持一致
+        options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         // 增加JSON序列化大小限制，支持大响应
         options.JsonSerializerOptions.MaxDepth = 64;
     });

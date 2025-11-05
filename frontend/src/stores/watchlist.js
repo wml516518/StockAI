@@ -98,39 +98,87 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       
       const updatedStocks = await stockService.getBatchStocks(codes)
       
+      // 辅助函数：规范化股票代码（移除市场前缀，统一格式）
+      const normalizeCode = (code) => {
+        if (!code) return ''
+        // 移除sh/sz前缀，统一转换为纯数字代码
+        return code.toString().replace(/^(sh|sz)/i, '').trim()
+      }
+      
       // 更新价格信息
       stocks.value.forEach(stock => {
+        const stockCodeNormalized = normalizeCode(stock.stockCode)
+        
+        // 查找匹配的更新数据
         const updated = updatedStocks.find(s => {
-          // 处理不同的代码格式（可能带市场前缀）
-          const updatedCode = s.code?.replace(/^(sh|sz)/i, '') || s.code
-          const stockCode = stock.stockCode?.replace(/^(sh|sz)/i, '') || stock.stockCode
-          return updatedCode === stockCode
+          const updatedCodeNormalized = normalizeCode(s.code || s.Code)
+          return updatedCodeNormalized === stockCodeNormalized
         })
         
         if (updated) {
-          // 更新股票对象的价格信息
+          // 确保stock对象存在
           if (!stock.stock) {
             stock.stock = {}
           }
-          stock.stock.currentPrice = updated.price || updated.currentPrice || 0
-          stock.stock.change = updated.change || updated.changeAmount || 0
-          stock.stock.changePercent = updated.changePercent || 0
-          // 使用正确的字段名：highPrice 和 lowPrice（后端返回的 JSON 字段名）
-          stock.stock.highPrice = updated.highPrice || stock.stock.highPrice || 0
-          stock.stock.lowPrice = updated.lowPrice || stock.stock.lowPrice || 0
-          // 同时保留旧的字段名以兼容
-          stock.stock.high = stock.stock.highPrice
-          stock.stock.low = stock.stock.lowPrice
-          // 如果最高价或最低价为0，使用当前价作为回退
-          if (stock.stock.high === 0 && stock.stock.currentPrice > 0) {
+          
+          // 兼容PascalCase和camelCase两种命名方式
+          // 后端可能返回: CurrentPrice/currentPrice, ChangeAmount/changeAmount 等
+          const currentPrice = updated.currentPrice ?? updated.CurrentPrice
+          const changeAmount = updated.changeAmount ?? updated.ChangeAmount
+          const changePercent = updated.changePercent ?? updated.ChangePercent
+          const highPrice = updated.highPrice ?? updated.HighPrice
+          const lowPrice = updated.lowPrice ?? updated.LowPrice
+          const openPrice = updated.openPrice ?? updated.OpenPrice
+          const closePrice = updated.closePrice ?? updated.ClosePrice
+          
+          // 只有当更新数据中字段存在且有效时才更新，避免覆盖已有数据为0
+          // 价格字段需要严格验证，防止错误的数据
+          if (currentPrice !== undefined && currentPrice !== null && currentPrice > 0) {
+            stock.stock.currentPrice = currentPrice
+          }
+          
+          // 涨跌额可能为负数或0，所以只要不是undefined/null就更新
+          if (changeAmount !== undefined && changeAmount !== null) {
+            stock.stock.change = changeAmount
+            stock.stock.changeAmount = changeAmount
+          }
+          
+          if (changePercent !== undefined && changePercent !== null) {
+            stock.stock.changePercent = changePercent
+          }
+          
+          // 更新最高价和最低价，但只有在值有效时才更新
+          // 注意：非交易时间这些值可能为0，所以只有在明确有值时才更新
+          if (highPrice !== undefined && highPrice !== null && highPrice > 0) {
+            stock.stock.highPrice = highPrice
+            stock.stock.high = highPrice
+          } else if (highPrice === 0 && stock.stock.currentPrice > 0) {
+            // 只有在非交易时间（highPrice为0）且当前价有效时，才使用当前价作为回退
+            // 这种情况主要发生在非交易时间
+            stock.stock.highPrice = stock.stock.currentPrice
             stock.stock.high = stock.stock.currentPrice
           }
-          if (stock.stock.low === 0 && stock.stock.currentPrice > 0) {
+          
+          if (lowPrice !== undefined && lowPrice !== null && lowPrice > 0) {
+            stock.stock.lowPrice = lowPrice
+            stock.stock.low = lowPrice
+          } else if (lowPrice === 0 && stock.stock.currentPrice > 0) {
+            // 只有在非交易时间（lowPrice为0）且当前价有效时，才使用当前价作为回退
+            stock.stock.lowPrice = stock.stock.currentPrice
             stock.stock.low = stock.stock.currentPrice
           }
-          // 同时更新股票名称（如果API返回了）
-          if (updated.name) {
-            stock.stock.name = updated.name
+          
+          // 更新股票名称（如果API返回了）
+          if (updated.name || updated.Name) {
+            stock.stock.name = updated.name || updated.Name
+          }
+          
+          // 更新其他字段
+          if (openPrice !== undefined && openPrice !== null) {
+            stock.stock.openPrice = openPrice
+          }
+          if (closePrice !== undefined && closePrice !== null) {
+            stock.stock.closePrice = closePrice
           }
         }
       })
