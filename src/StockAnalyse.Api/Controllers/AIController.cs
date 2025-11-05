@@ -767,7 +767,7 @@ public class AIController : ControllerBase
                 analysis = result,
                 length = result.Length,
                 sizeKB = Math.Round(responseSizeKB, 2),
-                timestamp = DateTime.Now
+                timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
             });
         }
         catch (Exception ex)
@@ -793,7 +793,7 @@ public class AIController : ControllerBase
                     success = true, 
                     analysis = result,
                     length = result.Length,
-                    timestamp = DateTime.Now
+                    timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
                 });
             }
             catch (Exception ex2)

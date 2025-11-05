@@ -66,7 +66,8 @@
             <h3 style="margin: 0;">我的自选股</h3>
             <p class="refresh-info">
               自动刷新: <span>{{ autoRefreshEnabled ? '已启用' : '已暂停' }}</span> | 
-              间隔: <span>{{ refreshInterval }}秒</span>
+              间隔: <span>{{ refreshInterval }}秒</span> |
+              交易状态: <span :style="{ color: isTradingTimeNow ? '#4caf50' : '#999' }">{{ tradingStatusText }}</span>
             </p>
           </div>
           <button class="btn" @click="toggleAutoRefresh">
@@ -212,6 +213,7 @@ import { ref, onMounted, onUnmounted, onActivated, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import api from '../services/api'
+import { isTradingTime, getTradingStatusText } from '../utils/tradingTime'
 
 const watchlistStore = useWatchlistStore()
 const route = useRoute()
@@ -241,6 +243,11 @@ const categoryForm = ref({
 
 const showCreateCategory = ref(false)
 let refreshTimer = null
+let tradingStatusTimer = null
+
+// 交易状态相关
+const isTradingTimeNow = ref(isTradingTime())
+const tradingStatusText = ref(getTradingStatusText())
 
 // 建议价格编辑相关
 const editingSuggestedPrice = ref({})
@@ -276,6 +283,8 @@ onMounted(async () => {
 onActivated(() => {
   // 重新加载设置，确保使用最新的刷新间隔
   loadSettings()
+  // 更新交易状态
+  updateTradingStatus()
   // 只恢复自动刷新，不重新获取数据
   startAutoRefresh()
 })
@@ -318,18 +327,35 @@ const startAutoRefresh = () => {
     const intervalSeconds = refreshInterval.value || watchlistStore.refreshInterval || 3
     console.log('启动自动刷新，间隔:', intervalSeconds, '秒')
     refreshTimer = setInterval(() => {
-      // 只有在有股票时才刷新
-      if (watchlistStore.stocks.length > 0) {
+      // 只有在有股票且在交易时间内时才刷新
+      if (watchlistStore.stocks.length > 0 && isTradingTime()) {
         watchlistStore.refreshPrices()
       }
     }, intervalSeconds * 1000)
   }
+  
+  // 启动交易状态更新定时器（每分钟更新一次）
+  if (!tradingStatusTimer) {
+    updateTradingStatus()
+    tradingStatusTimer = setInterval(() => {
+      updateTradingStatus()
+    }, 60000) // 每分钟更新一次
+  }
+}
+
+const updateTradingStatus = () => {
+  isTradingTimeNow.value = isTradingTime()
+  tradingStatusText.value = getTradingStatusText()
 }
 
 const stopAutoRefresh = () => {
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
+  }
+  if (tradingStatusTimer) {
+    clearInterval(tradingStatusTimer)
+    tradingStatusTimer = null
   }
 }
 

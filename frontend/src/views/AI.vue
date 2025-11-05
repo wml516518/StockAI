@@ -70,14 +70,44 @@ onActivated(() => {
 // 格式化日期
 const formatDate = (date) => {
   if (!date) return ''
+  
+  // 如果已经是格式化的字符串（yyyy-MM-dd HH:mm:ss），直接返回
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}/.test(date)) {
+    return date.replace('T', ' ').substring(0, 19)
+  }
+  
+  // 尝试解析日期
   const d = new Date(date)
-  return d.toLocaleString('zh-CN', { 
-    year: 'numeric', 
-    month: '2-digit', 
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  
+  // 检查日期是否有效
+  if (isNaN(d.getTime())) {
+    console.warn('无效的日期值:', date)
+    return ''
+  }
+  
+  // 检查是否是无效的默认日期（如0001-01-01或年份小于1900）
+  const year = d.getFullYear()
+  if (year < 1900 || year === 1) {
+    console.warn('检测到无效的默认日期值，使用当前时间:', date, '年份:', year)
+    // 使用当前时间作为回退
+    const now = new Date()
+    const nowYear = now.getFullYear()
+    const nowMonth = String(now.getMonth() + 1).padStart(2, '0')
+    const nowDay = String(now.getDate()).padStart(2, '0')
+    const nowHours = String(now.getHours()).padStart(2, '0')
+    const nowMinutes = String(now.getMinutes()).padStart(2, '0')
+    const nowSeconds = String(now.getSeconds()).padStart(2, '0')
+    return `${nowYear}-${nowMonth}-${nowDay} ${nowHours}:${nowMinutes}:${nowSeconds}`
+  }
+  
+  // 格式化为 yyyy-MM-dd HH:mm:ss
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
 // 根据分析类型生成上下文描述
@@ -151,7 +181,20 @@ const handleAnalyze = async () => {
     try {
       stockData = await stockService.getStock(code)
       if (stockData) {
-        dataDate = stockData.lastUpdate || new Date().toISOString()
+        // 检查lastUpdate是否有效（不能是默认的0001-01-01）
+        let lastUpdateValue = stockData.lastUpdate
+        if (lastUpdateValue) {
+          const testDate = new Date(lastUpdateValue)
+          // 如果年份小于1900或等于1，说明是无效的默认日期
+          if (isNaN(testDate.getTime()) || testDate.getFullYear() < 1900 || testDate.getFullYear() === 1) {
+            console.warn('股票数据的lastUpdate无效，使用当前时间:', lastUpdateValue)
+            lastUpdateValue = new Date().toISOString()
+          }
+        } else {
+          lastUpdateValue = new Date().toISOString()
+        }
+        
+        dataDate = lastUpdateValue
         stockInfo.value = {
           name: stockData.name,
           currentPrice: stockData.currentPrice,
@@ -161,6 +204,10 @@ const handleAnalyze = async () => {
         }
         analysisDate.value = formatDate(dataDate)
         console.log('获取到股票数据:', stockData.name, '更新时间:', dataDate)
+      } else {
+        // 如果没有获取到股票数据，使用当前时间
+        dataDate = new Date().toISOString()
+        analysisDate.value = formatDate(dataDate)
       }
     } catch (error) {
       console.warn('获取股票数据失败，将使用当前时间:', error)

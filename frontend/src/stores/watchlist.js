@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { watchlistService } from '../services/watchlistService'
 import { stockService } from '../services/stockService'
+import { isTradingTime } from '../utils/tradingTime'
 
 export const useWatchlistStore = defineStore('watchlist', () => {
   const stocks = ref([])
@@ -180,10 +181,24 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   // 防止并发刷新
   let isRefreshing = false
   
-  async function refreshPrices() {
-    // 如果正在刷新或未启用自动刷新或没有股票，直接返回
-    if (isRefreshing || !autoRefreshEnabled.value || stocks.value.length === 0) {
+  async function refreshPrices(forceRefresh = false) {
+    // 如果正在刷新或没有股票，直接返回
+    if (isRefreshing || stocks.value.length === 0) {
       return
+    }
+    
+    // 如果是自动刷新（非强制），需要检查是否启用和是否在交易时间内
+    if (!forceRefresh) {
+      // 自动刷新需要启用状态
+      if (!autoRefreshEnabled.value) {
+        return
+      }
+      
+      // 检查是否在交易时间内，如果不在交易时间内则不刷新
+      if (!isTradingTime()) {
+        console.log('当前不在交易时间内，跳过自动刷新')
+        return
+      }
     }
     
     try {
