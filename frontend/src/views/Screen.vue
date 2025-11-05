@@ -130,30 +130,120 @@
             数据量大时可能需要较长时间，请耐心等待
           </div>
         </div>
-        <div v-else-if="results.length === 0" class="loading">等待查询...</div>
-        <div v-else class="results-table">
-          <table>
-            <thead>
-              <tr>
-                <th>股票代码</th>
-                <th>股票名称</th>
-                <th>当前价</th>
-                <th>涨跌幅</th>
-                <th>市盈率</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stock in results" :key="stock.code">
-                <td>{{ stock.code }}</td>
-                <td>{{ stock.name || '-' }}</td>
-                <td>{{ formatPrice(stock.price) }}</td>
-                <td :class="getPriceClass(stock.changePercent)">
-                  {{ formatPercent(stock.changePercent) }}
-                </td>
-                <td>{{ stock.pe || '-' }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else-if="results.length === 0 && !hasSearched" class="loading">等待查询...</div>
+        <div v-else-if="results.length === 0 && hasSearched" class="loading">
+          <p class="warning">⚠️ 未找到符合条件的股票</p>
+        </div>
+        <div v-else>
+          <!-- 分页信息 -->
+          <div class="pagination-info">
+            <strong>找到 {{ totalCount }} 只股票</strong>
+            <span class="page-info">
+              第 <strong>{{ currentPage }}</strong> / <strong>{{ totalPages }}</strong> 页，每页 <strong>{{ pageSize }}</strong> 条
+            </span>
+          </div>
+          
+          <!-- 结果表格 -->
+          <div class="results-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>股票代码</th>
+                  <th>股票名称</th>
+                  <th>当前价</th>
+                  <th>涨跌幅</th>
+                  <th>换手率</th>
+                  <th>市盈率</th>
+                  <th>市净率</th>
+                  <th>成交量</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="stock in results" :key="stock.code">
+                  <td>{{ stock.code }}</td>
+                  <td>{{ stock.name || '-' }}</td>
+                  <td>{{ formatPrice(stock.currentPrice) }}</td>
+                  <td :class="getPriceClass(stock.changePercent)">
+                    {{ formatPercent(stock.changePercent) }}
+                  </td>
+                  <td>{{ formatPercent(stock.turnoverRate) }}</td>
+                  <td>{{ stock.pe ? stock.pe.toFixed(2) : '-' }}</td>
+                  <td>{{ stock.pb ? stock.pb.toFixed(2) : '-' }}</td>
+                  <td>{{ formatVolume(stock.volume) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- 分页控件 -->
+          <div class="pagination-controls" v-if="totalPages > 0">
+            <button 
+              class="pagination-btn" 
+              :disabled="currentPage === 1" 
+              @click="goToPage(1)"
+              title="首页"
+            >
+              « 首页
+            </button>
+            <button 
+              class="pagination-btn" 
+              :disabled="currentPage === 1" 
+              @click="goToPage(currentPage - 1)"
+              title="上一页"
+            >
+              ‹ 上一页
+            </button>
+            
+            <!-- 页码按钮 -->
+            <template v-if="totalPages > 0">
+              <template v-if="startPage > 1">
+                <button class="pagination-btn" @click="goToPage(1)">1</button>
+                <span v-if="startPage > 2" class="pagination-ellipsis">...</span>
+              </template>
+              
+              <button
+                v-for="page in visiblePages"
+                :key="page"
+                class="pagination-btn"
+                :class="{ active: page === currentPage }"
+                @click="goToPage(page)"
+              >
+                {{ page }}
+              </button>
+              
+              <template v-if="endPage < totalPages">
+                <span v-if="endPage < totalPages - 1" class="pagination-ellipsis">...</span>
+                <button class="pagination-btn" @click="goToPage(totalPages)">{{ totalPages }}</button>
+              </template>
+            </template>
+            
+            <button 
+              class="pagination-btn" 
+              :disabled="currentPage === totalPages" 
+              @click="goToPage(currentPage + 1)"
+              title="下一页"
+            >
+              下一页 ›
+            </button>
+            <button 
+              class="pagination-btn" 
+              :disabled="currentPage === totalPages" 
+              @click="goToPage(totalPages)"
+              title="末页"
+            >
+              末页 »
+            </button>
+            
+            <!-- 每页数量选择 -->
+            <span class="page-size-selector">
+              每页：
+              <select :value="pageSize" @change="onPageSizeChange" class="page-size-select">
+                <option :value="10">10</option>
+                <option :value="20">20</option>
+                <option :value="50">50</option>
+              </select>
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -161,7 +251,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onActivated } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import api from '../services/api'
 import { screenTemplateService } from '../services/screenTemplateService'
 
@@ -171,6 +261,16 @@ const templates = ref([])
 const selectedTemplateId = ref('')
 const showSaveDialog = ref(false)
 const editingTemplateId = ref(null)
+const hasSearched = ref(false)
+
+// 分页相关状态
+const currentPage = ref(1)
+const pageSize = ref(10)
+const totalCount = ref(0)
+const totalPages = ref(0)
+
+// 保存上一次的查询条件，用于判断是否需要强制刷新
+const lastSearchCriteria = ref(null)
 
 const criteria = ref({
   market: '',
@@ -310,32 +410,140 @@ const deleteTemplate = async () => {
   }
 }
 
-const handleScreen = async () => {
+const handleScreen = async (pageIndex = 1) => {
   loading.value = true
+  hasSearched.value = true
+  currentPage.value = pageIndex
+  
   try {
-    // 使用 search 端点，返回分页结果
-    const criteriaWithPagination = {
-      ...criteria.value,
-      pageIndex: 1,
-      pageSize: 100 // 获取前100条结果
+    // 清理null值，转换为undefined或空字符串
+    const cleanCriteria = {}
+    
+    // 处理market字段（空字符串转为null）
+    if (criteria.value.market && criteria.value.market.trim() !== '') {
+      cleanCriteria.market = criteria.value.market
     }
+    
+    // 处理数值字段（null转为undefined，不发送）
+    const numberFields = [
+      'minPrice', 'maxPrice', 'minChangePercent', 'maxChangePercent',
+      'minTurnoverRate', 'maxTurnoverRate', 'minVolume', 'maxVolume',
+      'minMarketValue', 'maxMarketValue', 'minPE', 'maxPE',
+      'minPB', 'maxPB', 'minDividendYield', 'maxDividendYield'
+    ]
+    
+    numberFields.forEach(field => {
+      const value = criteria.value[field]
+      if (value !== null && value !== undefined && value !== '') {
+        cleanCriteria[field] = Number(value)
+      }
+    })
+    
+    // 判断查询条件是否改变（排除分页参数）
+    const currentCriteriaKey = JSON.stringify(cleanCriteria)
+    const criteriaChanged = lastSearchCriteria.value !== currentCriteriaKey
+    
+    // 构建带分页的请求数据（确保数据类型正确）
+    const criteriaWithPagination = {
+      ...cleanCriteria,
+      pageIndex: Number(pageIndex) || 1, // 确保是数字类型
+      pageSize: Number(pageSize.value) || 10, // 确保是数字类型
+      forceRefresh: criteriaChanged // 只有查询条件改变时才强制刷新
+    }
+    
+    // 如果查询条件改变，更新保存的条件
+    if (criteriaChanged) {
+      lastSearchCriteria.value = currentCriteriaKey
+    }
+    
+    // 验证数据类型
+    if (isNaN(criteriaWithPagination.pageIndex) || criteriaWithPagination.pageIndex < 1) {
+      criteriaWithPagination.pageIndex = 1
+    }
+    if (isNaN(criteriaWithPagination.pageSize) || criteriaWithPagination.pageSize < 1) {
+      criteriaWithPagination.pageSize = 10
+    }
+    
+    console.log('发送选股请求:', criteriaWithPagination)
+    console.log('数据类型检查:', {
+      pageIndex: typeof criteriaWithPagination.pageIndex,
+      pageSize: typeof criteriaWithPagination.pageSize,
+      pageIndexValue: criteriaWithPagination.pageIndex,
+      pageSizeValue: criteriaWithPagination.pageSize
+    })
+    
     // 选股操作可能需要较长时间，设置更长的超时时间（5分钟）
     const response = await api.post('/screen/search', criteriaWithPagination, {
       timeout: 300000 // 5分钟 = 300000毫秒
     })
+    
     // 处理分页响应
-    results.value = response?.items || response || []
+    results.value = response?.items || []
+    totalCount.value = response?.totalCount || 0
+    currentPage.value = response?.pageIndex || pageIndex
+    pageSize.value = response?.pageSize || pageSize.value
+    totalPages.value = response?.totalPages || Math.max(1, Math.ceil(totalCount.value / pageSize.value))
   } catch (error) {
     console.error('选股失败:', error)
+    console.error('错误详情:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    })
+    
     if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
       alert('选股超时：查询时间过长，请尝试缩小筛选条件范围或减少查询数量。')
+    } else if (error.response?.status === 400) {
+      // 400错误通常是请求格式问题
+      const errorMsg = error.response?.data?.message || error.response?.data?.error || '请求格式错误'
+      const errors = error.response?.data?.errors
+      let fullErrorMsg = `选股失败 (400): ${errorMsg}`
+      if (errors) {
+        fullErrorMsg += '\n\n详细错误:\n' + JSON.stringify(errors, null, 2)
+      }
+      console.error('400错误详情:', fullErrorMsg)
+      alert(fullErrorMsg)
     } else {
-      alert('选股失败: ' + (error.response?.data?.message || error.message))
+      alert('选股失败: ' + (error.response?.data?.message || error.response?.data?.error || error.message))
     }
+    results.value = []
+    totalCount.value = 0
+    totalPages.value = 0
   } finally {
     loading.value = false
   }
 }
+
+const goToPage = (page) => {
+  if (page >= 1 && page <= totalPages.value && page !== currentPage.value) {
+    handleScreen(page)
+  }
+}
+
+const onPageSizeChange = (event) => {
+  // 改变每页数量时，重新从第一页开始查询
+  const newSize = Number(event.target.value) || 10
+  pageSize.value = newSize
+  handleScreen(1)
+}
+
+// 计算可见页码范围
+const startPage = computed(() => {
+  return Math.max(1, currentPage.value - 2)
+})
+
+const endPage = computed(() => {
+  return Math.min(totalPages.value, currentPage.value + 2)
+})
+
+const visiblePages = computed(() => {
+  const pages = []
+  for (let i = startPage.value; i <= endPage.value; i++) {
+    pages.push(i)
+  }
+  return pages
+})
 
 const clearConditions = () => {
   criteria.value = {
@@ -358,16 +566,26 @@ const clearConditions = () => {
     maxDividendYield: null
   }
   results.value = []
+  hasSearched.value = false
+  currentPage.value = 1
+  totalCount.value = 0
+  totalPages.value = 0
+  lastSearchCriteria.value = null // 清空保存的查询条件
 }
 
 const formatPrice = (price) => {
   if (price === null || price === undefined) return '-'
-  return price.toFixed(2)
+  return Number(price).toFixed(2)
 }
 
 const formatPercent = (percent) => {
   if (percent === null || percent === undefined) return '-'
-  return (percent > 0 ? '+' : '') + percent.toFixed(2) + '%'
+  return (percent > 0 ? '+' : '') + Number(percent).toFixed(2) + '%'
+}
+
+const formatVolume = (volume) => {
+  if (volume === null || volume === undefined) return '-'
+  return (volume / 10000).toFixed(2) + '万手'
 }
 
 const getPriceClass = (value) => {
@@ -497,6 +715,109 @@ table tr:hover {
   justify-content: flex-end;
 }
 
+.pagination-info {
+  padding: 10px 15px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  margin-bottom: 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.page-info {
+  color: #666;
+  font-size: 0.95em;
+}
+
+.page-info strong {
+  color: #007bff;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  margin-top: 20px;
+}
+
+.pagination-btn {
+  padding: 8px 12px;
+  margin: 0 2px;
+  border: 1px solid #ddd;
+  background: white;
+  color: #333;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  min-width: 40px;
+  text-align: center;
+}
+
+.pagination-btn:hover:not(:disabled):not(.active) {
+  background: #f0f0f0;
+  border-color: #007bff;
+  color: #007bff;
+}
+
+.pagination-btn.active {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+  font-weight: bold;
+}
+
+.pagination-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #f5f5f5;
+  color: #999;
+}
+
+.pagination-btn:disabled:hover {
+  background: #f5f5f5;
+  border-color: #ddd;
+  color: #999;
+}
+
+.pagination-ellipsis {
+  padding: 8px 4px;
+  color: #666;
+  font-size: 14px;
+  user-select: none;
+}
+
+.page-size-selector {
+  margin-left: 15px;
+  color: #666;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.page-size-select {
+  padding: 5px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  background: white;
+}
+
+.warning {
+  color: #ff9800;
+  font-weight: bold;
+}
+
 @media (max-width: 768px) {
   .content {
     padding: 15px;
@@ -513,6 +834,16 @@ table tr:hover {
   
   .template-controls select {
     width: 100%;
+  }
+  
+  .pagination-controls {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .pagination-info {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

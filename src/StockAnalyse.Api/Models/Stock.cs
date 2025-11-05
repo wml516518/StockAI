@@ -330,7 +330,7 @@ public class ScreenCriteria
     
     // 分页参数
     public int PageIndex { get; set; } = 1; // 页码，从1开始
-    public int PageSize { get; set; } = 20; // 每页数量
+    public int PageSize { get; set; } = 10; // 每页数量（默认10条）
     
     // 是否强制刷新（跳过缓存，重新从接口获取数据）
     public bool ForceRefresh { get; set; } = false;

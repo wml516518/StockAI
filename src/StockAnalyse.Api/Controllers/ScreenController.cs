@@ -21,10 +21,27 @@ public class ScreenController : ControllerBase
     /// 条件选股（分页）
     /// </summary>
     [HttpPost("search")]
-    public async Task<ActionResult<PagedResult<Stock>>> Search([FromBody] ScreenCriteria criteria)
+    public async Task<ActionResult<PagedResult<Stock>>> Search([FromBody] ScreenCriteria? criteria)
     {
         try
         {
+            // 如果criteria为null，返回400错误
+            if (criteria == null)
+            {
+                _logger.LogWarning("收到空的选股请求");
+                return BadRequest(new { error = "请求体不能为空", message = "请提供选股条件" });
+            }
+            
+            // 确保分页参数有效
+            if (criteria.PageIndex < 1)
+            {
+                criteria.PageIndex = 1;
+            }
+            if (criteria.PageSize < 1 || criteria.PageSize > 100)
+            {
+                criteria.PageSize = Math.Clamp(criteria.PageSize, 1, 100);
+            }
+            
             _logger.LogInformation("收到选股请求，条件: {Criteria}, 页码: {PageIndex}, 每页: {PageSize}", 
                 System.Text.Json.JsonSerializer.Serialize(criteria), criteria.PageIndex, criteria.PageSize);
             
