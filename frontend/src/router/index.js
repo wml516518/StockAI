@@ -4,7 +4,6 @@ import Screen from '../views/Screen.vue'
 import QuantTrading from '../views/QuantTrading.vue'
 import News from '../views/News.vue'
 import AI from '../views/AI.vue'
-import Alert from '../views/Alert.vue'
 import Settings from '../views/Settings.vue'
 
 const routes = [
@@ -36,11 +35,6 @@ const routes = [
     path: '/ai',
     name: 'AI',
     component: AI
-  },
-  {
-    path: '/alert',
-    name: 'Alert',
-    component: Alert
   },
   {
     path: '/settings',

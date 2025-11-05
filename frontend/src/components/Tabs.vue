@@ -23,7 +23,6 @@ const tabs = [
   { path: '/quant', label: '📊 量化交易' },
   { path: '/news', label: '金融新闻' },
   { path: '/ai', label: 'AI分析' },
-  { path: '/alert', label: '价格提醒' },
   { path: '/settings', label: '⚙️ 设置' }
 ]
 

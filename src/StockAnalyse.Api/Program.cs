@@ -158,14 +158,13 @@ app.MapControllers();
 // 默认页面重定向到index.html
 app.MapFallbackToFile("index.html");
 
-// 定时任务：每分钟检查一次价格提醒
+// 定时任务：每分钟检查一次自选股建议价格提醒
 var timer = new System.Timers.Timer(60000); // 60秒
 timer.Elapsed += async (sender, e) =>
 {
     using var scope = app.Services.CreateScope();
     var alertService = scope.ServiceProvider.GetRequiredService<IPriceAlertService>();
-    await alertService.CheckAndTriggerAlertsAsync();
-    // 同时检查自选股建议价格提醒
+    // 检查自选股建议价格提醒
     await alertService.CheckSuggestedPriceAlertsAsync();
 };
 timer.Start();

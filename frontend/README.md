@@ -25,13 +25,11 @@ frontend/
 │   │   ├── QuantTrading.vue
 │   │   ├── News.vue
 │   │   ├── AI.vue
-│   │   ├── Alert.vue
 │   │   └── Settings.vue
 │   ├── services/       # API 服务
 │   │   ├── api.js
 │   │   ├── stockService.js
-│   │   ├── watchlistService.js
-│   │   └── alertService.js
+│   │   └── watchlistService.js
 │   ├── stores/         # Pinia 状态管理
 │   │   └── watchlist.js
 │   ├── router/         # 路由配置
