@@ -37,17 +37,6 @@ os.environ['NO_PROXY'] = '*'
 # 禁用urllib3警告
 warnings.filterwarnings('ignore', category=UserWarning)
 
-# 打印代理禁用状态（仅在服务启动时）
-print(f"[{datetime.now()}] 🔧 Python服务启动 - 代理设置状态:")
-proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy']
-for var in proxy_vars:
-    val = os.environ.get(var)
-    if val:
-        print(f"  {var} = {val[:60]}...")
-    else:
-        print(f"  {var} = (未设置)")
-print(f"[{datetime.now()}] ✅ 已设置 NO_PROXY=* 以禁用代理\n")
-
 # 配置AKShare使用无代理环境（更彻底的代理禁用 - 使用monkey patch）
 try:
     import requests
@@ -105,12 +94,7 @@ try:
     # 尝试设置环境变量，确保urllib3也不使用代理
     os.environ['REQUESTS_CA_BUNDLE'] = ''
     os.environ['CURL_CA_BUNDLE'] = ''
-    
-    print(f"[{datetime.now()}] ✅ 已通过monkey patch配置requests库禁用代理（包括系统代理）")
 except Exception as e:
-    print(f"[{datetime.now()}] ⚠️ 配置requests代理设置时出错: {str(e)}")
-    import traceback
-    print(traceback.format_exc())
     pass
 
 app = Flask(__name__)
@@ -1353,276 +1337,95 @@ def get_industry_info(stock_code):
         industry_name = industry_name_from_info if industry_name_from_info else '未知'
         industry_code = ''
         
-        # 使用 stock_board_industry_name_em 获取所有行业板块，然后匹配
+        # 使用 stock_board_industry_spot_em 根据行业名称获取行业板块实时行情
         industry_stocks = []
         industry_performance = {}
         industry_trends = ''
         industry_market_data = {}  # 行业板块市场数据（必须在此初始化，避免后续使用时变量未定义错误）
         
-        try:
-            # 临时移除代理环境变量（再次确保，与测试脚本保持一致）
-            print(f"[{datetime.now()}] 🔧 [行业接口] 禁用代理设置...")
-            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                original_value = os.environ.get(proxy_var)
-                if original_value:
-                    print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
-                os.environ.pop(proxy_var, None)
-            
-            # 确保NO_PROXY设置正确（禁止所有代理）
-            os.environ['NO_PROXY'] = '*'
-            os.environ['no_proxy'] = '*'
-            print(f"[{datetime.now()}] ✅ [行业接口] 代理已禁用，NO_PROXY=*")
-            
-            # 在调用AKShare之前，再次确保禁用代理
-            # 尝试通过环境变量和urllib3设置禁用代理
-            import urllib3
-            urllib3.disable_warnings()
-            
-            # 获取所有行业板块列表（带重试，增加延迟）
-            df_industry_board = None
-            for attempt in range(3):
-                try:
-                    # 每次重试前增加延迟，避免请求过快
-                    if attempt > 0:
-                        delay = 1.0 * attempt  # 第2次重试延迟1秒，第3次延迟2秒
-                        print(f"[{datetime.now()}] ⏳ [行业接口] 等待{delay:.1f}秒后重试...")
-                        time.sleep(delay)
-                    
-                    print(f"[{datetime.now()}] 📡 [行业接口] 尝试调用 stock_board_industry_name_em() (尝试 {attempt + 1}/3)...")
-                    start_time = time.time()
-                    
-                    # 调用AKShare接口
-                    df_industry_board = ak.stock_board_industry_name_em()
-                    elapsed_time = time.time() - start_time
-                    
-                    if df_industry_board is not None and not df_industry_board.empty:
-                        print(f"[{datetime.now()}] ✅ [行业接口] 成功获取行业板块列表，耗时: {elapsed_time:.2f}秒，共{len(df_industry_board)}个行业")
-                        break
-                    else:
-                        print(f"[{datetime.now()}] ⚠️ [行业接口] 返回数据为空")
-                        time.sleep(0.5)
-                except Exception as e:
-                    error_type = type(e).__name__
-                    error_msg = str(e)
-                    elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
-                    
-                    print(f"[{datetime.now()}] ❌ [行业接口] 获取行业板块列表失败 (尝试 {attempt + 1}/3)")
-                    print(f"    错误类型: {error_type}")
-                    print(f"    错误消息: {error_msg}")
-                    print(f"    耗时: {elapsed_time:.2f}秒")
-                    
-                    # 详细的错误分析
-                    print(f"\n    {'='*70}")
-                    print(f"    【详细错误诊断】")
-                    print(f"    {'='*70}")
-                    
-                    if 'ConnectionError' in error_type or 'MaxRetriesExceeded' in error_type or 'MaxRetryError' in error_type:
-                        print(f"    🔍 错误类型: 网络连接错误")
-                        print(f"    - 目标服务器: push2.eastmoney.com (AKShare数据源)")
-                        print(f"    - 可能原因:")
-                        print(f"      1. 代理服务器不可用或配置错误")
-                        print(f"      2. 目标服务器不可达（防火墙/网络限制）")
-                        print(f"      3. DNS解析失败")
-                        print(f"    - 建议:")
-                        print(f"      1. 检查系统代理设置")
-                        print(f"      2. 尝试直接访问目标服务器")
-                        print(f"      3. 检查防火墙规则")
-                    elif 'ProtocolError' in error_type:
-                        print(f"    🔍 错误类型: 协议错误")
-                        print(f"    - 连接被远程端关闭")
-                        print(f"    - 可能原因:")
-                        print(f"      1. 请求频率过快，被服务器限制")
-                        print(f"      2. 代理服务器问题")
-                        print(f"      3. 服务器负载过高，主动断开连接")
-                        print(f"    - 建议:")
-                        print(f"      1. 增加请求间隔时间（当前已设置0.3-1秒延迟）")
-                        print(f"      2. 检查代理配置")
-                        print(f"      3. 稍后重试")
-                    elif 'RemoteDisconnected' in error_msg:
-                        print(f"    🔍 错误类型: 远程连接断开")
-                        print(f"    - 服务器主动关闭连接")
-                        print(f"    - 可能原因:")
-                        print(f"      1. 服务器检测到异常请求")
-                        print(f"      2. 网络不稳定导致连接中断")
-                        print(f"      3. 代理服务器问题")
-                    elif 'Timeout' in error_type:
-                        print(f"    🔍 错误类型: 请求超时")
-                        print(f"    - 服务器响应过慢或未响应")
-                        print(f"    - 建议: 增加超时时间或检查网络")
-                    else:
-                        print(f"    🔍 错误类型: {error_type}")
-                    
-                    # 代理状态检查
-                    print(f"\n    【代理状态检查】")
-                    proxy_found = False
-                    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                        value = os.environ.get(proxy_var)
-                        if value:
-                            print(f"    ⚠️ 发现代理设置: {proxy_var} = {value[:60]}...")
-                            proxy_found = True
+        # 如果获取到了行业名称，使用 stock_board_industry_spot_em 获取实时行情
+        if industry_name and industry_name != '未知':
+            try:
+                # 临时移除代理环境变量（再次确保，与测试脚本保持一致）
+                print(f"[{datetime.now()}] 🔧 [行业接口] 禁用代理设置...")
+                for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                    original_value = os.environ.get(proxy_var)
+                    if original_value:
+                        print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
+                    os.environ.pop(proxy_var, None)
+                
+                # 确保NO_PROXY设置正确（禁止所有代理）
+                os.environ['NO_PROXY'] = '*'
+                os.environ['no_proxy'] = '*'
+                print(f"[{datetime.now()}] ✅ [行业接口] 代理已禁用，NO_PROXY=*")
+                
+                # 在调用AKShare之前，再次确保禁用代理
+                import urllib3
+                urllib3.disable_warnings()
+                
+                # 使用 stock_board_industry_spot_em 获取行业板块实时行情（带重试）
+                df_industry_spot = None
+                for attempt in range(3):
+                    try:
+                        # 每次重试前增加延迟，避免请求过快
+                        if attempt > 0:
+                            delay = 1.0 * attempt  # 第2次重试延迟1秒，第3次延迟2秒
+                            print(f"[{datetime.now()}] ⏳ [行业接口] 等待{delay:.1f}秒后重试...")
+                            time.sleep(delay)
+                        
+                        print(f"[{datetime.now()}] 📡 [行业接口] 尝试调用 stock_board_industry_spot_em(symbol='{industry_name}') (尝试 {attempt + 1}/3)...")
+                        start_time = time.time()
+                        
+                        # 调用AKShare接口获取行业板块实时行情
+                        df_industry_spot = ak.stock_board_industry_spot_em(symbol=industry_name)
+                        elapsed_time = time.time() - start_time
+                        
+                        if df_industry_spot is not None and not df_industry_spot.empty:
+                            print(f"[{datetime.now()}] ✅ [行业接口] 成功获取行业板块实时行情，耗时: {elapsed_time:.2f}秒")
+                            break
                         else:
-                            print(f"    ✅ {proxy_var}: 未设置")
-                    
-                    if not proxy_found:
-                        print(f"    ✅ 所有代理环境变量已清除")
-                    
-                    # 网络连接测试
-                    print(f"\n    【网络连接测试】")
-                    try:
-                        import socket
-                        test_hosts = [
-                            ('17.push2.eastmoney.com', 443, '行业板块服务器'),
-                            ('push2.eastmoney.com', 443, 'AKShare主服务器'),
-                            ('www.baidu.com', 80, '测试基本网络')
-                        ]
-                        for host, port, desc in test_hosts:
-                            try:
-                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                sock.settimeout(3)
-                                result = sock.connect_ex((host, port))
-                                sock.close()
-                                if result == 0:
-                                    print(f"    ✅ {desc}: {host}:{port} - 可连接")
-                                else:
-                                    print(f"    ❌ {desc}: {host}:{port} - 连接失败 (错误代码: {result})")
-                            except Exception as socket_e:
-                                print(f"    ❌ {desc}: {host}:{port} - 测试异常: {str(socket_e)[:60]}")
-                    except Exception as net_test_e:
-                        print(f"    ❌ 网络测试模块异常: {str(net_test_e)[:60]}")
-                    
-                    # 打印完整的异常堆栈（仅在最后一次尝试时）
-                    if attempt >= 2:
-                        print(f"\n    【完整错误堆栈】")
-                        import traceback
-                        full_trace = traceback.format_exc()
-                        print(f"    {full_trace[:1000]}")
-                    
-                    print(f"    {'='*70}\n")
-                    
-                    if attempt < 2:
-                        print(f"    ⏳ 等待1秒后重试...")
-                        time.sleep(1)
-                    else:
-                        print(f"[{datetime.now()}] ❌ [行业接口] 获取行业板块列表最终失败，将返回基础行业信息")
-                        df_industry_board = None  # 不抛出异常，允许继续执行
-                        break
-            if df_industry_board is not None and not df_industry_board.empty:
-                # 查找匹配的行业（精确匹配或包含匹配）
-                matched_industry = None
-                
-                # 先尝试精确匹配
-                if industry_name and industry_name != '未知':
-                    matched_industry = df_industry_board[df_industry_board['板块名称'] == industry_name]
-                
-                # 如果精确匹配失败，尝试包含匹配
-                if (matched_industry is None or matched_industry.empty) and industry_name and industry_name != '未知':
-                    matched_industry = df_industry_board[df_industry_board['板块名称'].str.contains(industry_name, na=False)]
-                
-                # 如果仍然没有匹配，尝试使用股票代码反向查找（限制查找数量以提高性能）
-                if (matched_industry is None or matched_industry.empty):
-                    print(f"[{datetime.now()}] 通过成分股反向查找行业板块...")
-                    max_search = 30  # 最多查找30个行业板块
-                    for idx, row in df_industry_board.head(max_search).iterrows():
-                        test_industry_code = row.get('板块代码', '')
-                        test_industry_name = row.get('板块名称', '')
+                            print(f"[{datetime.now()}] ⚠️ [行业接口] 返回数据为空")
+                            time.sleep(0.5)
+                    except Exception as e:
+                        error_type = type(e).__name__
+                        error_msg = str(e)
+                        elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
                         
-                        if not test_industry_code:
-                            continue
+                        print(f"[{datetime.now()}] ❌ [行业接口] 获取行业板块实时行情失败 (尝试 {attempt + 1}/3)")
+                        print(f"    错误类型: {error_type}")
+                        print(f"    错误消息: {error_msg[:200]}")
+                        print(f"    耗时: {elapsed_time:.2f}秒")
                         
-                        try:
-                            # 获取该行业的成分股（带重试和延迟）
-                            df_test_stocks = None
-                            for retry in range(2):
-                                try:
-                                    time.sleep(0.3)  # 添加延迟，避免请求过快
-                                    df_test_stocks = ak.stock_board_industry_cons_em(symbol=test_industry_code)
-                                    if df_test_stocks is not None and not df_test_stocks.empty:
-                                        break
-                                except Exception as e:
-                                    if retry < 1:
-                                        time.sleep(0.5)
-                                    else:
-                                        raise
-                            
-                            if df_test_stocks is not None and not df_test_stocks.empty:
-                                stock_codes_in_industry = df_test_stocks['代码'].astype(str).str.zfill(6)
-                                if clean_code in stock_codes_in_industry.values:
-                                    industry_name = test_industry_name
-                                    industry_code = test_industry_code
-                                    matched_industry = df_industry_board[df_industry_board['板块代码'] == test_industry_code]
-                                    print(f"[{datetime.now()}] ✅ 通过反向查找找到行业: {industry_name} ({industry_code})")
-                                    
-                                    # 提取行业板块的市场数据（反向查找路径）
-                                    matched_row = matched_industry.iloc[0]
-                                    try:
-                                        # 重新初始化，覆盖之前的空字典
-                                        industry_market_data = {}
-                                        latest_price = matched_row.get('最新价', None)
-                                        change_percent = matched_row.get('涨跌幅', None)
-                                        total_market_cap = matched_row.get('总市值', None)
-                                        change_amount = matched_row.get('涨跌额', None)
-                                        turnover_rate = matched_row.get('换手率', None)
-                                        rising_count = matched_row.get('上涨家数', None)
-                                        falling_count = matched_row.get('下跌家数', None)
-                                        leader_stock = matched_row.get('领涨股票', None)
-                                        leader_change_percent = matched_row.get('领涨股票-涨跌幅', None)
-                                        
-                                        if pd.notna(latest_price):
-                                            industry_market_data['latestPrice'] = float(latest_price)
-                                        if pd.notna(change_amount):
-                                            industry_market_data['changeAmount'] = float(change_amount)
-                                        if pd.notna(change_percent):
-                                            industry_market_data['changePercent'] = float(change_percent)
-                                        if pd.notna(total_market_cap):
-                                            industry_market_data['totalMarketCap'] = float(total_market_cap)
-                                        if pd.notna(turnover_rate):
-                                            industry_market_data['turnoverRate'] = float(turnover_rate)
-                                        if pd.notna(rising_count):
-                                            industry_market_data['risingCount'] = int(rising_count)
-                                        if pd.notna(falling_count):
-                                            industry_market_data['fallingCount'] = int(falling_count)
-                                        if pd.notna(leader_stock):
-                                            industry_market_data['leaderStock'] = str(leader_stock)
-                                        if pd.notna(leader_change_percent):
-                                            industry_market_data['leaderChangePercent'] = float(leader_change_percent)
-                                        
-                                        # 构建行业趋势描述
-                                        trend_parts = []
-                                        if industry_market_data.get('changePercent') is not None:
-                                            trend_parts.append(f"行业板块涨跌幅：{industry_market_data['changePercent']:.2f}%")
-                                        if industry_market_data.get('totalMarketCap') is not None:
-                                            market_cap_billion = industry_market_data['totalMarketCap'] / 1000000000
-                                            trend_parts.append(f"总市值：{market_cap_billion:.2f}亿元")
-                                        if trend_parts:
-                                            industry_trends = "；".join(trend_parts)
-                                    except Exception as e:
-                                        print(f"[{datetime.now()}] ⚠️ 反向查找路径提取行业板块市场数据失败: {str(e)}")
-                                    
-                                    break
-                        except Exception as e:
-                            # 某些行业可能无法获取成分股，跳过
-                            continue
-                else:
-                    # 使用匹配到的行业
-                    matched_row = matched_industry.iloc[0]
-                    industry_code = matched_row.get('板块代码', '')
-                    if not industry_name or industry_name == '未知':
-                        industry_name = matched_row.get('板块名称', '未知')
-                    
-                    # 提取行业板块的完整信息（从stock_board_industry_name_em返回的数据）
-                    industry_trends = ""
-                    industry_market_data = {}
+                        if attempt < 2:
+                            time.sleep(1)
+                        else:
+                            print(f"[{datetime.now()}] ❌ [行业接口] 获取行业板块实时行情最终失败")
+                            df_industry_spot = None
+                            break
+                
+                # 如果成功获取到行业板块实时行情数据，解析数据
+                if df_industry_spot is not None and not df_industry_spot.empty:
                     try:
-                        # 获取行业板块的市场数据
-                        latest_price = matched_row.get('最新价', None)
+                        # stock_board_industry_spot_em 返回的是行业板块的实时行情数据
+                        # 通常包含：板块名称、板块代码、最新价、涨跌幅、涨跌额、总市值、换手率、上涨家数、下跌家数、领涨股票等信息
+                        
+                        # 提取行业板块代码（如果存在）
+                        if '板块代码' in df_industry_spot.columns:
+                            industry_code = str(df_industry_spot.iloc[0].get('板块代码', '')).strip()
+                        
+                        # 提取行业板块的实时行情数据
+                        matched_row = df_industry_spot.iloc[0]
+                        
+                        # 提取行业板块的市场数据
+                        latest_price = matched_row.get('最新价', matched_row.get('现价', None))
                         change_amount = matched_row.get('涨跌额', None)
                         change_percent = matched_row.get('涨跌幅', None)
                         total_market_cap = matched_row.get('总市值', None)
                         turnover_rate = matched_row.get('换手率', None)
                         rising_count = matched_row.get('上涨家数', None)
                         falling_count = matched_row.get('下跌家数', None)
-                        leader_stock = matched_row.get('领涨股票', None)
-                        leader_change_percent = matched_row.get('领涨股票-涨跌幅', None)
+                        leader_stock = matched_row.get('领涨股票', matched_row.get('领涨股', None))
+                        leader_change_percent = matched_row.get('领涨股票-涨跌幅', matched_row.get('领涨股涨跌幅', None))
                         
                         industry_market_data = {
                             'latestPrice': float(latest_price) if pd.notna(latest_price) else None,
@@ -1653,69 +1456,245 @@ def get_industry_info(stock_code):
                         
                         if trend_parts:
                             industry_trends = "；".join(trend_parts)
-                            print(f"[{datetime.now()}] ✅ 成功提取行业板块市场数据")
-                    except Exception as e:
-                        print(f"[{datetime.now()}] ⚠️ 提取行业板块市场数据失败: {str(e)}")
-                
-                # 获取行业成分股和表现数据
-                if industry_code:
-                    try:
-                        # 获取行业成分股（带重试和延迟）
-                        df_industry_stocks = None
-                        for retry in range(3):
+                        
+                        print(f"[{datetime.now()}] ✅ 成功提取行业板块实时行情数据: {industry_name}")
+                        
+                        # 如果获取到了行业代码，可以获取行业成分股
+                        if industry_code:
                             try:
-                                time.sleep(0.3)  # 添加延迟
-                                df_industry_stocks = ak.stock_board_industry_cons_em(symbol=industry_code)
+                                # 获取行业成分股（带重试和延迟）
+                                df_industry_stocks = None
+                                for retry in range(3):
+                                    try:
+                                        time.sleep(0.3)  # 添加延迟
+                                        df_industry_stocks = ak.stock_board_industry_cons_em(symbol=industry_code)
+                                        if df_industry_stocks is not None and not df_industry_stocks.empty:
+                                            break
+                                    except Exception as e:
+                                        if retry < 2:
+                                            print(f"[{datetime.now()}] ⚠️ 获取行业成分股失败 (尝试 {retry + 1}/3): {str(e)[:80]}，重试中...")
+                                            time.sleep(1)
+                                        else:
+                                            raise
                                 if df_industry_stocks is not None and not df_industry_stocks.empty:
-                                    break
+                                    # 转换成分股列表
+                                    for idx, row in df_industry_stocks.head(20).iterrows():  # 最多20只
+                                        stock_code_industry = str(row.get('代码', '')).zfill(6)
+                                        stock_name_industry = str(row.get('名称', ''))
+                                        stock_price = row.get('最新价', 0)
+                                        stock_change = row.get('涨跌幅', 0)
+                                        
+                                        if pd.notna(stock_price) and pd.notna(stock_change):
+                                            industry_stocks.append({
+                                                'code': stock_code_industry,
+                                                'name': stock_name_industry,
+                                                'price': float(stock_price) if pd.notna(stock_price) else 0,
+                                                'changePercent': float(stock_change) if pd.notna(stock_change) else 0
+                                            })
+                                    
+                                    # 计算行业平均表现指标
+                                    if len(industry_stocks) > 0:
+                                        prices = [s['price'] for s in industry_stocks if s['price'] > 0]
+                                        changes = [s['changePercent'] for s in industry_stocks if s['changePercent'] != 0]
+                                        
+                                        if prices and changes:
+                                            industry_performance = {
+                                                'avgPE': None,  # PE需要从个股数据中计算，暂时不提供
+                                                'avgPB': None,  # PB需要从个股数据中计算，暂时不提供
+                                                'avgROE': None,  # ROE需要从财务数据中获取，暂时不提供
+                                                'totalMarketCap': None,  # 总市值需要计算所有个股市值，暂时不提供
+                                                'avgChangePercent': round(sum(changes) / len(changes), 2) if changes else 0,
+                                                'stockCount': len(industry_stocks),  # 额外字段，股票数量
+                                                'avgPrice': round(sum(prices) / len(prices), 2) if prices else 0  # 额外字段，平均价格
+                                            }
+                                    
+                                    print(f"[{datetime.now()}] ✅ 成功获取行业成分股: {industry_name} ({industry_code})，共{len(industry_stocks)}只股票")
                             except Exception as e:
-                                if retry < 2:
-                                    print(f"[{datetime.now()}] ⚠️ 获取行业成分股失败 (尝试 {retry + 1}/3): {str(e)[:80]}，重试中...")
+                                print(f"[{datetime.now()}] ⚠️ 获取行业成分股失败: {str(e)}")
+                    except Exception as e:
+                        print(f"[{datetime.now()}] ⚠️ 解析行业板块实时行情数据失败: {str(e)}")
+                else:
+                    # 如果 stock_board_industry_spot_em 获取不到数据，回退到使用 stock_board_industry_name_em
+                    print(f"[{datetime.now()}] ⚠️ 无法获取行业板块实时行情数据，回退到使用 stock_board_industry_name_em")
+                    
+                    try:
+                        # 获取所有行业板块列表（带重试）
+                        df_industry_board = None
+                        for attempt in range(3):
+                            try:
+                                if attempt > 0:
+                                    delay = 1.0 * attempt
+                                    print(f"[{datetime.now()}] ⏳ [行业接口-回退] 等待{delay:.1f}秒后重试...")
+                                    time.sleep(delay)
+                                
+                                print(f"[{datetime.now()}] 📡 [行业接口-回退] 尝试调用 stock_board_industry_name_em() (尝试 {attempt + 1}/3)...")
+                                start_time = time.time()
+                                
+                                df_industry_board = ak.stock_board_industry_name_em()
+                                elapsed_time = time.time() - start_time
+                                
+                                if df_industry_board is not None and not df_industry_board.empty:
+                                    print(f"[{datetime.now()}] ✅ [行业接口-回退] 成功获取行业板块列表，耗时: {elapsed_time:.2f}秒，共{len(df_industry_board)}个行业")
+                                    break
+                                else:
+                                    print(f"[{datetime.now()}] ⚠️ [行业接口-回退] 返回数据为空")
+                                    time.sleep(0.5)
+                            except Exception as e:
+                                error_type = type(e).__name__
+                                error_msg = str(e)
+                                elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
+                                
+                                print(f"[{datetime.now()}] ❌ [行业接口-回退] 获取行业板块列表失败 (尝试 {attempt + 1}/3)")
+                                print(f"    错误类型: {error_type}")
+                                print(f"    错误消息: {error_msg[:200]}")
+                                print(f"    耗时: {elapsed_time:.2f}秒")
+                                
+                                if attempt < 2:
                                     time.sleep(1)
                                 else:
-                                    raise
-                        if df_industry_stocks is not None and not df_industry_stocks.empty:
-                            # 转换成分股列表
-                            for idx, row in df_industry_stocks.head(20).iterrows():  # 最多20只
-                                stock_code_industry = str(row.get('代码', '')).zfill(6)
-                                stock_name_industry = str(row.get('名称', ''))
-                                stock_price = row.get('最新价', 0)
-                                stock_change = row.get('涨跌幅', 0)
-                                
-                                if pd.notna(stock_price) and pd.notna(stock_change):
-                                    industry_stocks.append({
-                                        'code': stock_code_industry,
-                                        'name': stock_name_industry,
-                                        'price': float(stock_price) if pd.notna(stock_price) else 0,
-                                        'changePercent': float(stock_change) if pd.notna(stock_change) else 0
-                                    })
+                                    print(f"[{datetime.now()}] ❌ [行业接口-回退] 获取行业板块列表最终失败")
+                                    df_industry_board = None
+                                    break
+                        
+                        # 如果成功获取到行业板块列表，查找匹配的行业
+                        if df_industry_board is not None and not df_industry_board.empty:
+                            matched_industry = None
                             
-                            # 计算行业平均表现指标（字段名需与C#代码期望的一致）
-                            if len(industry_stocks) > 0:
-                                prices = [s['price'] for s in industry_stocks if s['price'] > 0]
-                                changes = [s['changePercent'] for s in industry_stocks if s['changePercent'] != 0]
+                            # 先尝试精确匹配
+                            if industry_name and industry_name != '未知':
+                                matched_industry = df_industry_board[df_industry_board['板块名称'] == industry_name]
+                            
+                            # 如果精确匹配失败，尝试包含匹配
+                            if (matched_industry is None or matched_industry.empty) and industry_name and industry_name != '未知':
+                                matched_industry = df_industry_board[df_industry_board['板块名称'].str.contains(industry_name, na=False)]
+                            
+                            if matched_industry is not None and not matched_industry.empty:
+                                matched_row = matched_industry.iloc[0]
+                                industry_code = matched_row.get('板块代码', '')
+                                if not industry_name or industry_name == '未知':
+                                    industry_name = matched_row.get('板块名称', '未知')
                                 
-                                if prices and changes:
-                                    industry_performance = {
-                                        'avgPE': None,  # PE需要从个股数据中计算，暂时不提供
-                                        'avgPB': None,  # PB需要从个股数据中计算，暂时不提供
-                                        'avgROE': None,  # ROE需要从财务数据中获取，暂时不提供
-                                        'totalMarketCap': None,  # 总市值需要计算所有个股市值，暂时不提供
-                                        'avgChangePercent': round(sum(changes) / len(changes), 2) if changes else 0,
-                                        'stockCount': len(industry_stocks),  # 额外字段，股票数量
-                                        'avgPrice': round(sum(prices) / len(prices), 2) if prices else 0  # 额外字段，平均价格
+                                # 提取行业板块的市场数据
+                                try:
+                                    latest_price = matched_row.get('最新价', None)
+                                    change_amount = matched_row.get('涨跌额', None)
+                                    change_percent = matched_row.get('涨跌幅', None)
+                                    total_market_cap = matched_row.get('总市值', None)
+                                    turnover_rate = matched_row.get('换手率', None)
+                                    rising_count = matched_row.get('上涨家数', None)
+                                    falling_count = matched_row.get('下跌家数', None)
+                                    leader_stock = matched_row.get('领涨股票', None)
+                                    leader_change_percent = matched_row.get('领涨股票-涨跌幅', None)
+                                    
+                                    industry_market_data = {
+                                        'latestPrice': float(latest_price) if pd.notna(latest_price) else None,
+                                        'changeAmount': float(change_amount) if pd.notna(change_amount) else None,
+                                        'changePercent': float(change_percent) if pd.notna(change_percent) else None,
+                                        'totalMarketCap': float(total_market_cap) if pd.notna(total_market_cap) else None,
+                                        'turnoverRate': float(turnover_rate) if pd.notna(turnover_rate) else None,
+                                        'risingCount': int(rising_count) if pd.notna(rising_count) else None,
+                                        'fallingCount': int(falling_count) if pd.notna(falling_count) else None,
+                                        'leaderStock': str(leader_stock) if pd.notna(leader_stock) else None,
+                                        'leaderChangePercent': float(leader_change_percent) if pd.notna(leader_change_percent) else None
                                     }
-                            
-                            print(f"[{datetime.now()}] ✅ 成功获取行业成分股: {industry_name} ({industry_code})，共{len(industry_stocks)}只股票")
+                                    
+                                    # 构建行业趋势描述
+                                    trend_parts = []
+                                    if industry_market_data.get('changePercent') is not None:
+                                        trend_parts.append(f"行业板块涨跌幅：{industry_market_data['changePercent']:.2f}%")
+                                    if industry_market_data.get('totalMarketCap') is not None:
+                                        market_cap_billion = industry_market_data['totalMarketCap'] / 1000000000
+                                        trend_parts.append(f"总市值：{market_cap_billion:.2f}亿元")
+                                    if industry_market_data.get('risingCount') is not None and industry_market_data.get('fallingCount') is not None:
+                                        trend_parts.append(f"上涨家数：{industry_market_data['risingCount']}，下跌家数：{industry_market_data['fallingCount']}")
+                                    if industry_market_data.get('leaderStock'):
+                                        leader_info = f"领涨股票：{industry_market_data['leaderStock']}"
+                                        if industry_market_data.get('leaderChangePercent') is not None:
+                                            leader_info += f"（涨跌幅：{industry_market_data['leaderChangePercent']:.2f}%）"
+                                        trend_parts.append(leader_info)
+                                    
+                                    if trend_parts:
+                                        industry_trends = "；".join(trend_parts)
+                                    
+                                    print(f"[{datetime.now()}] ✅ [行业接口-回退] 成功提取行业板块数据: {industry_name}")
+                                except Exception as e:
+                                    print(f"[{datetime.now()}] ⚠️ [行业接口-回退] 提取行业板块市场数据失败: {str(e)}")
+                                
+                                # 如果获取到了行业代码，可以获取行业成分股
+                                if industry_code:
+                                    try:
+                                        # 获取行业成分股（带重试和延迟）
+                                        df_industry_stocks = None
+                                        for retry in range(3):
+                                            try:
+                                                time.sleep(0.3)  # 添加延迟
+                                                df_industry_stocks = ak.stock_board_industry_cons_em(symbol=industry_code)
+                                                if df_industry_stocks is not None and not df_industry_stocks.empty:
+                                                    break
+                                            except Exception as e:
+                                                if retry < 2:
+                                                    print(f"[{datetime.now()}] ⚠️ [行业接口-回退] 获取行业成分股失败 (尝试 {retry + 1}/3): {str(e)[:80]}，重试中...")
+                                                    time.sleep(1)
+                                                else:
+                                                    raise
+                                        if df_industry_stocks is not None and not df_industry_stocks.empty:
+                                            # 转换成分股列表
+                                            for idx, row in df_industry_stocks.head(20).iterrows():  # 最多20只
+                                                stock_code_industry = str(row.get('代码', '')).zfill(6)
+                                                stock_name_industry = str(row.get('名称', ''))
+                                                stock_price = row.get('最新价', 0)
+                                                stock_change = row.get('涨跌幅', 0)
+                                                
+                                                if pd.notna(stock_price) and pd.notna(stock_change):
+                                                    industry_stocks.append({
+                                                        'code': stock_code_industry,
+                                                        'name': stock_name_industry,
+                                                        'price': float(stock_price) if pd.notna(stock_price) else 0,
+                                                        'changePercent': float(stock_change) if pd.notna(stock_change) else 0
+                                                    })
+                                            
+                                            # 计算行业平均表现指标
+                                            if len(industry_stocks) > 0:
+                                                prices = [s['price'] for s in industry_stocks if s['price'] > 0]
+                                                changes = [s['changePercent'] for s in industry_stocks if s['changePercent'] != 0]
+                                                
+                                                if prices and changes:
+                                                    industry_performance = {
+                                                        'avgPE': None,
+                                                        'avgPB': None,
+                                                        'avgROE': None,
+                                                        'totalMarketCap': None,
+                                                        'avgChangePercent': round(sum(changes) / len(changes), 2) if changes else 0,
+                                                        'stockCount': len(industry_stocks),
+                                                        'avgPrice': round(sum(prices) / len(prices), 2) if prices else 0
+                                                    }
+                                            
+                                            print(f"[{datetime.now()}] ✅ [行业接口-回退] 成功获取行业成分股: {industry_name} ({industry_code})，共{len(industry_stocks)}只股票")
+                                    except Exception as e:
+                                        print(f"[{datetime.now()}] ⚠️ [行业接口-回退] 获取行业成分股失败: {str(e)}")
+                            else:
+                                print(f"[{datetime.now()}] ⚠️ [行业接口-回退] 未找到匹配的行业: {industry_name}")
                     except Exception as e:
-                        print(f"[{datetime.now()}] ⚠️ 获取行业成分股失败: {str(e)}")
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            print(f"[{datetime.now()}] ⚠️ [行业接口] 获取行业板块列表异常: {error_type}")
-            print(f"  错误消息: {error_msg[:300]}")
-            print(f"  完整堆栈: {traceback.format_exc()[:500]}")
-            # 不抛出异常，继续执行
+                        error_type = type(e).__name__
+                        error_msg = str(e)
+                        print(f"[{datetime.now()}] ⚠️ [行业接口-回退] 回退逻辑执行异常: {error_type}")
+                        print(f"  错误消息: {error_msg[:300]}")
+                        try:
+                            import traceback
+                            print(f"  完整堆栈: {traceback.format_exc()[:500]}")
+                        except:
+                            pass
+            except Exception as e:
+                error_type = type(e).__name__
+                error_msg = str(e)
+                print(f"[{datetime.now()}] ⚠️ [行业接口] 获取行业板块实时行情异常: {error_type}")
+                print(f"  错误消息: {error_msg[:300]}")
+                try:
+                    import traceback
+                    print(f"  完整堆栈: {traceback.format_exc()[:500]}")
+                except:
+                    pass
+                # 不抛出异常，继续执行
         
         # 构建返回结果（确保字段名与后端期望一致）
         result = {
@@ -1850,43 +1829,43 @@ def get_hot_rank():
                         break
             
             if df_hot_rank is not None and not df_hot_rank.empty:
+                # 打印列名以便调试（仅第一次）
+                if len(hot_rank_list) == 0:
+                    print(f"[{datetime.now()}] 📋 [人气榜接口] 数据列名: {list(df_hot_rank.columns)}")
+                
                 # 解析数据并构建返回格式
-                # 根据AKShare的stock_hot_rank_latest_em返回的列名，常见的有：代码、名称、最新价、涨跌幅、成交量、成交额等
+                # stock_hot_rank_latest_em返回的字段包括：rank（排名）、rankChange（排名变化）、hisRankChange（历史排名变化）等
                 for idx, row in df_hot_rank.iterrows():
                     try:
-                        # 尝试不同的列名（AKShare可能返回不同的列名）
-                        code = str(row.get('代码', row.get('股票代码', ''))).strip()
-                        name = str(row.get('名称', row.get('股票名称', ''))).strip()
+                        # 提取股票代码和名称（用于匹配）
+                        code = str(row.get('代码', row.get('股票代码', row.get('code', '')))).strip()
+                        name = str(row.get('名称', row.get('股票名称', row.get('name', '')))).strip()
                         
-                        # 价格相关字段
-                        price = row.get('最新价', row.get('现价', row.get('价格', 0)))
-                        if pd.isna(price):
-                            price = 0
+                        # 提取排名相关字段（rank、rankChange、hisRankChange）
+                        # rank: 当前排名（尝试多种可能的字段名）
+                        rank = row.get('排名', row.get('rank', row.get('当前排名', None)))
+                        if pd.isna(rank):
+                            rank = None
                         
-                        # 涨跌幅
-                        change_percent = row.get('涨跌幅', row.get('涨幅', 0))
-                        if pd.isna(change_percent):
-                            change_percent = 0
+                        # rankChange: 排名变化（与上一期相比）
+                        rank_change = row.get('排名变化', row.get('rankChange', row.get('排名变动', None)))
+                        if pd.isna(rank_change):
+                            rank_change = None
                         
-                        # 成交量
-                        volume = row.get('成交量', row.get('成交额', 0))
-                        if pd.isna(volume):
-                            volume = 0
+                        # hisRankChange: 历史排名变化
+                        his_rank_change = row.get('历史排名变化', row.get('hisRankChange', row.get('历史排名变动', None)))
+                        if pd.isna(his_rank_change):
+                            his_rank_change = None
                         
-                        # 成交额
-                        turnover = row.get('成交额', row.get('成交金额', 0))
-                        if pd.isna(turnover):
-                            turnover = 0
-                        
-                        hot_rank_list.append({
-                            'rank': idx + 1,
-                            'code': code,
-                            'name': name,
-                            'price': float(price) if pd.notna(price) else 0,
-                            'changePercent': float(change_percent) if pd.notna(change_percent) else 0,
-                            'volume': float(volume) if pd.notna(volume) else 0,
-                            'turnover': float(turnover) if pd.notna(turnover) else 0
-                        })
+                        # 只返回rank、rankChange、hisRankChange这三个字段
+                        if rank is not None:
+                            hot_rank_list.append({
+                                'rank': int(rank) if pd.notna(rank) else None,
+                                'rankChange': int(rank_change) if pd.notna(rank_change) else None,
+                                'hisRankChange': int(his_rank_change) if pd.notna(his_rank_change) else None,
+                                'code': code,  # 保留code用于匹配股票
+                                'name': name   # 保留name用于显示
+                            })
                     except Exception as e:
                         print(f"[{datetime.now()}] ⚠️ 解析人气榜数据行失败 (行{idx}): {str(e)[:100]}")
                         continue

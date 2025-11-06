@@ -1200,8 +1200,7 @@ public class AIController : ControllerBase
                     
                     if (hotRankList != null && hotRankList.Count > 0)
                     {
-                        // 查找当前股票在人气榜中的排名
-                        var stockRank = -1;
+                        // 查找当前股票在人气榜中的排名（使用API返回的rank字段）
                         var stockRankInfo = (Newtonsoft.Json.Linq.JObject?)null;
                         
                         for (int i = 0; i < hotRankList.Count; i++)
@@ -1218,7 +1217,6 @@ public class AIController : ControllerBase
                                     normalizedCode.EndsWith(normalizedStockCode) || 
                                     normalizedStockCode.EndsWith(normalizedCode))
                                 {
-                                    stockRank = i + 1;
                                     stockRankInfo = item;
                                     break;
                                 }
@@ -1232,31 +1230,28 @@ public class AIController : ControllerBase
 
 ";
                         
-                        if (stockRank > 0 && stockRankInfo != null)
+                        if (stockRankInfo != null)
                         {
-                            var rank = stockRankInfo["rank"]?.ToString() ?? stockRank.ToString();
+                            var rank = stockRankInfo["rank"]?.ToString() ?? "N/A";
+                            var rankChange = stockRankInfo["rankChange"]?.ToString() ?? "N/A";
+                            var hisRankChange = stockRankInfo["hisRankChange"]?.ToString() ?? "N/A";
                             var name = stockRankInfo["name"]?.ToString() ?? "";
                             var code = stockRankInfo["code"]?.ToString() ?? "";
-                            var price = stockRankInfo["price"]?.ToString() ?? "N/A";
-                            var changePercent = stockRankInfo["changePercent"]?.ToString() ?? "N/A";
-                            var volume = stockRankInfo["volume"]?.ToString() ?? "N/A";
-                            var turnover = stockRankInfo["turnover"]?.ToString() ?? "N/A";
                             
                             hotRankText += $"**该股票在人气榜中的排名：第{rank}名**\n\n";
-                            hotRankText += $"**股票信息：**\n";
+                            hotRankText += $"**排名变化信息：**\n";
                             hotRankText += $"- 股票名称：{name}\n";
                             hotRankText += $"- 股票代码：{code}\n";
-                            hotRankText += $"- 当前价格：{price}元\n";
-                            hotRankText += $"- 涨跌幅：{changePercent}%\n";
-                            hotRankText += $"- 成交量：{volume}\n";
-                            hotRankText += $"- 成交额：{turnover}\n\n";
+                            hotRankText += $"- 当前排名：第{rank}名\n";
+                            hotRankText += $"- 排名变化（与上一期相比）：{rankChange}\n";
+                            hotRankText += $"- 历史排名变化：{hisRankChange}\n\n";
                         }
                         else
                         {
                             hotRankText += $"**该股票未进入当前人气榜前{hotRankList.Count}名**\n\n";
                         }
                         
-                        // 显示人气榜前10名
+                        // 显示人气榜前10名（只显示排名信息）
                         hotRankText += $"**人气榜前10名：**\n";
                         int displayCount = Math.Min(hotRankList.Count, 10);
                         for (int i = 0; i < displayCount; i++)
@@ -1264,17 +1259,17 @@ public class AIController : ControllerBase
                             var item = hotRankList[i] as Newtonsoft.Json.Linq.JObject;
                             if (item != null)
                             {
-                                var rank = item["rank"]?.ToString() ?? (i + 1).ToString();
+                                var rank = item["rank"]?.ToString() ?? "N/A";
                                 var name = item["name"]?.ToString() ?? "";
                                 var code = item["code"]?.ToString() ?? "";
-                                var price = item["price"]?.ToString() ?? "N/A";
-                                var changePercent = item["changePercent"]?.ToString() ?? "N/A";
+                                var rankChange = item["rankChange"]?.ToString() ?? "N/A";
+                                var hisRankChange = item["hisRankChange"]?.ToString() ?? "N/A";
                                 
-                                hotRankText += $"{rank}. {name}({code}) 价格：{price}元 涨跌幅：{changePercent}%\n";
+                                hotRankText += $"{rank}. {name}({code}) 排名变化：{rankChange} 历史排名变化：{hisRankChange}\n";
                             }
                         }
                         
-                        hotRankText += "\n**提示：请结合以上个股人气榜数据，分析该股票的市场关注度、投资者情绪，以及人气排名对股价走势的影响。**\n";
+                        hotRankText += "\n**提示：请结合以上个股人气榜数据（排名、排名变化、历史排名变化），分析该股票的市场关注度、投资者情绪变化趋势，以及人气排名对股价走势的影响。**\n";
                         
                         return hotRankText;
                     }
