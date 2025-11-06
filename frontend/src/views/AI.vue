@@ -17,6 +17,9 @@
           </select>
         </div>
         <button class="btn" @click="handleAnalyze" :disabled="analyzing">开始分析</button>
+        <button v-if="isCached" class="btn btn-secondary" @click="handleRefreshAnalysis" :disabled="analyzing" style="margin-left: 10px;">
+          🔄 重新分析
+        </button>
         
         <div v-if="analyzing" class="loading-state">
           <div class="loading-spinner"></div>
@@ -27,7 +30,8 @@
           <div class="result-header">
             <h4>分析结果</h4>
             <div v-if="analysisDate" class="analysis-date">
-              📅 基于 {{ analysisDate }} 的数据分析
+              <span v-if="isCached" class="cache-badge">📦 缓存数据</span>
+              📅 分析时间：{{ analysisTime || analysisDate }}
               <span v-if="stockInfo" class="stock-info">（{{ stockInfo.name }}，当前价：{{ stockInfo.currentPrice?.toFixed(2) || 'N/A' }}）</span>
             </div>
           </div>
@@ -50,20 +54,35 @@ const analysisType = ref('comprehensive')
 const analyzing = ref(false)
 const result = ref('')
 const analysisDate = ref('')
+const analysisTime = ref('')
 const stockInfo = ref(null)
+const isCached = ref(false)
+const hasAnalyzed = ref(false) // 标记是否已经分析过（防止重复调用）
 
 // 从路由参数获取股票代码
 onMounted(() => {
   if (route.query.stockCode) {
     stockCode.value = route.query.stockCode
-    handleAnalyze()
+    // 只有在没有分析过且不在分析中时才调用
+    if (!hasAnalyzed.value && !analyzing.value) {
+      handleAnalyze()
+    }
   }
 })
 
 onActivated(() => {
   if (route.query.stockCode) {
     stockCode.value = route.query.stockCode
-    handleAnalyze()
+    // 只有在没有分析过且不在分析中时才调用
+    // 如果股票代码变化了，重置分析状态
+    const currentStockCode = route.query.stockCode
+    if (stockCode.value !== currentStockCode) {
+      hasAnalyzed.value = false
+      stockCode.value = currentStockCode
+    }
+    if (!hasAnalyzed.value && !analyzing.value) {
+      handleAnalyze()
+    }
   }
 })
 
@@ -159,16 +178,28 @@ const getAnalysisContext = (type, stockData = null, dataDate = null) => {
   return contexts[type] || contexts.comprehensive
 }
 
-const handleAnalyze = async () => {
+const handleRefreshAnalysis = () => {
+  handleAnalyze(true)
+}
+
+const handleAnalyze = async (forceRefresh = false) => {
   if (!stockCode.value.trim()) {
     alert('请输入股票代码')
+    return
+  }
+  
+  // 如果正在分析中，避免重复调用
+  if (analyzing.value) {
+    console.log('分析正在进行中，跳过重复调用')
     return
   }
   
   analyzing.value = true
   result.value = ''
   analysisDate.value = ''
+  analysisTime.value = ''
   stockInfo.value = null
+  isCached.value = false
   
   try {
     // 先获取股票最新数据，用于获取分析日期
@@ -220,9 +251,11 @@ const handleAnalyze = async () => {
     
     // 后端接口路径是 /api/ai/analyze/{stockCode}
     // AI分析可能需要较长时间，设置超时时间为10分钟
-    console.log('开始调用AI分析接口...')
+    console.log('开始调用AI分析接口...', { forceRefresh, analysisType: analysisType.value })
     const response = await api.post(`/ai/analyze/${code}`, {
-      context: context
+      context: context,
+      analysisType: analysisType.value,
+      forceRefresh: forceRefresh
     }, {
       timeout: 600000 // 10分钟 = 600000毫秒（AI分析可能包含大量数据）
     })
@@ -230,7 +263,7 @@ const handleAnalyze = async () => {
     console.log('AI分析响应:', response)
     console.log('响应类型:', typeof response)
     
-    // 后端现在返回JSON对象 { success: true, analysis: "...", length: xxx }
+    // 后端现在返回JSON对象 { success: true, analysis: "...", length: xxx, cached: true/false, analysisTime: "..." }
     if (response && typeof response === 'object') {
       // 优先使用analysis字段
       if (response.analysis) {
@@ -246,14 +279,25 @@ const handleAnalyze = async () => {
         // 其他情况，尝试转换为字符串
         result.value = JSON.stringify(response, null, 2)
       }
+      
+      // 处理缓存状态和分析时间
+      isCached.value = response.cached === true
+      if (response.analysisTime) {
+        analysisTime.value = response.analysisTime
+      } else if (response.timestamp) {
+        analysisTime.value = response.timestamp
+      }
+      
+      console.log('AI分析结果已设置，长度:', result.value?.length || 0, '是否缓存:', isCached.value, '分析时间:', analysisTime.value)
+      
+      // 标记已分析
+      hasAnalyzed.value = true
     } else if (typeof response === 'string') {
       // 如果后端直接返回字符串（向后兼容）
       result.value = response
     } else {
       result.value = '分析完成，但响应格式异常'
     }
-    
-    console.log('AI分析结果已设置，长度:', result.value?.length || 0)
   } catch (error) {
     console.error('AI分析失败:', error)
     console.error('错误详情:', {
@@ -278,6 +322,10 @@ const handleAnalyze = async () => {
     }
   } finally {
     analyzing.value = false
+    // 如果失败，重置分析状态，允许重试
+    if (!result.value || result.value.includes('失败') || result.value.includes('错误')) {
+      hasAnalyzed.value = false
+    }
   }
 }
 </script>
@@ -376,6 +424,24 @@ const handleAnalyze = async () => {
   line-height: 1.6;
   color: #333;
   word-break: break-word;
+}
+
+.btn-secondary {
+  background-color: #6c757d;
+}
+
+.btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.cache-badge {
+  background-color: #17a2b8;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-right: 8px;
 }
 
 @media (max-width: 768px) {

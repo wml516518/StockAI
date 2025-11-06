@@ -34,6 +34,36 @@ public class AIController : ControllerBase
     {
         _logger.LogInformation("开始分析股票: {StockCode}", stockCode);
         
+        // 获取分析类型（默认为comprehensive）
+        var analysisType = request?.AnalysisType ?? "comprehensive";
+        
+        // 构建缓存键（包含股票代码和分析类型）
+        var cacheKey = $"ai_analysis_{stockCode}_{analysisType}";
+        
+        // 如果不需要强制刷新，先检查缓存
+        if (!(request?.ForceRefresh ?? false))
+        {
+            if (_cache.TryGetValue(cacheKey, out CachedAnalysisResult? cachedResult) && cachedResult != null)
+            {
+                _logger.LogInformation("使用缓存的AI分析结果: {StockCode} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
+                    stockCode, analysisType, cachedResult.AnalysisTime);
+                
+                return Ok(new
+                {
+                    success = true,
+                    analysis = cachedResult.Analysis,
+                    length = cachedResult.Analysis?.Length ?? 0,
+                    timestamp = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    cached = true,
+                    analysisTime = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss")
+                });
+            }
+        }
+        else
+        {
+            _logger.LogInformation("强制刷新，跳过缓存: {StockCode} (分析类型: {AnalysisType})", stockCode, analysisType);
+        }
+        
         try
         {
             // 获取股票基本面和实时行情数据
@@ -82,7 +112,61 @@ public class AIController : ControllerBase
                 _logger.LogWarning("未能获取基本面信息，将使用实时行情数据");
             }
             
-            _logger.LogInformation("步骤2: 正在获取实时行情...");
+            // 步骤2: 获取行业详情
+            string industryInfoText = "";
+            try
+            {
+                _logger.LogInformation("步骤2: 正在从AKShare获取行业详情...");
+                _logger.LogInformation("🤖 [AIController] 步骤2: 正在从AKShare获取行业详情");
+                
+                industryInfoText = await GetIndustryInfoFromAKShareAsync(stockCode);
+                
+                if (!string.IsNullOrEmpty(industryInfoText))
+                {
+                    _logger.LogInformation("成功获取行业详情，数据长度: {Length} 字符", industryInfoText.Length);
+                    _logger.LogInformation("🤖 [AIController] ✅ 成功获取行业详情，长度: {Length} 字符", industryInfoText.Length);
+                }
+                else
+                {
+                    _logger.LogWarning("未能获取行业详情");
+                    _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取行业详情");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取行业详情时发生异常");
+                _logger.LogError(ex, "🤖 [AIController] ❌ 获取行业详情时发生异常");
+                // 继续执行，使用空字符串
+            }
+            
+            // 步骤3: 获取概念股数据
+            string conceptInfoText = "";
+            try
+            {
+                _logger.LogInformation("步骤3: 正在从AKShare获取概念股数据...");
+                _logger.LogInformation("🤖 [AIController] 步骤3: 正在从AKShare获取概念股数据");
+                
+                conceptInfoText = await GetConceptInfoFromAKShareAsync(stockCode);
+                
+                if (!string.IsNullOrEmpty(conceptInfoText))
+                {
+                    _logger.LogInformation("成功获取概念股数据，数据长度: {Length} 字符", conceptInfoText.Length);
+                    _logger.LogInformation("🤖 [AIController] ✅ 成功获取概念股数据，长度: {Length} 字符", conceptInfoText.Length);
+                }
+                else
+                {
+                    _logger.LogWarning("未能获取概念股数据");
+                    _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取概念股数据");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取概念股数据时发生异常");
+                _logger.LogError(ex, "🤖 [AIController] ❌ 获取概念股数据时发生异常");
+                // 继续执行，使用空字符串
+            }
+            
+            _logger.LogInformation("步骤2.1: 正在获取实时行情...");
             
             var stock = await _stockDataService.GetRealTimeQuoteAsync(stockCode);
             
@@ -186,8 +270,8 @@ public class AIController : ControllerBase
                 _logger.LogInformation("步骤2.5: 获取交易数据");
                 
                 // 检查缓存（缓存5分钟）
-                var cacheKey = $"trade_data_{stockCode}";
-                if (!_cache.TryGetValue(cacheKey, out string? cachedTradeData))
+                var tradeCacheKey = $"trade_data_{stockCode}";
+                if (!_cache.TryGetValue(tradeCacheKey, out string? cachedTradeData))
                 {
                     var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
                         ?? "http://localhost:5001";
@@ -388,7 +472,7 @@ public class AIController : ControllerBase
                                     tradeDataText += "\n**提示：请结合以上实时交易数据（分时成交、买卖盘口），分析当前市场情绪和交易活跃度，判断买卖力量的对比。**\n";
                                     
                                     // 缓存5分钟
-                                    _cache.Set(cacheKey, tradeDataText, TimeSpan.FromMinutes(5));
+                                    _cache.Set(tradeCacheKey, tradeDataText, TimeSpan.FromMinutes(5));
                                     
                                     _logger.LogDebug("交易数据获取完成，数据长度: {Length} 字符", tradeDataText.Length);
                                     _logger.LogInformation("🤖 [AIController] ✅ 交易数据获取完成，已缓存");
@@ -696,8 +780,8 @@ public class AIController : ControllerBase
 ";
                 
                 enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                    ? fundamentalText + historyText + pythonAnalysisText + tradeDataText
-                    : enhancedContext + fundamentalText + historyText + pythonAnalysisText + tradeDataText;
+                    ? fundamentalText + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText
+                    : enhancedContext + fundamentalText + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText;
                 
                 _logger.LogDebug("已构建包含基本面信息和历史数据的上下文，上下文长度: {Length} 字符", enhancedContext.Length);
                 _logger.LogInformation("🤖 [AIController] ✅ 已构建包含基本面信息和历史数据的上下文，长度: {Length} 字符", enhancedContext.Length);
@@ -718,8 +802,8 @@ public class AIController : ControllerBase
 - 换手率：{stock.TurnoverRate:F2}%
 ";
                 enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                    ? stockInfo + historyText + pythonAnalysisText + tradeDataText
-                    : enhancedContext + stockInfo + historyText + pythonAnalysisText + tradeDataText;
+                    ? stockInfo + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText
+                    : enhancedContext + stockInfo + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText;
             }
             else
             {
@@ -727,11 +811,12 @@ public class AIController : ControllerBase
                 _logger.LogWarning("🤖 [AIController] ⚠️ 既未获取到基本面数据，也未获取到实时行情数据，将使用原始上下文");
                 
                 // 即使没有基本面和实时行情，也尝试添加历史数据
-                if (!string.IsNullOrEmpty(historyText) || !string.IsNullOrEmpty(pythonAnalysisText) || !string.IsNullOrEmpty(tradeDataText))
+                if (!string.IsNullOrEmpty(historyText) || !string.IsNullOrEmpty(pythonAnalysisText) || !string.IsNullOrEmpty(tradeDataText) || 
+                    !string.IsNullOrEmpty(industryInfoText) || !string.IsNullOrEmpty(conceptInfoText))
                 {
                     enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                        ? historyText + pythonAnalysisText + tradeDataText
-                        : enhancedContext + historyText + pythonAnalysisText + tradeDataText;
+                        ? industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText
+                        : enhancedContext + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText;
                 }
             }
             
@@ -761,13 +846,35 @@ public class AIController : ControllerBase
                 _logger.LogWarning("🤖 [AIController] ⚠️ 响应较大 ({SizeKB:F2} KB)，可能影响传输", responseSizeKB);
             }
             
+            // 保存到缓存（永久缓存，直到手动刷新）
+            var analysisTime = DateTime.Now;
+            var cachedResult = new CachedAnalysisResult
+            {
+                Analysis = result,
+                AnalysisTime = analysisTime,
+                StockCode = stockCode,
+                AnalysisType = analysisType
+            };
+            
+            // 使用MemoryCacheEntryOptions设置缓存（不设置过期时间，永久缓存）
+            var cacheOptions = new MemoryCacheEntryOptions
+            {
+                Priority = CacheItemPriority.NeverRemove // 设置为永不移除
+            };
+            _cache.Set(cacheKey, cachedResult, cacheOptions);
+            
+            _logger.LogInformation("AI分析结果已缓存: {StockCode} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
+                stockCode, analysisType, analysisTime);
+            
             // 返回JSON格式，包含分析结果
             return Ok(new { 
                 success = true, 
                 analysis = result,
                 length = result.Length,
                 sizeKB = Math.Round(responseSizeKB, 2),
-                timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                cached = false,
+                analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss")
             });
         }
         catch (Exception ex)
@@ -789,11 +896,31 @@ public class AIController : ControllerBase
                     });
                 }
                 
+                // 保存到缓存（永久缓存）
+                var analysisTime = DateTime.Now;
+                var cachedResult = new CachedAnalysisResult
+                {
+                    Analysis = result,
+                    AnalysisTime = analysisTime,
+                    StockCode = stockCode,
+                    AnalysisType = analysisType
+                };
+                
+                var cacheOptions = new MemoryCacheEntryOptions
+                {
+                    Priority = CacheItemPriority.NeverRemove
+                };
+                _cache.Set(cacheKey, cachedResult, cacheOptions);
+                
+                _logger.LogInformation("降级分析结果已缓存: {StockCode} (分析类型: {AnalysisType})", stockCode, analysisType);
+                
                 return Ok(new { 
                     success = true, 
                     analysis = result,
                     length = result.Length,
-                    timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    cached = false,
+                    analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss")
                 });
             }
             catch (Exception ex2)
@@ -827,6 +954,341 @@ public class AIController : ControllerBase
         var result = await _aiService.GetStockRecommendationAsync(stockCode);
         return Ok(result);
     }
+    
+    /// <summary>
+    /// 从AKShare获取行业详情
+    /// </summary>
+    private async Task<string> GetIndustryInfoFromAKShareAsync(string stockCode)
+    {
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
+                ?? "http://localhost:5001";
+            
+            var url = $"{pythonServiceUrl}/api/stock/industry/{stockCode}";
+            
+            _logger.LogDebug("尝试从Python服务获取行业详情: {Url}", url);
+            
+            using var pythonClient = new HttpClient();
+            pythonClient.Timeout = TimeSpan.FromSeconds(120);
+            pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            
+            var response = await pythonClient.GetAsync(url);
+            
+            // 如果返回404，说明数据未找到，返回空字符串
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogInformation("Python服务(AKShare)无法获取股票 {StockCode} 的行业数据", stockCode);
+                return "";
+            }
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
+                return "";
+            }
+            
+            var responseContent = await response.Content.ReadAsStringAsync();
+            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(responseContent);
+            
+            if (jsonData["success"]?.ToString() == "True" && jsonData["data"] != null)
+            {
+                var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
+                if (data != null)
+                {
+                    // 格式化行业信息
+                    var industryName = data["industryName"]?.ToString() ?? "未知";
+                    var industryCode = data["industryCode"]?.ToString() ?? "";
+                    var industryDescription = data["description"]?.ToString() ?? "";
+                    var industryStocks = data["stocks"] as Newtonsoft.Json.Linq.JArray;
+                    var industryTrends = data["trends"]?.ToString() ?? "";
+                    var industryPerformance = data["performance"] as Newtonsoft.Json.Linq.JObject;
+                    var industryMarketData = data["marketData"] as Newtonsoft.Json.Linq.JObject;
+                    
+                    var industryText = $@"
+
+【行业详情】（数据来源：AKShare - stock_board_industry_name_em）
+
+**行业基本信息：**
+- 行业名称：{industryName}
+- 行业代码：{industryCode}
+{(string.IsNullOrEmpty(industryDescription) ? "" : $"- 行业描述：{industryDescription}")}
+
+";
+                    
+                    // 添加行业板块实时市场数据（从stock_board_industry_name_em获取的实时数据）
+                    if (industryMarketData != null && industryMarketData.Count > 0)
+                    {
+                        industryText += "**行业板块实时市场数据：**\n";
+                        
+                        var latestPrice = industryMarketData["latestPrice"]?.ToString();
+                        var changeAmount = industryMarketData["changeAmount"]?.ToString();
+                        var changePercent = industryMarketData["changePercent"]?.ToString();
+                        var totalMarketCap = industryMarketData["totalMarketCap"]?.ToString();
+                        var turnoverRate = industryMarketData["turnoverRate"]?.ToString();
+                        var risingCount = industryMarketData["risingCount"]?.ToString();
+                        var fallingCount = industryMarketData["fallingCount"]?.ToString();
+                        var leaderStock = industryMarketData["leaderStock"]?.ToString();
+                        var leaderChangePercent = industryMarketData["leaderChangePercent"]?.ToString();
+                        
+                        if (!string.IsNullOrEmpty(latestPrice) && latestPrice != "null")
+                            industryText += $"- 行业板块指数：{latestPrice}\n";
+                        if (!string.IsNullOrEmpty(changeAmount) && changeAmount != "null")
+                            industryText += $"- 涨跌额：{changeAmount}\n";
+                        if (!string.IsNullOrEmpty(changePercent) && changePercent != "null")
+                            industryText += $"- 涨跌幅：{changePercent}%\n";
+                        if (!string.IsNullOrEmpty(totalMarketCap) && totalMarketCap != "null")
+                        {
+                            var marketCapBillion = decimal.Parse(totalMarketCap) / 1000000000;
+                            industryText += $"- 行业总市值：{marketCapBillion:F2}亿元\n";
+                        }
+                        if (!string.IsNullOrEmpty(turnoverRate) && turnoverRate != "null")
+                            industryText += $"- 换手率：{turnoverRate}%\n";
+                        if (!string.IsNullOrEmpty(risingCount) && risingCount != "null" && 
+                            !string.IsNullOrEmpty(fallingCount) && fallingCount != "null")
+                            industryText += $"- 上涨家数：{risingCount}，下跌家数：{fallingCount}\n";
+                        if (!string.IsNullOrEmpty(leaderStock))
+                        {
+                            var leaderInfo = $"- 领涨股票：{leaderStock}";
+                            if (!string.IsNullOrEmpty(leaderChangePercent) && leaderChangePercent != "null")
+                                leaderInfo += $"（涨跌幅：{leaderChangePercent}%）";
+                            industryText += leaderInfo + "\n";
+                        }
+                        
+                        industryText += "\n";
+                    }
+                    
+                    // 添加行业表现数据
+                    if (industryPerformance != null)
+                    {
+                        var avgPE = industryPerformance["avgPE"]?.ToString() ?? "N/A";
+                        var avgPB = industryPerformance["avgPB"]?.ToString() ?? "N/A";
+                        var avgROE = industryPerformance["avgROE"]?.ToString() ?? "N/A";
+                        var totalMarketCap = industryPerformance["totalMarketCap"]?.ToString() ?? "N/A";
+                        var avgChangePercent = industryPerformance["avgChangePercent"]?.ToString() ?? "N/A";
+                        
+                        industryText += $@"**行业表现指标：**
+- 行业平均市盈率(PE)：{avgPE}
+- 行业平均市净率(PB)：{avgPB}
+- 行业平均ROE：{avgROE}
+- 行业总市值：{totalMarketCap}
+- 行业平均涨跌幅：{avgChangePercent}%
+
+";
+                    }
+                    
+                    // 添加行业趋势
+                    if (!string.IsNullOrEmpty(industryTrends))
+                    {
+                        industryText += $@"**行业趋势分析：**
+{industryTrends}
+
+";
+                    }
+                    
+                    // 添加行业内股票列表（如果有）
+                    if (industryStocks != null && industryStocks.Count > 0)
+                    {
+                        industryText += $"**行业内主要股票（共{industryStocks.Count}只）：**\n";
+                        int displayCount = Math.Min(industryStocks.Count, 20); // 最多显示20只
+                        for (int i = 0; i < displayCount; i++)
+                        {
+                            var stock = industryStocks[i] as Newtonsoft.Json.Linq.JObject;
+                            if (stock != null)
+                            {
+                                var code = stock["code"]?.ToString() ?? "";
+                                var name = stock["name"]?.ToString() ?? "";
+                                var price = stock["price"]?.ToString() ?? "N/A";
+                                var changePercent = stock["changePercent"]?.ToString() ?? "N/A";
+                                industryText += $"- {name}({code}) 价格：{price}元 涨跌幅：{changePercent}%\n";
+                            }
+                        }
+                        if (industryStocks.Count > displayCount)
+                        {
+                            industryText += $"... 还有{industryStocks.Count - displayCount}只股票未显示\n";
+                        }
+                        industryText += "\n";
+                    }
+                    
+                    industryText += "**提示：请结合以上行业数据，分析该股票在所属行业中的地位、行业整体发展趋势，以及行业对该股票的影响。**\n";
+                    
+                    return industryText;
+                }
+            }
+            
+            return "";
+        }
+        catch (System.Net.Http.HttpRequestException ex)
+        {
+            if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
+            {
+                _logger.LogDebug(ex, "Python服务返回404 - 股票代码 {StockCode} 的行业数据未找到", stockCode);
+            }
+            else
+            {
+                _logger.LogDebug(ex, "Python服务不可用（可能未启动）");
+            }
+            return "";
+        }
+        catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
+        {
+            _logger.LogWarning(ex, "Python服务请求超时");
+            return "";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Python服务调用失败");
+            return "";
+        }
+    }
+    
+    /// <summary>
+    /// 从AKShare获取概念股数据
+    /// </summary>
+    private async Task<string> GetConceptInfoFromAKShareAsync(string stockCode)
+    {
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
+                ?? "http://localhost:5001";
+            
+            var url = $"{pythonServiceUrl}/api/stock/concept/{stockCode}";
+            
+            _logger.LogDebug("尝试从Python服务获取概念股数据: {Url}", url);
+            
+            using var pythonClient = new HttpClient();
+            pythonClient.Timeout = TimeSpan.FromSeconds(120);
+            pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            
+            var response = await pythonClient.GetAsync(url);
+            
+            // 如果返回404，说明数据未找到，返回空字符串
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogInformation("Python服务(AKShare)无法获取股票 {StockCode} 的概念股数据", stockCode);
+                return "";
+            }
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
+                return "";
+            }
+            
+            var responseContent = await response.Content.ReadAsStringAsync();
+            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(responseContent);
+            
+            if (jsonData["success"]?.ToString() == "True" && jsonData["data"] != null)
+            {
+                var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
+                if (data != null)
+                {
+                    // 格式化概念股信息
+                    var concepts = data["concepts"] as Newtonsoft.Json.Linq.JArray;
+                    
+                    if (concepts != null && concepts.Count > 0)
+                    {
+                        var conceptText = $@"
+
+【概念股数据】（数据来源：AKShare）
+
+**该股票所属的概念板块（共{concepts.Count}个）：**
+
+";
+                        
+                        for (int i = 0; i < concepts.Count; i++)
+                        {
+                            var concept = concepts[i] as Newtonsoft.Json.Linq.JObject;
+                            if (concept != null)
+                            {
+                                var conceptName = concept["name"]?.ToString() ?? "未知概念";
+                                var conceptCode = concept["code"]?.ToString() ?? "";
+                                var conceptDescription = concept["description"]?.ToString() ?? "";
+                                var relatedStocks = concept["relatedStocks"] as Newtonsoft.Json.Linq.JArray;
+                                var conceptTrend = concept["trend"]?.ToString() ?? "";
+                                
+                                conceptText += $"**{i + 1}. {conceptName}**";
+                                if (!string.IsNullOrEmpty(conceptCode))
+                                {
+                                    conceptText += $"（代码：{conceptCode}）";
+                                }
+                                conceptText += "\n";
+                                
+                                if (!string.IsNullOrEmpty(conceptDescription))
+                                {
+                                    conceptText += $"- 概念描述：{conceptDescription}\n";
+                                }
+                                
+                                if (!string.IsNullOrEmpty(conceptTrend))
+                                {
+                                    conceptText += $"- 概念趋势：{conceptTrend}\n";
+                                }
+                                
+                                // 添加相关股票列表（如果有）
+                                if (relatedStocks != null && relatedStocks.Count > 0)
+                                {
+                                    conceptText += $"- 相关股票（共{relatedStocks.Count}只，显示前10只）：\n";
+                                    int displayCount = Math.Min(relatedStocks.Count, 10);
+                                    for (int j = 0; j < displayCount; j++)
+                                    {
+                                        var stock = relatedStocks[j] as Newtonsoft.Json.Linq.JObject;
+                                        if (stock != null)
+                                        {
+                                            var code = stock["code"]?.ToString() ?? "";
+                                            var name = stock["name"]?.ToString() ?? "";
+                                            var price = stock["price"]?.ToString() ?? "N/A";
+                                            var changePercent = stock["changePercent"]?.ToString() ?? "N/A";
+                                            conceptText += $"  - {name}({code}) 价格：{price}元 涨跌幅：{changePercent}%\n";
+                                        }
+                                    }
+                                    if (relatedStocks.Count > displayCount)
+                                    {
+                                        conceptText += $"  ... 还有{relatedStocks.Count - displayCount}只股票未显示\n";
+                                    }
+                                }
+                                
+                                conceptText += "\n";
+                            }
+                        }
+                        
+                        conceptText += "**提示：请结合以上概念股数据，分析该股票所属的热点概念、概念板块的市场表现，以及概念对该股票价格和投资价值的影响。**\n";
+                        
+                        return conceptText;
+                    }
+                    else
+                    {
+                        return "\n【概念股数据】（数据来源：AKShare）\n\n该股票未归类到任何概念板块。\n";
+                    }
+                }
+            }
+            
+            return "";
+        }
+        catch (System.Net.Http.HttpRequestException ex)
+        {
+            if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
+            {
+                _logger.LogDebug(ex, "Python服务返回404 - 股票代码 {StockCode} 的概念股数据未找到", stockCode);
+            }
+            else
+            {
+                _logger.LogDebug(ex, "Python服务不可用（可能未启动）");
+            }
+            return "";
+        }
+        catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
+        {
+            _logger.LogWarning(ex, "Python服务请求超时");
+            return "";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Python服务调用失败");
+            return "";
+        }
+    }
 }
 
 public class ChatRequest
@@ -840,5 +1302,18 @@ public class AnalyzeRequest
     public int? PromptId { get; set; }
     public string? Context { get; set; }
     public int? ModelId { get; set; }
+    public string? AnalysisType { get; set; } // 分析类型：comprehensive, fundamental, news, technical
+    public bool ForceRefresh { get; set; } = false; // 是否强制刷新（跳过缓存）
+}
+
+/// <summary>
+/// 缓存的AI分析结果
+/// </summary>
+public class CachedAnalysisResult
+{
+    public string Analysis { get; set; } = string.Empty;
+    public DateTime AnalysisTime { get; set; }
+    public string StockCode { get; set; } = string.Empty;
+    public string AnalysisType { get; set; } = "comprehensive";
 }
 

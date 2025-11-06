@@ -19,6 +19,99 @@ import pandas as pd
 import numpy as np
 import traceback
 from datetime import datetime, timedelta
+import os
+import warnings
+import time
+
+# 全局禁用代理以解决连接问题（与测试脚本test_industry_name_em.py保持一致）
+# 首先移除所有代理环境变量（与测试脚本保持一致）
+original_proxies = {}
+for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+    original_proxies[proxy_var] = os.environ.get(proxy_var)
+    os.environ.pop(proxy_var, None)
+
+# 然后设置NO_PROXY以禁止所有代理
+os.environ['no_proxy'] = '*'
+os.environ['NO_PROXY'] = '*'
+
+# 禁用urllib3警告
+warnings.filterwarnings('ignore', category=UserWarning)
+
+# 打印代理禁用状态（仅在服务启动时）
+print(f"[{datetime.now()}] 🔧 Python服务启动 - 代理设置状态:")
+proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy']
+for var in proxy_vars:
+    val = os.environ.get(var)
+    if val:
+        print(f"  {var} = {val[:60]}...")
+    else:
+        print(f"  {var} = (未设置)")
+print(f"[{datetime.now()}] ✅ 已设置 NO_PROXY=* 以禁用代理\n")
+
+# 配置AKShare使用无代理环境（更彻底的代理禁用 - 使用monkey patch）
+try:
+    import requests
+    from requests.adapters import HTTPAdapter
+    from requests.packages.urllib3.util.retry import Retry
+    import urllib3
+    
+    # 禁用urllib3警告
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    # 保存原始的requests.get和requests.post方法
+    _original_get = requests.get
+    _original_post = requests.post
+    _original_session_init = requests.Session.__init__
+    
+    # Monkey patch: 拦截所有requests调用，强制禁用代理
+    def patched_get(*args, **kwargs):
+        # 强制设置proxies=None，确保不使用任何代理
+        kwargs['proxies'] = {'http': None, 'https': None}
+        kwargs.setdefault('timeout', 30)  # 设置默认超时
+        return _original_get(*args, **kwargs)
+    
+    def patched_post(*args, **kwargs):
+        # 强制设置proxies=None，确保不使用任何代理
+        kwargs['proxies'] = {'http': None, 'https': None}
+        kwargs.setdefault('timeout', 30)  # 设置默认超时
+        return _original_post(*args, **kwargs)
+    
+    # Monkey patch Session类，确保所有Session实例都不使用代理
+    def patched_session_init(self, *args, **kwargs):
+        _original_session_init(self, *args, **kwargs)
+        self.trust_env = False  # 不信任环境变量
+        self.proxies = {'http': None, 'https': None}  # 强制禁用代理
+    
+    # 应用monkey patch
+    requests.get = patched_get
+    requests.post = patched_post
+    requests.Session.__init__ = patched_session_init
+    
+    # 创建自定义session，完全禁用代理
+    def create_no_proxy_session():
+        session = requests.Session()
+        session.trust_env = False  # 不信任环境变量中的代理设置
+        session.proxies = {'http': None, 'https': None}  # 强制禁用代理
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,  # 增加重试延迟
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+    
+    # 尝试设置环境变量，确保urllib3也不使用代理
+    os.environ['REQUESTS_CA_BUNDLE'] = ''
+    os.environ['CURL_CA_BUNDLE'] = ''
+    
+    print(f"[{datetime.now()}] ✅ 已通过monkey patch配置requests库禁用代理（包括系统代理）")
+except Exception as e:
+    print(f"[{datetime.now()}] ⚠️ 配置requests代理设置时出错: {str(e)}")
+    import traceback
+    print(traceback.format_exc())
+    pass
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
@@ -70,8 +163,26 @@ def get_trade_data(stock_code):
                     # 转换为标准格式
                     minute_data = []
                     for _, row in df_minute.iterrows():
+                        # 处理时间字段，确保是datetime对象
+                        time_val = row.get('day', '')
+                        if pd.notna(time_val):
+                            if isinstance(time_val, str):
+                                try:
+                                    # 尝试将字符串转换为datetime
+                                    from datetime import datetime as dt
+                                    time_val = pd.to_datetime(time_val)
+                                except:
+                                    # 如果转换失败，使用原始字符串
+                                    time_str = str(time_val)
+                            elif hasattr(time_val, 'strftime'):
+                                time_str = time_val.strftime("%Y-%m-%d %H:%M:%S")
+                            else:
+                                time_str = str(time_val)
+                        else:
+                            time_str = ''
+                        
                         minute_data.append({
-                            'time': row.get('day', '').strftime("%Y-%m-%d %H:%M:%S") if pd.notna(row.get('day', '')) else '',
+                            'time': time_str,
                             'open': float(row.get('open', 0)) if pd.notna(row.get('open', 0)) else 0,
                             'high': float(row.get('high', 0)) if pd.notna(row.get('high', 0)) else 0,
                             'low': float(row.get('low', 0)) if pd.notna(row.get('low', 0)) else 0,
@@ -761,28 +872,29 @@ def analyze_stock_data(stock_code):
             df = None
             method_used = None
             
-            # 方法1: stock_zh_a_hist_em（东方财富接口，更稳定）
+            # 方法1: stock_zh_a_hist（AKShare标准接口）
             try:
-                print(f"[{datetime.now()}] [分析] 尝试方法1: stock_zh_a_hist_em")
-                df = ak.stock_zh_a_hist_em(symbol=clean_code,
-                                         start_date=start_date.strftime("%Y%m%d"),
-                                         end_date=end_date.strftime("%Y%m%d"),
-                                         adjust="qfq")
+                print(f"[{datetime.now()}] [分析] 尝试方法1: stock_zh_a_hist")
+                df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
+                                       start_date=start_date.strftime("%Y%m%d"),
+                                       end_date=end_date.strftime("%Y%m%d"),
+                                       adjust="qfq")
                 if df is not None and not df.empty:
-                    method_used = "stock_zh_a_hist_em"
+                    method_used = "stock_zh_a_hist"
                     print(f"[{datetime.now()}] [分析] ✅ 方法1成功，获取 {len(df)} 条数据")
             except Exception as e1:
                 print(f"[{datetime.now()}] [分析] ⚠️ 方法1失败: {str(e1)}")
             
-            # 方法2: stock_zh_a_hist_em (无复权)
+            # 方法2: stock_zh_a_hist (无复权)
             if df is None or df.empty:
                 try:
-                    print(f"[{datetime.now()}] [分析] 尝试方法2: stock_zh_a_hist_em (无复权)")
-                    df = ak.stock_zh_a_hist_em(symbol=clean_code,
-                                             start_date=start_date.strftime("%Y%m%d"),
-                                             end_date=end_date.strftime("%Y%m%d"))
+                    print(f"[{datetime.now()}] [分析] 尝试方法2: stock_zh_a_hist (无复权)")
+                    df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
+                                           start_date=start_date.strftime("%Y%m%d"),
+                                           end_date=end_date.strftime("%Y%m%d"),
+                                           adjust="")
                     if df is not None and not df.empty:
-                        method_used = "stock_zh_a_hist_em (无复权)"
+                        method_used = "stock_zh_a_hist (无复权)"
                         print(f"[{datetime.now()}] [分析] ✅ 方法2成功，获取 {len(df)} 条数据")
                 except Exception as e2:
                     print(f"[{datetime.now()}] [分析] ⚠️ 方法2失败: {str(e2)}")
@@ -804,18 +916,19 @@ def analyze_stock_data(stock_code):
             # 方法4: 尝试使用更长的日期范围
             if df is None or df.empty:
                 try:
-                    print(f"[{datetime.now()}] [分析] 尝试方法4: stock_zh_a_hist_em (6个月)")
+                    print(f"[{datetime.now()}] [分析] 尝试方法4: stock_zh_a_hist (6个月)")
                     start_date_long = end_date - timedelta(days=6 * 30)
-                    df = ak.stock_zh_a_hist_em(symbol=clean_code,
-                                             start_date=start_date_long.strftime("%Y%m%d"),
-                                             end_date=end_date.strftime("%Y%m%d"))
+                    df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
+                                           start_date=start_date_long.strftime("%Y%m%d"),
+                                           end_date=end_date.strftime("%Y%m%d"),
+                                           adjust="qfq")
                     if df is not None and not df.empty:
                         # 过滤到只保留3个月的数据
                         if '日期' in df.columns:
                             df['日期'] = pd.to_datetime(df['日期'])
                             df = df[df['日期'] >= start_date]
                         if len(df) > 0:
-                            method_used = "stock_zh_a_hist_em (6个月)"
+                            method_used = "stock_zh_a_hist (6个月)"
                             print(f"[{datetime.now()}] [分析] ✅ 方法4成功，获取 {len(df)} 条数据")
                         else:
                             df = None
@@ -1169,6 +1282,879 @@ def analyze_stock_data(stock_code):
         
         return jsonify(error_response), 500
 
+@app.route('/api/stock/industry/<stock_code>', methods=['GET'])
+def get_industry_info(stock_code):
+    """
+    获取股票所属行业的详情
+    
+    Args:
+        stock_code: 股票代码，如 000001, 600000
+    
+    Returns:
+        JSON格式的行业数据
+    """
+    # 在函数开始时保存原始代理设置（确保在异常处理中也能访问）
+    original_http_proxy = os.environ.get('HTTP_PROXY')
+    original_https_proxy = os.environ.get('HTTPS_PROXY')
+    original_http_proxy_lower = os.environ.get('http_proxy')
+    original_https_proxy_lower = os.environ.get('https_proxy')
+    
+    try:
+        print(f"[{datetime.now()}] 请求股票行业详情: {stock_code}")
+        
+        clean_code = stock_code.strip().zfill(6)
+        
+        # 临时移除代理环境变量（在整个函数执行期间禁用代理，与测试脚本保持一致）
+        print(f"[{datetime.now()}] 🔧 [行业接口] 再次确认禁用代理设置...")
+        for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+            original_value = os.environ.get(proxy_var)
+            if original_value:
+                print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
+            os.environ.pop(proxy_var, None)
+        
+        # 确保NO_PROXY设置正确
+        os.environ['NO_PROXY'] = '*'
+        os.environ['no_proxy'] = '*'
+        
+        # 先尝试从股票基本信息获取行业名称（可选步骤）
+        industry_name_from_info = None
+        try:
+            df_info = None
+            max_retries = 2  # 减少重试次数，因为如果失败我们可以用反向查找
+            for attempt in range(max_retries):
+                try:
+                    df_info = ak.stock_individual_info_em(symbol=clean_code)
+                    if df_info is not None and not df_info.empty:
+                        # 提取行业信息
+                        industry_fields = ['所属行业', '行业', '行业分类', '板块']
+                        for field in industry_fields:
+                            industry_row = df_info[df_info['item'] == field]
+                            if not industry_row.empty:
+                                industry_name_from_info = str(industry_row.iloc[0]['value']).strip()
+                                print(f"[{datetime.now()}] ✅ 从股票信息获取到行业: {industry_name_from_info}")
+                                break
+                        break
+                except Exception as e:
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    if attempt < max_retries - 1:
+                        print(f"[{datetime.now()}] ⚠️ [行业接口] 获取股票信息失败 (尝试 {attempt + 1}/{max_retries}): {error_type} - {error_msg[:100]}，将使用反向查找...")
+                        time.sleep(0.5)
+                    else:
+                        print(f"[{datetime.now()}] ⚠️ [行业接口] 获取股票信息最终失败 ({error_type})，将使用反向查找")
+                        print(f"  错误详情: {error_msg[:200]}")
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ [行业接口] 获取股票信息异常: {str(e)[:100]}，将使用反向查找")
+        
+        # 注意：不在此处恢复代理，因为后续还需要调用AKShare函数获取行业板块数据
+        # 代理将在函数结束时统一恢复
+        
+        # 初始化行业信息
+        industry_name = industry_name_from_info if industry_name_from_info else '未知'
+        industry_code = ''
+        
+        # 使用 stock_board_industry_name_em 获取所有行业板块，然后匹配
+        industry_stocks = []
+        industry_performance = {}
+        industry_trends = ''
+        industry_market_data = {}  # 行业板块市场数据（必须在此初始化，避免后续使用时变量未定义错误）
+        
+        try:
+            # 临时移除代理环境变量（再次确保，与测试脚本保持一致）
+            print(f"[{datetime.now()}] 🔧 [行业接口] 禁用代理设置...")
+            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                original_value = os.environ.get(proxy_var)
+                if original_value:
+                    print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
+                os.environ.pop(proxy_var, None)
+            
+            # 确保NO_PROXY设置正确（禁止所有代理）
+            os.environ['NO_PROXY'] = '*'
+            os.environ['no_proxy'] = '*'
+            print(f"[{datetime.now()}] ✅ [行业接口] 代理已禁用，NO_PROXY=*")
+            
+            # 在调用AKShare之前，再次确保禁用代理
+            # 尝试通过环境变量和urllib3设置禁用代理
+            import urllib3
+            urllib3.disable_warnings()
+            
+            # 获取所有行业板块列表（带重试，增加延迟）
+            df_industry_board = None
+            for attempt in range(3):
+                try:
+                    # 每次重试前增加延迟，避免请求过快
+                    if attempt > 0:
+                        delay = 1.0 * attempt  # 第2次重试延迟1秒，第3次延迟2秒
+                        print(f"[{datetime.now()}] ⏳ [行业接口] 等待{delay:.1f}秒后重试...")
+                        time.sleep(delay)
+                    
+                    print(f"[{datetime.now()}] 📡 [行业接口] 尝试调用 stock_board_industry_name_em() (尝试 {attempt + 1}/3)...")
+                    start_time = time.time()
+                    
+                    # 调用AKShare接口
+                    df_industry_board = ak.stock_board_industry_name_em()
+                    elapsed_time = time.time() - start_time
+                    
+                    if df_industry_board is not None and not df_industry_board.empty:
+                        print(f"[{datetime.now()}] ✅ [行业接口] 成功获取行业板块列表，耗时: {elapsed_time:.2f}秒，共{len(df_industry_board)}个行业")
+                        break
+                    else:
+                        print(f"[{datetime.now()}] ⚠️ [行业接口] 返回数据为空")
+                        time.sleep(0.5)
+                except Exception as e:
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
+                    
+                    print(f"[{datetime.now()}] ❌ [行业接口] 获取行业板块列表失败 (尝试 {attempt + 1}/3)")
+                    print(f"    错误类型: {error_type}")
+                    print(f"    错误消息: {error_msg}")
+                    print(f"    耗时: {elapsed_time:.2f}秒")
+                    
+                    # 详细的错误分析
+                    print(f"\n    {'='*70}")
+                    print(f"    【详细错误诊断】")
+                    print(f"    {'='*70}")
+                    
+                    if 'ConnectionError' in error_type or 'MaxRetriesExceeded' in error_type or 'MaxRetryError' in error_type:
+                        print(f"    🔍 错误类型: 网络连接错误")
+                        print(f"    - 目标服务器: push2.eastmoney.com (AKShare数据源)")
+                        print(f"    - 可能原因:")
+                        print(f"      1. 代理服务器不可用或配置错误")
+                        print(f"      2. 目标服务器不可达（防火墙/网络限制）")
+                        print(f"      3. DNS解析失败")
+                        print(f"    - 建议:")
+                        print(f"      1. 检查系统代理设置")
+                        print(f"      2. 尝试直接访问目标服务器")
+                        print(f"      3. 检查防火墙规则")
+                    elif 'ProtocolError' in error_type:
+                        print(f"    🔍 错误类型: 协议错误")
+                        print(f"    - 连接被远程端关闭")
+                        print(f"    - 可能原因:")
+                        print(f"      1. 请求频率过快，被服务器限制")
+                        print(f"      2. 代理服务器问题")
+                        print(f"      3. 服务器负载过高，主动断开连接")
+                        print(f"    - 建议:")
+                        print(f"      1. 增加请求间隔时间（当前已设置0.3-1秒延迟）")
+                        print(f"      2. 检查代理配置")
+                        print(f"      3. 稍后重试")
+                    elif 'RemoteDisconnected' in error_msg:
+                        print(f"    🔍 错误类型: 远程连接断开")
+                        print(f"    - 服务器主动关闭连接")
+                        print(f"    - 可能原因:")
+                        print(f"      1. 服务器检测到异常请求")
+                        print(f"      2. 网络不稳定导致连接中断")
+                        print(f"      3. 代理服务器问题")
+                    elif 'Timeout' in error_type:
+                        print(f"    🔍 错误类型: 请求超时")
+                        print(f"    - 服务器响应过慢或未响应")
+                        print(f"    - 建议: 增加超时时间或检查网络")
+                    else:
+                        print(f"    🔍 错误类型: {error_type}")
+                    
+                    # 代理状态检查
+                    print(f"\n    【代理状态检查】")
+                    proxy_found = False
+                    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                        value = os.environ.get(proxy_var)
+                        if value:
+                            print(f"    ⚠️ 发现代理设置: {proxy_var} = {value[:60]}...")
+                            proxy_found = True
+                        else:
+                            print(f"    ✅ {proxy_var}: 未设置")
+                    
+                    if not proxy_found:
+                        print(f"    ✅ 所有代理环境变量已清除")
+                    
+                    # 网络连接测试
+                    print(f"\n    【网络连接测试】")
+                    try:
+                        import socket
+                        test_hosts = [
+                            ('17.push2.eastmoney.com', 443, '行业板块服务器'),
+                            ('push2.eastmoney.com', 443, 'AKShare主服务器'),
+                            ('www.baidu.com', 80, '测试基本网络')
+                        ]
+                        for host, port, desc in test_hosts:
+                            try:
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                sock.settimeout(3)
+                                result = sock.connect_ex((host, port))
+                                sock.close()
+                                if result == 0:
+                                    print(f"    ✅ {desc}: {host}:{port} - 可连接")
+                                else:
+                                    print(f"    ❌ {desc}: {host}:{port} - 连接失败 (错误代码: {result})")
+                            except Exception as socket_e:
+                                print(f"    ❌ {desc}: {host}:{port} - 测试异常: {str(socket_e)[:60]}")
+                    except Exception as net_test_e:
+                        print(f"    ❌ 网络测试模块异常: {str(net_test_e)[:60]}")
+                    
+                    # 打印完整的异常堆栈（仅在最后一次尝试时）
+                    if attempt >= 2:
+                        print(f"\n    【完整错误堆栈】")
+                        import traceback
+                        full_trace = traceback.format_exc()
+                        print(f"    {full_trace[:1000]}")
+                    
+                    print(f"    {'='*70}\n")
+                    
+                    if attempt < 2:
+                        print(f"    ⏳ 等待1秒后重试...")
+                        time.sleep(1)
+                    else:
+                        print(f"[{datetime.now()}] ❌ [行业接口] 获取行业板块列表最终失败，将返回基础行业信息")
+                        df_industry_board = None  # 不抛出异常，允许继续执行
+                        break
+            if df_industry_board is not None and not df_industry_board.empty:
+                # 查找匹配的行业（精确匹配或包含匹配）
+                matched_industry = None
+                
+                # 先尝试精确匹配
+                if industry_name and industry_name != '未知':
+                    matched_industry = df_industry_board[df_industry_board['板块名称'] == industry_name]
+                
+                # 如果精确匹配失败，尝试包含匹配
+                if (matched_industry is None or matched_industry.empty) and industry_name and industry_name != '未知':
+                    matched_industry = df_industry_board[df_industry_board['板块名称'].str.contains(industry_name, na=False)]
+                
+                # 如果仍然没有匹配，尝试使用股票代码反向查找（限制查找数量以提高性能）
+                if (matched_industry is None or matched_industry.empty):
+                    print(f"[{datetime.now()}] 通过成分股反向查找行业板块...")
+                    max_search = 30  # 最多查找30个行业板块
+                    for idx, row in df_industry_board.head(max_search).iterrows():
+                        test_industry_code = row.get('板块代码', '')
+                        test_industry_name = row.get('板块名称', '')
+                        
+                        if not test_industry_code:
+                            continue
+                        
+                        try:
+                            # 获取该行业的成分股（带重试和延迟）
+                            df_test_stocks = None
+                            for retry in range(2):
+                                try:
+                                    time.sleep(0.3)  # 添加延迟，避免请求过快
+                                    df_test_stocks = ak.stock_board_industry_cons_em(symbol=test_industry_code)
+                                    if df_test_stocks is not None and not df_test_stocks.empty:
+                                        break
+                                except Exception as e:
+                                    if retry < 1:
+                                        time.sleep(0.5)
+                                    else:
+                                        raise
+                            
+                            if df_test_stocks is not None and not df_test_stocks.empty:
+                                stock_codes_in_industry = df_test_stocks['代码'].astype(str).str.zfill(6)
+                                if clean_code in stock_codes_in_industry.values:
+                                    industry_name = test_industry_name
+                                    industry_code = test_industry_code
+                                    matched_industry = df_industry_board[df_industry_board['板块代码'] == test_industry_code]
+                                    print(f"[{datetime.now()}] ✅ 通过反向查找找到行业: {industry_name} ({industry_code})")
+                                    
+                                    # 提取行业板块的市场数据（反向查找路径）
+                                    matched_row = matched_industry.iloc[0]
+                                    try:
+                                        # 重新初始化，覆盖之前的空字典
+                                        industry_market_data = {}
+                                        latest_price = matched_row.get('最新价', None)
+                                        change_percent = matched_row.get('涨跌幅', None)
+                                        total_market_cap = matched_row.get('总市值', None)
+                                        change_amount = matched_row.get('涨跌额', None)
+                                        turnover_rate = matched_row.get('换手率', None)
+                                        rising_count = matched_row.get('上涨家数', None)
+                                        falling_count = matched_row.get('下跌家数', None)
+                                        leader_stock = matched_row.get('领涨股票', None)
+                                        leader_change_percent = matched_row.get('领涨股票-涨跌幅', None)
+                                        
+                                        if pd.notna(latest_price):
+                                            industry_market_data['latestPrice'] = float(latest_price)
+                                        if pd.notna(change_amount):
+                                            industry_market_data['changeAmount'] = float(change_amount)
+                                        if pd.notna(change_percent):
+                                            industry_market_data['changePercent'] = float(change_percent)
+                                        if pd.notna(total_market_cap):
+                                            industry_market_data['totalMarketCap'] = float(total_market_cap)
+                                        if pd.notna(turnover_rate):
+                                            industry_market_data['turnoverRate'] = float(turnover_rate)
+                                        if pd.notna(rising_count):
+                                            industry_market_data['risingCount'] = int(rising_count)
+                                        if pd.notna(falling_count):
+                                            industry_market_data['fallingCount'] = int(falling_count)
+                                        if pd.notna(leader_stock):
+                                            industry_market_data['leaderStock'] = str(leader_stock)
+                                        if pd.notna(leader_change_percent):
+                                            industry_market_data['leaderChangePercent'] = float(leader_change_percent)
+                                        
+                                        # 构建行业趋势描述
+                                        trend_parts = []
+                                        if industry_market_data.get('changePercent') is not None:
+                                            trend_parts.append(f"行业板块涨跌幅：{industry_market_data['changePercent']:.2f}%")
+                                        if industry_market_data.get('totalMarketCap') is not None:
+                                            market_cap_billion = industry_market_data['totalMarketCap'] / 1000000000
+                                            trend_parts.append(f"总市值：{market_cap_billion:.2f}亿元")
+                                        if trend_parts:
+                                            industry_trends = "；".join(trend_parts)
+                                    except Exception as e:
+                                        print(f"[{datetime.now()}] ⚠️ 反向查找路径提取行业板块市场数据失败: {str(e)}")
+                                    
+                                    break
+                        except Exception as e:
+                            # 某些行业可能无法获取成分股，跳过
+                            continue
+                else:
+                    # 使用匹配到的行业
+                    matched_row = matched_industry.iloc[0]
+                    industry_code = matched_row.get('板块代码', '')
+                    if not industry_name or industry_name == '未知':
+                        industry_name = matched_row.get('板块名称', '未知')
+                    
+                    # 提取行业板块的完整信息（从stock_board_industry_name_em返回的数据）
+                    industry_trends = ""
+                    industry_market_data = {}
+                    try:
+                        # 获取行业板块的市场数据
+                        latest_price = matched_row.get('最新价', None)
+                        change_amount = matched_row.get('涨跌额', None)
+                        change_percent = matched_row.get('涨跌幅', None)
+                        total_market_cap = matched_row.get('总市值', None)
+                        turnover_rate = matched_row.get('换手率', None)
+                        rising_count = matched_row.get('上涨家数', None)
+                        falling_count = matched_row.get('下跌家数', None)
+                        leader_stock = matched_row.get('领涨股票', None)
+                        leader_change_percent = matched_row.get('领涨股票-涨跌幅', None)
+                        
+                        industry_market_data = {
+                            'latestPrice': float(latest_price) if pd.notna(latest_price) else None,
+                            'changeAmount': float(change_amount) if pd.notna(change_amount) else None,
+                            'changePercent': float(change_percent) if pd.notna(change_percent) else None,
+                            'totalMarketCap': float(total_market_cap) if pd.notna(total_market_cap) else None,
+                            'turnoverRate': float(turnover_rate) if pd.notna(turnover_rate) else None,
+                            'risingCount': int(rising_count) if pd.notna(rising_count) else None,
+                            'fallingCount': int(falling_count) if pd.notna(falling_count) else None,
+                            'leaderStock': str(leader_stock) if pd.notna(leader_stock) else None,
+                            'leaderChangePercent': float(leader_change_percent) if pd.notna(leader_change_percent) else None
+                        }
+                        
+                        # 构建行业趋势描述
+                        trend_parts = []
+                        if industry_market_data.get('changePercent') is not None:
+                            trend_parts.append(f"行业板块涨跌幅：{industry_market_data['changePercent']:.2f}%")
+                        if industry_market_data.get('totalMarketCap') is not None:
+                            market_cap_billion = industry_market_data['totalMarketCap'] / 1000000000
+                            trend_parts.append(f"总市值：{market_cap_billion:.2f}亿元")
+                        if industry_market_data.get('risingCount') is not None and industry_market_data.get('fallingCount') is not None:
+                            trend_parts.append(f"上涨家数：{industry_market_data['risingCount']}，下跌家数：{industry_market_data['fallingCount']}")
+                        if industry_market_data.get('leaderStock'):
+                            leader_info = f"领涨股票：{industry_market_data['leaderStock']}"
+                            if industry_market_data.get('leaderChangePercent') is not None:
+                                leader_info += f"（涨跌幅：{industry_market_data['leaderChangePercent']:.2f}%）"
+                            trend_parts.append(leader_info)
+                        
+                        if trend_parts:
+                            industry_trends = "；".join(trend_parts)
+                            print(f"[{datetime.now()}] ✅ 成功提取行业板块市场数据")
+                    except Exception as e:
+                        print(f"[{datetime.now()}] ⚠️ 提取行业板块市场数据失败: {str(e)}")
+                
+                # 获取行业成分股和表现数据
+                if industry_code:
+                    try:
+                        # 获取行业成分股（带重试和延迟）
+                        df_industry_stocks = None
+                        for retry in range(3):
+                            try:
+                                time.sleep(0.3)  # 添加延迟
+                                df_industry_stocks = ak.stock_board_industry_cons_em(symbol=industry_code)
+                                if df_industry_stocks is not None and not df_industry_stocks.empty:
+                                    break
+                            except Exception as e:
+                                if retry < 2:
+                                    print(f"[{datetime.now()}] ⚠️ 获取行业成分股失败 (尝试 {retry + 1}/3): {str(e)[:80]}，重试中...")
+                                    time.sleep(1)
+                                else:
+                                    raise
+                        if df_industry_stocks is not None and not df_industry_stocks.empty:
+                            # 转换成分股列表
+                            for idx, row in df_industry_stocks.head(20).iterrows():  # 最多20只
+                                stock_code_industry = str(row.get('代码', '')).zfill(6)
+                                stock_name_industry = str(row.get('名称', ''))
+                                stock_price = row.get('最新价', 0)
+                                stock_change = row.get('涨跌幅', 0)
+                                
+                                if pd.notna(stock_price) and pd.notna(stock_change):
+                                    industry_stocks.append({
+                                        'code': stock_code_industry,
+                                        'name': stock_name_industry,
+                                        'price': float(stock_price) if pd.notna(stock_price) else 0,
+                                        'changePercent': float(stock_change) if pd.notna(stock_change) else 0
+                                    })
+                            
+                            # 计算行业平均表现指标（字段名需与C#代码期望的一致）
+                            if len(industry_stocks) > 0:
+                                prices = [s['price'] for s in industry_stocks if s['price'] > 0]
+                                changes = [s['changePercent'] for s in industry_stocks if s['changePercent'] != 0]
+                                
+                                if prices and changes:
+                                    industry_performance = {
+                                        'avgPE': None,  # PE需要从个股数据中计算，暂时不提供
+                                        'avgPB': None,  # PB需要从个股数据中计算，暂时不提供
+                                        'avgROE': None,  # ROE需要从财务数据中获取，暂时不提供
+                                        'totalMarketCap': None,  # 总市值需要计算所有个股市值，暂时不提供
+                                        'avgChangePercent': round(sum(changes) / len(changes), 2) if changes else 0,
+                                        'stockCount': len(industry_stocks),  # 额外字段，股票数量
+                                        'avgPrice': round(sum(prices) / len(prices), 2) if prices else 0  # 额外字段，平均价格
+                                    }
+                            
+                            print(f"[{datetime.now()}] ✅ 成功获取行业成分股: {industry_name} ({industry_code})，共{len(industry_stocks)}只股票")
+                    except Exception as e:
+                        print(f"[{datetime.now()}] ⚠️ 获取行业成分股失败: {str(e)}")
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"[{datetime.now()}] ⚠️ [行业接口] 获取行业板块列表异常: {error_type}")
+            print(f"  错误消息: {error_msg[:300]}")
+            print(f"  完整堆栈: {traceback.format_exc()[:500]}")
+            # 不抛出异常，继续执行
+        
+        # 构建返回结果（确保字段名与后端期望一致）
+        result = {
+            'stockCode': stock_code,
+            'industryName': industry_name,
+            'industryCode': industry_code,
+            'description': f'该股票属于{industry_name}行业' if industry_name != '未知' else '无法确定行业信息',
+            'stocks': industry_stocks,
+            'performance': industry_performance if industry_performance else {},
+            'trends': industry_trends if industry_trends else '',
+            'marketData': industry_market_data if industry_market_data else {},  # 新增：行业板块市场数据
+            'lastUpdate': datetime.now().isoformat(),
+            'source': 'AKShare'
+        }
+        
+        print(f"[{datetime.now()}] ✅ 成功获取行业信息: {stock_code} - {industry_name} (代码: {industry_code}, 股票数: {len(industry_stocks)})")
+        
+        # 恢复原始代理设置（如果有）
+        if original_http_proxy:
+            os.environ['HTTP_PROXY'] = original_http_proxy
+        if original_https_proxy:
+            os.environ['HTTPS_PROXY'] = original_https_proxy
+        if original_http_proxy_lower:
+            os.environ['http_proxy'] = original_http_proxy_lower
+        if original_https_proxy_lower:
+            os.environ['https_proxy'] = original_https_proxy_lower
+        
+        return jsonify({'success': True, 'data': result})
+        
+    except Exception as e:
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        print(f"[{datetime.now()}] ❌ 获取行业信息失败: {error_msg}")
+        print(error_trace)
+        
+        # 确保在异常情况下也恢复代理设置
+        if original_http_proxy:
+            os.environ['HTTP_PROXY'] = original_http_proxy
+        if original_https_proxy:
+            os.environ['HTTPS_PROXY'] = original_https_proxy
+        if original_http_proxy_lower:
+            os.environ['http_proxy'] = original_http_proxy_lower
+        if original_https_proxy_lower:
+            os.environ['https_proxy'] = original_https_proxy_lower
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'message': f'无法获取股票 {stock_code} 的行业信息',
+            'trace': error_trace if os.getenv('FLASK_ENV') == 'development' else None
+        }), 500
+
+@app.route('/api/stock/concept/<stock_code>', methods=['GET'])
+def get_concept_info(stock_code):
+    """
+    获取股票所属概念板块的数据
+    
+    Args:
+        stock_code: 股票代码，如 000001, 600000
+    
+    Returns:
+        JSON格式的概念股数据
+    """
+    try:
+        print(f"[{datetime.now()}] 请求股票概念股数据: {stock_code}")
+        
+        clean_code = stock_code.strip().zfill(6)
+        
+        # 临时禁用代理设置
+        original_http_proxy = os.environ.get('HTTP_PROXY')
+        original_https_proxy = os.environ.get('HTTPS_PROXY')
+        original_http_proxy_lower = os.environ.get('http_proxy')
+        original_https_proxy_lower = os.environ.get('https_proxy')
+        
+        # 临时移除代理环境变量
+        for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+            os.environ.pop(proxy_var, None)
+        
+        # 先尝试从股票基本信息获取概念名称（可选步骤）
+        concept_names_from_info = []
+        try:
+            df_info = None
+            max_retries = 2  # 减少重试次数
+            for attempt in range(max_retries):
+                try:
+                    df_info = ak.stock_individual_info_em(symbol=clean_code)
+                    if df_info is not None and not df_info.empty:
+                        # 提取概念信息（可能在不同字段）
+                        concept_field_values = []
+                        
+                        # 查找概念相关字段
+                        concept_fields = ['概念', '所属概念', '概念板块', '板块概念']
+                        for field in concept_fields:
+                            concept_row = df_info[df_info['item'] == field]
+                            if not concept_row.empty:
+                                concept_value = concept_row.iloc[0]['value']
+                                if pd.notna(concept_value) and str(concept_value).strip():
+                                    concept_field_values.append(str(concept_value))
+                        
+                        # 如果找到了概念字段值，解析概念列表（可能是逗号分隔）
+                        if concept_field_values:
+                            for value in concept_field_values:
+                                # 分割概念名称（可能是逗号、分号分隔）
+                                concepts = str(value).replace('，', ',').replace('；', ';').split(',')
+                                for concept in concepts:
+                                    concept = concept.strip()
+                                    if concept and concept not in concept_names_from_info:
+                                        concept_names_from_info.append(concept)
+                        
+                        if concept_names_from_info:
+                            print(f"[{datetime.now()}] ✅ 从股票信息获取到概念: {', '.join(concept_names_from_info)}")
+                        break
+                except Exception as e:
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    if attempt < max_retries - 1:
+                        print(f"[{datetime.now()}] ⚠️ [概念股接口] 获取股票信息失败 (尝试 {attempt + 1}/{max_retries}): {error_type} - {error_msg[:100]}，将使用反向查找...")
+                        time.sleep(0.5)
+                    else:
+                        print(f"[{datetime.now()}] ⚠️ [概念股接口] 获取股票信息最终失败 ({error_type})，将使用反向查找")
+                        print(f"  错误详情: {error_msg[:200]}")
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ [概念股接口] 获取股票信息异常: {str(e)[:100]}，将使用反向查找")
+        
+        # 恢复原始代理设置（如果有）
+        if original_http_proxy:
+            os.environ['HTTP_PROXY'] = original_http_proxy
+        if original_https_proxy:
+            os.environ['HTTPS_PROXY'] = original_https_proxy
+        if original_http_proxy_lower:
+            os.environ['http_proxy'] = original_http_proxy_lower
+        if original_https_proxy_lower:
+            os.environ['https_proxy'] = original_https_proxy_lower
+        
+        # 使用 stock_board_concept_name_em 获取所有概念板块
+        concepts_data = []
+        
+        try:
+            # 临时移除代理环境变量（再次确保，与测试脚本保持一致）
+            print(f"[{datetime.now()}] 🔧 [概念接口] 禁用代理设置...")
+            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                original_value = os.environ.get(proxy_var)
+                if original_value:
+                    print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
+                os.environ.pop(proxy_var, None)
+            
+            # 确保NO_PROXY设置正确（禁止所有代理）
+            os.environ['NO_PROXY'] = '*'
+            os.environ['no_proxy'] = '*'
+            print(f"[{datetime.now()}] ✅ [概念接口] 代理已禁用，NO_PROXY=*")
+            
+            # 在调用AKShare之前，再次确保禁用代理
+            # 尝试通过环境变量和urllib3设置禁用代理
+            import urllib3
+            urllib3.disable_warnings()
+            
+            # 获取所有概念板块列表（带重试，增加延迟）
+            df_concept_list = None
+            for attempt in range(3):
+                try:
+                    # 每次重试前增加延迟，避免请求过快
+                    if attempt > 0:
+                        delay = 1.0 * attempt  # 第2次重试延迟1秒，第3次延迟2秒
+                        print(f"[{datetime.now()}] ⏳ [概念接口] 等待{delay:.1f}秒后重试...")
+                        time.sleep(delay)
+                    
+                    print(f"[{datetime.now()}] 📡 [概念接口] 尝试调用 stock_board_concept_name_em() (尝试 {attempt + 1}/3)...")
+                    start_time = time.time()
+                    
+                    # 调用AKShare接口
+                    df_concept_list = ak.stock_board_concept_name_em()
+                    elapsed_time = time.time() - start_time
+                    
+                    if df_concept_list is not None and not df_concept_list.empty:
+                        print(f"[{datetime.now()}] ✅ [概念接口] 成功获取概念板块列表，耗时: {elapsed_time:.2f}秒，共{len(df_concept_list)}个概念")
+                        break
+                    else:
+                        print(f"[{datetime.now()}] ⚠️ [概念接口] 返回数据为空")
+                        time.sleep(0.5)
+                except Exception as e:
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
+                    
+                    print(f"[{datetime.now()}] ❌ [概念接口] 获取概念板块列表失败 (尝试 {attempt + 1}/3)")
+                    print(f"    错误类型: {error_type}")
+                    print(f"    错误消息: {error_msg}")
+                    print(f"    耗时: {elapsed_time:.2f}秒")
+                    
+                    # 详细的错误分析
+                    print(f"\n    {'='*70}")
+                    print(f"    【详细错误诊断】")
+                    print(f"    {'='*70}")
+                    
+                    if 'ConnectionError' in error_type or 'MaxRetriesExceeded' in error_type or 'MaxRetryError' in error_type:
+                        print(f"    🔍 错误类型: 网络连接错误")
+                        print(f"    - 目标服务器: push2.eastmoney.com (AKShare数据源)")
+                        print(f"    - 可能原因:")
+                        print(f"      1. 代理服务器不可用或配置错误")
+                        print(f"      2. 目标服务器不可达（防火墙/网络限制）")
+                        print(f"      3. DNS解析失败")
+                        print(f"    - 建议:")
+                        print(f"      1. 检查系统代理设置")
+                        print(f"      2. 尝试直接访问目标服务器")
+                        print(f"      3. 检查防火墙规则")
+                    elif 'ProtocolError' in error_type:
+                        print(f"    🔍 错误类型: 协议错误")
+                        print(f"    - 连接被远程端关闭")
+                        print(f"    - 可能原因:")
+                        print(f"      1. 请求频率过快，被服务器限制")
+                        print(f"      2. 代理服务器问题")
+                        print(f"      3. 服务器负载过高，主动断开连接")
+                        print(f"    - 建议:")
+                        print(f"      1. 增加请求间隔时间（当前已设置0.3-1秒延迟）")
+                        print(f"      2. 检查代理配置")
+                        print(f"      3. 稍后重试")
+                    elif 'RemoteDisconnected' in error_msg:
+                        print(f"    🔍 错误类型: 远程连接断开")
+                        print(f"    - 服务器主动关闭连接")
+                        print(f"    - 可能原因:")
+                        print(f"      1. 服务器检测到异常请求")
+                        print(f"      2. 网络不稳定导致连接中断")
+                        print(f"      3. 代理服务器问题")
+                    elif 'Timeout' in error_type:
+                        print(f"    🔍 错误类型: 请求超时")
+                        print(f"    - 服务器响应过慢或未响应")
+                        print(f"    - 建议: 增加超时时间或检查网络")
+                    else:
+                        print(f"    🔍 错误类型: {error_type}")
+                    
+                    # 代理状态检查
+                    print(f"\n    【代理状态检查】")
+                    proxy_found = False
+                    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                        value = os.environ.get(proxy_var)
+                        if value:
+                            print(f"    ⚠️ 发现代理设置: {proxy_var} = {value[:60]}...")
+                            proxy_found = True
+                        else:
+                            print(f"    ✅ {proxy_var}: 未设置")
+                    
+                    if not proxy_found:
+                        print(f"    ✅ 所有代理环境变量已清除")
+                    
+                    # 网络连接测试
+                    print(f"\n    【网络连接测试】")
+                    try:
+                        import socket
+                        test_hosts = [
+                            ('79.push2.eastmoney.com', 443, '概念板块服务器'),
+                            ('push2.eastmoney.com', 443, 'AKShare主服务器'),
+                            ('www.baidu.com', 80, '测试基本网络')
+                        ]
+                        for host, port, desc in test_hosts:
+                            try:
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                sock.settimeout(3)
+                                result = sock.connect_ex((host, port))
+                                sock.close()
+                                if result == 0:
+                                    print(f"    ✅ {desc}: {host}:{port} - 可连接")
+                                else:
+                                    print(f"    ❌ {desc}: {host}:{port} - 连接失败 (错误代码: {result})")
+                            except Exception as socket_e:
+                                print(f"    ❌ {desc}: {host}:{port} - 测试异常: {str(socket_e)[:60]}")
+                    except Exception as net_test_e:
+                        print(f"    ❌ 网络测试模块异常: {str(net_test_e)[:60]}")
+                    
+                    # 打印完整的异常堆栈（仅在最后一次尝试时）
+                    if attempt >= 2:
+                        print(f"\n    【完整错误堆栈】")
+                        import traceback
+                        full_trace = traceback.format_exc()
+                        print(f"    {full_trace[:1000]}")
+                    
+                    print(f"    {'='*70}\n")
+                    
+                    if attempt < 2:
+                        print(f"    ⏳ 等待1秒后重试...")
+                        time.sleep(1)
+                    else:
+                        print(f"[{datetime.now()}] ❌ [概念接口] 获取概念板块列表最终失败，将返回空概念列表")
+                        df_concept_list = None  # 设置为None，不抛出异常，允许继续执行
+                        break  # 跳出重试循环
+            
+            if df_concept_list is not None and not df_concept_list.empty:
+                print(f"[{datetime.now()}] ✅ 获取到 {len(df_concept_list)} 个概念板块列表")
+                
+                # 如果从股票信息中找到了概念名称，先匹配这些概念
+                matched_concept_codes = set()
+                if concept_names_from_info:
+                    for concept_name_info in concept_names_from_info:
+                        # 在概念板块列表中查找匹配的概念
+                        matched = df_concept_list[df_concept_list['板块名称'].str.contains(concept_name_info, na=False)]
+                        if not matched.empty:
+                            for _, row in matched.iterrows():
+                                concept_code = row.get('板块代码', '')
+                                if concept_code and concept_code not in matched_concept_codes:
+                                    matched_concept_codes.add(concept_code)
+                
+                # 如果没有从股票信息中找到概念，或找到的概念太少，通过反向查找
+                if len(matched_concept_codes) == 0 or len(matched_concept_codes) < 3:
+                        print(f"[{datetime.now()}] 通过成分股反向查找概念板块...")
+                        # 遍历概念板块，查找包含该股票的概念（限制查找数量以提高效率）
+                        max_search = 50  # 最多查找50个概念板块
+                        for idx, row in df_concept_list.head(max_search).iterrows():
+                            concept_code = row.get('板块代码', '')
+                            if concept_code and concept_code not in matched_concept_codes:
+                                try:
+                                    # 获取该概念的成分股（带重试和延迟）
+                                    df_concept_stocks = None
+                                    for retry in range(2):
+                                        try:
+                                            time.sleep(0.3)  # 添加延迟，避免请求过快
+                                            df_concept_stocks = ak.stock_board_concept_cons_em(symbol=concept_code)
+                                            if df_concept_stocks is not None and not df_concept_stocks.empty:
+                                                break
+                                        except Exception as e:
+                                            if retry < 1:
+                                                time.sleep(0.5)
+                                            else:
+                                                raise
+                                    
+                                    if df_concept_stocks is not None and not df_concept_stocks.empty:
+                                        # 检查是否包含当前股票
+                                        stock_codes_in_concept = df_concept_stocks['代码'].astype(str).str.zfill(6)
+                                        if clean_code in stock_codes_in_concept.values:
+                                            matched_concept_codes.add(concept_code)
+                                            print(f"[{datetime.now()}] ✅ 找到概念: {row.get('板块名称', '')} ({concept_code})")
+                                            if len(matched_concept_codes) >= 10:  # 最多查找10个概念
+                                                break
+                                except Exception as e:
+                                    # 某些概念可能无法获取成分股，跳过
+                                    continue
+                
+                # 构建概念数据
+                for concept_code in list(matched_concept_codes)[:10]:  # 最多返回10个概念
+                    try:
+                        matched_row = df_concept_list[df_concept_list['板块代码'] == concept_code]
+                        if not matched_row.empty:
+                            concept_name = matched_row.iloc[0].get('板块名称', '未知概念')
+                            
+                            concept_info = {
+                                'name': concept_name,
+                                'code': concept_code,
+                                'description': f'{concept_name}概念板块',
+                                'trend': '',
+                                'relatedStocks': []
+                            }
+                            
+                            # 获取该概念的相关股票（最多10只，带重试）
+                            try:
+                                df_concept_stocks = None
+                                for retry in range(3):
+                                    try:
+                                        time.sleep(0.3)  # 添加延迟
+                                        df_concept_stocks = ak.stock_board_concept_cons_em(symbol=concept_code)
+                                        if df_concept_stocks is not None and not df_concept_stocks.empty:
+                                            break
+                                    except Exception as e:
+                                        if retry < 2:
+                                            print(f"[{datetime.now()}] ⚠️ 获取概念成分股失败 {concept_name} (尝试 {retry + 1}/3): {str(e)[:80]}，重试中...")
+                                            time.sleep(1)
+                                        else:
+                                            raise
+                                
+                                if df_concept_stocks is not None and not df_concept_stocks.empty:
+                                    related_stocks = []
+                                    for idx, row in df_concept_stocks.head(10).iterrows():
+                                        stock_code_concept = str(row.get('代码', '')).zfill(6)
+                                        stock_name_concept = str(row.get('名称', ''))
+                                        stock_price = row.get('最新价', 0)
+                                        stock_change = row.get('涨跌幅', 0)
+                                        
+                                        if pd.notna(stock_price) and pd.notna(stock_change):
+                                            related_stocks.append({
+                                                'code': stock_code_concept,
+                                                'name': stock_name_concept,
+                                                'price': float(stock_price) if pd.notna(stock_price) else 0,
+                                                'changePercent': float(stock_change) if pd.notna(stock_change) else 0
+                                            })
+                                    
+                                    concept_info['relatedStocks'] = related_stocks
+                            except Exception as e:
+                                print(f"[{datetime.now()}] ⚠️ 获取概念成分股失败 {concept_name}: {str(e)}")
+                            
+                            concepts_data.append(concept_info)
+                    except Exception as e:
+                        print(f"[{datetime.now()}] ⚠️ 处理概念失败: {str(e)}")
+                        continue
+                
+                print(f"[{datetime.now()}] ✅ 找到 {len(concepts_data)} 个概念板块")
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"[{datetime.now()}] ⚠️ [概念接口] 获取概念板块列表异常: {error_type}")
+            print(f"  错误消息: {error_msg[:300]}")
+            try:
+                import traceback
+                print(f"  完整堆栈: {traceback.format_exc()[:500]}")
+            except:
+                pass
+            # 不抛出异常，继续执行，返回空的概念列表
+        
+        # 构建返回结果（确保concepts_data已初始化）
+        result = {
+            'stockCode': stock_code,
+            'concepts': concepts_data if concepts_data else [],  # 确保始终是列表
+            'conceptCount': len(concepts_data) if concepts_data else 0,
+            'lastUpdate': datetime.now().isoformat(),
+            'source': 'AKShare'
+        }
+        
+        if len(concepts_data) == 0:
+            print(f"[{datetime.now()}] ⚠️ 未找到概念板块数据: {stock_code}（可能原因：网络问题或该股票确实无概念板块）")
+            return jsonify({
+                'success': True,
+                'data': result,
+                'message': '该股票未归类到任何概念板块或无法获取概念板块数据'
+            })
+        
+        print(f"[{datetime.now()}] ✅ 成功获取概念股数据: {stock_code} - 共{len(concepts_data)}个概念")
+        return jsonify({'success': True, 'data': result})
+        
+    except Exception as e:
+        error_msg = str(e)
+        try:
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f"[{datetime.now()}] ❌ 获取概念股数据失败: {error_msg}")
+            print(error_trace)
+        except:
+            print(f"[{datetime.now()}] ❌ 获取概念股数据失败: {error_msg}")
+        return jsonify({
+                'success': False,
+                'error': error_msg,
+                'message': f'无法获取股票 {stock_code} 的概念股数据'
+            }), 500
+
 @app.route('/api/stock/batch', methods=['POST'])
 def get_batch_fundamental():
     """
@@ -1211,6 +2197,8 @@ if __name__ == '__main__':
     print("API文档:")
     print("  GET  /health - 健康检查")
     print("  GET  /api/stock/fundamental/<stock_code> - 获取单个股票基本面")
+    print("  GET  /api/stock/industry/<stock_code> - 获取股票行业详情")
+    print("  GET  /api/stock/concept/<stock_code> - 获取股票概念股数据")
     print("  GET  /api/stock/history/<stock_code>?months=3 - 获取历史交易数据（AKShare）")
     print("  GET  /api/stock/analyze/<stock_code>?months=3 - 大数据分析（技术指标+趋势）")
     print("  POST /api/stock/batch - 批量获取基本面")
