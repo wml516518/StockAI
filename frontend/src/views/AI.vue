@@ -43,7 +43,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onActivated } from 'vue'
+import { ref, onMounted, onActivated, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../services/api'
 import { stockService } from '../services/stockService'
@@ -58,30 +58,62 @@ const analysisTime = ref('')
 const stockInfo = ref(null)
 const isCached = ref(false)
 const hasAnalyzed = ref(false) // 标记是否已经分析过（防止重复调用）
+const lastAnalyzedStockCode = ref('') // 记录上次分析的股票代码
+
+// 监听路由参数变化，当股票代码变化时自动触发分析
+watch(() => route.query.stockCode, (newStockCode, oldStockCode) => {
+  if (newStockCode && newStockCode !== oldStockCode) {
+    console.log('股票代码变化:', oldStockCode, '->', newStockCode)
+    // 股票代码变化，重置状态
+    stockCode.value = newStockCode
+    hasAnalyzed.value = false
+    lastAnalyzedStockCode.value = ''
+    result.value = ''
+    analysisDate.value = ''
+    analysisTime.value = ''
+    stockInfo.value = null
+    isCached.value = false
+    
+    // 自动触发分析（会先检查缓存）
+    if (!analyzing.value) {
+      handleAnalyze(false) // false表示不强制刷新，会先检查缓存
+    }
+  }
+})
 
 // 从路由参数获取股票代码
 onMounted(() => {
   if (route.query.stockCode) {
-    stockCode.value = route.query.stockCode
-    // 只有在没有分析过且不在分析中时才调用
-    if (!hasAnalyzed.value && !analyzing.value) {
-      handleAnalyze()
+    const currentStockCode = route.query.stockCode
+    stockCode.value = currentStockCode
+    
+    // 如果是新股票代码，重置状态并触发分析
+    if (currentStockCode !== lastAnalyzedStockCode.value) {
+      hasAnalyzed.value = false
+      lastAnalyzedStockCode.value = ''
+      
+      // 只有在没有分析过且不在分析中时才调用
+      if (!analyzing.value) {
+        handleAnalyze(false) // false表示不强制刷新，会先检查缓存
+      }
     }
   }
 })
 
 onActivated(() => {
   if (route.query.stockCode) {
-    stockCode.value = route.query.stockCode
-    // 只有在没有分析过且不在分析中时才调用
-    // 如果股票代码变化了，重置分析状态
     const currentStockCode = route.query.stockCode
-    if (stockCode.value !== currentStockCode) {
+    stockCode.value = currentStockCode
+    
+    // 如果是新股票代码，重置状态并触发分析
+    if (currentStockCode !== lastAnalyzedStockCode.value) {
       hasAnalyzed.value = false
-      stockCode.value = currentStockCode
-    }
-    if (!hasAnalyzed.value && !analyzing.value) {
-      handleAnalyze()
+      lastAnalyzedStockCode.value = ''
+      
+      // 只有在没有分析过且不在分析中时才调用
+      if (!analyzing.value) {
+        handleAnalyze(false) // false表示不强制刷新，会先检查缓存
+      }
     }
   }
 })
@@ -290,8 +322,9 @@ const handleAnalyze = async (forceRefresh = false) => {
       
       console.log('AI分析结果已设置，长度:', result.value?.length || 0, '是否缓存:', isCached.value, '分析时间:', analysisTime.value)
       
-      // 标记已分析
+      // 标记已分析，并记录当前分析的股票代码
       hasAnalyzed.value = true
+      lastAnalyzedStockCode.value = code // 记录当前分析的股票代码
     } else if (typeof response === 'string') {
       // 如果后端直接返回字符串（向后兼容）
       result.value = response
@@ -316,7 +349,38 @@ const handleAnalyze = async (forceRefresh = false) => {
       // HTTP错误响应
       const status = error.response.status
       const data = error.response.data
-      result.value = `分析失败 (HTTP ${status}): ${data?.message || data || error.message || '未知错误'}`
+      
+      // 处理错误消息，避免显示 [object Object]
+      let errorMessage = '未知错误'
+      if (data) {
+        if (typeof data === 'string') {
+          errorMessage = data
+        } else if (data.message) {
+          errorMessage = data.message
+        } else if (data.error) {
+          errorMessage = data.error
+        } else if (data.title) {
+          errorMessage = data.title
+        } else {
+          // 尝试将对象转换为可读字符串
+          try {
+            errorMessage = JSON.stringify(data, null, 2)
+          } catch {
+            errorMessage = String(data)
+          }
+        }
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+      
+      result.value = `分析失败 (HTTP ${status}): ${errorMessage}`
+      
+      // 在控制台输出完整错误信息以便调试
+      console.error('完整错误响应:', {
+        status,
+        data: error.response.data,
+        headers: error.response.headers
+      })
     } else {
       result.value = '分析失败: ' + (error.message || '未知错误')
     }

@@ -30,8 +30,18 @@ public class AIController : ControllerBase
     /// 分析股票（可指定提示词）
     /// </summary>
     [HttpPost("analyze/{stockCode}")]
-    public async Task<ActionResult<string>> AnalyzeStock(string stockCode, [FromBody] AnalyzeRequest request)
+    public async Task<ActionResult<string>> AnalyzeStock(string stockCode, [FromBody] AnalyzeRequest? request = null)
     {
+        // 验证股票代码
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            _logger.LogWarning("股票代码为空");
+            return BadRequest(new { message = "股票代码不能为空", error = "INVALID_STOCK_CODE" });
+        }
+        
+        // 清理股票代码
+        stockCode = stockCode.Trim().ToUpper();
+        
         _logger.LogInformation("开始分析股票: {StockCode}", stockCode);
         
         // 获取分析类型（默认为comprehensive）
