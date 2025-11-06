@@ -149,30 +149,30 @@ public class AIController : ControllerBase
                 // 继续执行，使用空字符串
             }
             
-            // 步骤3: 获取概念股数据
-            string conceptInfoText = "";
+            // 步骤3: 获取个股人气榜数据
+            string hotRankText = "";
             try
             {
-                _logger.LogInformation("步骤3: 正在从AKShare获取概念股数据...");
-                _logger.LogInformation("🤖 [AIController] 步骤3: 正在从AKShare获取概念股数据");
+                _logger.LogInformation("步骤3: 正在从AKShare获取个股人气榜数据...");
+                _logger.LogInformation("🤖 [AIController] 步骤3: 正在从AKShare获取个股人气榜数据");
                 
-                conceptInfoText = await GetConceptInfoFromAKShareAsync(stockCode);
+                hotRankText = await GetHotRankFromAKShareAsync(stockCode);
                 
-                if (!string.IsNullOrEmpty(conceptInfoText))
+                if (!string.IsNullOrEmpty(hotRankText))
                 {
-                    _logger.LogInformation("成功获取概念股数据，数据长度: {Length} 字符", conceptInfoText.Length);
-                    _logger.LogInformation("🤖 [AIController] ✅ 成功获取概念股数据，长度: {Length} 字符", conceptInfoText.Length);
+                    _logger.LogInformation("成功获取个股人气榜数据，数据长度: {Length} 字符", hotRankText.Length);
+                    _logger.LogInformation("🤖 [AIController] ✅ 成功获取个股人气榜数据，长度: {Length} 字符", hotRankText.Length);
                 }
                 else
                 {
-                    _logger.LogWarning("未能获取概念股数据");
-                    _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取概念股数据");
+                    _logger.LogWarning("未能获取个股人气榜数据");
+                    _logger.LogWarning("🤖 [AIController] ⚠️ 未能获取个股人气榜数据");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "获取概念股数据时发生异常");
-                _logger.LogError(ex, "🤖 [AIController] ❌ 获取概念股数据时发生异常");
+                _logger.LogError(ex, "获取个股人气榜数据时发生异常");
+                _logger.LogError(ex, "🤖 [AIController] ❌ 获取个股人气榜数据时发生异常");
                 // 继续执行，使用空字符串
             }
             
@@ -790,8 +790,8 @@ public class AIController : ControllerBase
 ";
                 
                 enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                    ? fundamentalText + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText
-                    : enhancedContext + fundamentalText + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText;
+                    ? fundamentalText + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText
+                    : enhancedContext + fundamentalText + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText;
                 
                 _logger.LogDebug("已构建包含基本面信息和历史数据的上下文，上下文长度: {Length} 字符", enhancedContext.Length);
                 _logger.LogInformation("🤖 [AIController] ✅ 已构建包含基本面信息和历史数据的上下文，长度: {Length} 字符", enhancedContext.Length);
@@ -812,8 +812,8 @@ public class AIController : ControllerBase
 - 换手率：{stock.TurnoverRate:F2}%
 ";
                 enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                    ? stockInfo + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText
-                    : enhancedContext + stockInfo + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText;
+                    ? stockInfo + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText
+                    : enhancedContext + stockInfo + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText;
             }
             else
             {
@@ -822,11 +822,11 @@ public class AIController : ControllerBase
                 
                 // 即使没有基本面和实时行情，也尝试添加历史数据
                 if (!string.IsNullOrEmpty(historyText) || !string.IsNullOrEmpty(pythonAnalysisText) || !string.IsNullOrEmpty(tradeDataText) || 
-                    !string.IsNullOrEmpty(industryInfoText) || !string.IsNullOrEmpty(conceptInfoText))
+                    !string.IsNullOrEmpty(industryInfoText) || !string.IsNullOrEmpty(hotRankText))
                 {
                     enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                        ? industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText
-                        : enhancedContext + industryInfoText + conceptInfoText + historyText + pythonAnalysisText + tradeDataText;
+                        ? industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText
+                        : enhancedContext + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText;
                 }
             }
             
@@ -1154,18 +1154,18 @@ public class AIController : ControllerBase
     }
     
     /// <summary>
-    /// 从AKShare获取概念股数据
+    /// 从AKShare获取个股人气榜数据
     /// </summary>
-    private async Task<string> GetConceptInfoFromAKShareAsync(string stockCode)
+    private async Task<string> GetHotRankFromAKShareAsync(string stockCode)
     {
         try
         {
             var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
                 ?? "http://localhost:5001";
             
-            var url = $"{pythonServiceUrl}/api/stock/concept/{stockCode}";
+            var url = $"{pythonServiceUrl}/api/stock/hot-rank";
             
-            _logger.LogDebug("尝试从Python服务获取概念股数据: {Url}", url);
+            _logger.LogDebug("尝试从Python服务获取个股人气榜数据: {Url}", url);
             
             using var pythonClient = new HttpClient();
             pythonClient.Timeout = TimeSpan.FromSeconds(120);
@@ -1176,7 +1176,7 @@ public class AIController : ControllerBase
             // 如果返回404，说明数据未找到，返回空字符串
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                _logger.LogInformation("Python服务(AKShare)无法获取股票 {StockCode} 的概念股数据", stockCode);
+                _logger.LogInformation("Python服务(AKShare)无法获取个股人气榜数据");
                 return "";
             }
             
@@ -1195,81 +1195,92 @@ public class AIController : ControllerBase
                 var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
                 if (data != null)
                 {
-                    // 格式化概念股信息
-                    var concepts = data["concepts"] as Newtonsoft.Json.Linq.JArray;
+                    var hotRankList = data["hotRankList"] as Newtonsoft.Json.Linq.JArray;
+                    var updateTime = data["updateTime"]?.ToString() ?? "";
                     
-                    if (concepts != null && concepts.Count > 0)
+                    if (hotRankList != null && hotRankList.Count > 0)
                     {
-                        var conceptText = $@"
-
-【概念股数据】（数据来源：AKShare）
-
-**该股票所属的概念板块（共{concepts.Count}个）：**
-
-";
+                        // 查找当前股票在人气榜中的排名
+                        var stockRank = -1;
+                        var stockRankInfo = (Newtonsoft.Json.Linq.JObject?)null;
                         
-                        for (int i = 0; i < concepts.Count; i++)
+                        for (int i = 0; i < hotRankList.Count; i++)
                         {
-                            var concept = concepts[i] as Newtonsoft.Json.Linq.JObject;
-                            if (concept != null)
+                            var item = hotRankList[i] as Newtonsoft.Json.Linq.JObject;
+                            if (item != null)
                             {
-                                var conceptName = concept["name"]?.ToString() ?? "未知概念";
-                                var conceptCode = concept["code"]?.ToString() ?? "";
-                                var conceptDescription = concept["description"]?.ToString() ?? "";
-                                var relatedStocks = concept["relatedStocks"] as Newtonsoft.Json.Linq.JArray;
-                                var conceptTrend = concept["trend"]?.ToString() ?? "";
+                                var code = item["code"]?.ToString() ?? "";
+                                // 标准化股票代码比较（去除前缀，只比较6位数字）
+                                var normalizedCode = code.Replace("sh", "").Replace("sz", "").Replace("SH", "").Replace("SZ", "").Trim();
+                                var normalizedStockCode = stockCode.Replace("sh", "").Replace("sz", "").Replace("SH", "").Replace("SZ", "").Trim();
                                 
-                                conceptText += $"**{i + 1}. {conceptName}**";
-                                if (!string.IsNullOrEmpty(conceptCode))
+                                if (normalizedCode == normalizedStockCode || 
+                                    normalizedCode.EndsWith(normalizedStockCode) || 
+                                    normalizedStockCode.EndsWith(normalizedCode))
                                 {
-                                    conceptText += $"（代码：{conceptCode}）";
+                                    stockRank = i + 1;
+                                    stockRankInfo = item;
+                                    break;
                                 }
-                                conceptText += "\n";
-                                
-                                if (!string.IsNullOrEmpty(conceptDescription))
-                                {
-                                    conceptText += $"- 概念描述：{conceptDescription}\n";
-                                }
-                                
-                                if (!string.IsNullOrEmpty(conceptTrend))
-                                {
-                                    conceptText += $"- 概念趋势：{conceptTrend}\n";
-                                }
-                                
-                                // 添加相关股票列表（如果有）
-                                if (relatedStocks != null && relatedStocks.Count > 0)
-                                {
-                                    conceptText += $"- 相关股票（共{relatedStocks.Count}只，显示前10只）：\n";
-                                    int displayCount = Math.Min(relatedStocks.Count, 10);
-                                    for (int j = 0; j < displayCount; j++)
-                                    {
-                                        var stock = relatedStocks[j] as Newtonsoft.Json.Linq.JObject;
-                                        if (stock != null)
-                                        {
-                                            var code = stock["code"]?.ToString() ?? "";
-                                            var name = stock["name"]?.ToString() ?? "";
-                                            var price = stock["price"]?.ToString() ?? "N/A";
-                                            var changePercent = stock["changePercent"]?.ToString() ?? "N/A";
-                                            conceptText += $"  - {name}({code}) 价格：{price}元 涨跌幅：{changePercent}%\n";
-                                        }
-                                    }
-                                    if (relatedStocks.Count > displayCount)
-                                    {
-                                        conceptText += $"  ... 还有{relatedStocks.Count - displayCount}只股票未显示\n";
-                                    }
-                                }
-                                
-                                conceptText += "\n";
                             }
                         }
                         
-                        conceptText += "**提示：请结合以上概念股数据，分析该股票所属的热点概念、概念板块的市场表现，以及概念对该股票价格和投资价值的影响。**\n";
+                        var hotRankText = $@"
+
+【个股人气榜数据】（数据来源：AKShare - stock_hot_rank_latest_em）
+{(string.IsNullOrEmpty(updateTime) ? "" : $"更新时间：{updateTime}")}
+
+";
                         
-                        return conceptText;
+                        if (stockRank > 0 && stockRankInfo != null)
+                        {
+                            var rank = stockRankInfo["rank"]?.ToString() ?? stockRank.ToString();
+                            var name = stockRankInfo["name"]?.ToString() ?? "";
+                            var code = stockRankInfo["code"]?.ToString() ?? "";
+                            var price = stockRankInfo["price"]?.ToString() ?? "N/A";
+                            var changePercent = stockRankInfo["changePercent"]?.ToString() ?? "N/A";
+                            var volume = stockRankInfo["volume"]?.ToString() ?? "N/A";
+                            var turnover = stockRankInfo["turnover"]?.ToString() ?? "N/A";
+                            
+                            hotRankText += $"**该股票在人气榜中的排名：第{rank}名**\n\n";
+                            hotRankText += $"**股票信息：**\n";
+                            hotRankText += $"- 股票名称：{name}\n";
+                            hotRankText += $"- 股票代码：{code}\n";
+                            hotRankText += $"- 当前价格：{price}元\n";
+                            hotRankText += $"- 涨跌幅：{changePercent}%\n";
+                            hotRankText += $"- 成交量：{volume}\n";
+                            hotRankText += $"- 成交额：{turnover}\n\n";
+                        }
+                        else
+                        {
+                            hotRankText += $"**该股票未进入当前人气榜前{hotRankList.Count}名**\n\n";
+                        }
+                        
+                        // 显示人气榜前10名
+                        hotRankText += $"**人气榜前10名：**\n";
+                        int displayCount = Math.Min(hotRankList.Count, 10);
+                        for (int i = 0; i < displayCount; i++)
+                        {
+                            var item = hotRankList[i] as Newtonsoft.Json.Linq.JObject;
+                            if (item != null)
+                            {
+                                var rank = item["rank"]?.ToString() ?? (i + 1).ToString();
+                                var name = item["name"]?.ToString() ?? "";
+                                var code = item["code"]?.ToString() ?? "";
+                                var price = item["price"]?.ToString() ?? "N/A";
+                                var changePercent = item["changePercent"]?.ToString() ?? "N/A";
+                                
+                                hotRankText += $"{rank}. {name}({code}) 价格：{price}元 涨跌幅：{changePercent}%\n";
+                            }
+                        }
+                        
+                        hotRankText += "\n**提示：请结合以上个股人气榜数据，分析该股票的市场关注度、投资者情绪，以及人气排名对股价走势的影响。**\n";
+                        
+                        return hotRankText;
                     }
                     else
                     {
-                        return "\n【概念股数据】（数据来源：AKShare）\n\n该股票未归类到任何概念板块。\n";
+                        return "\n【个股人气榜数据】（数据来源：AKShare）\n\n当前无法获取个股人气榜数据。\n";
                     }
                 }
             }
@@ -1280,7 +1291,7 @@ public class AIController : ControllerBase
         {
             if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
             {
-                _logger.LogDebug(ex, "Python服务返回404 - 股票代码 {StockCode} 的概念股数据未找到", stockCode);
+                _logger.LogDebug(ex, "Python服务返回404 - 个股人气榜数据未找到");
             }
             else
             {

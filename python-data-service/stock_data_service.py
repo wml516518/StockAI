@@ -1768,21 +1768,16 @@ def get_industry_info(stock_code):
             'trace': error_trace if os.getenv('FLASK_ENV') == 'development' else None
         }), 500
 
-@app.route('/api/stock/concept/<stock_code>', methods=['GET'])
-def get_concept_info(stock_code):
+@app.route('/api/stock/hot-rank', methods=['GET'])
+def get_hot_rank():
     """
-    获取股票所属概念板块的数据
-    
-    Args:
-        stock_code: 股票代码，如 000001, 600000
+    获取个股人气榜最新排名（使用AKShare的stock_hot_rank_latest_em）
     
     Returns:
-        JSON格式的概念股数据
+        JSON格式的个股人气榜数据
     """
     try:
-        print(f"[{datetime.now()}] 请求股票概念股数据: {stock_code}")
-        
-        clean_code = stock_code.strip().zfill(6)
+        print(f"[{datetime.now()}] 请求个股人气榜数据")
         
         # 临时禁用代理设置
         original_http_proxy = os.environ.get('HTTP_PROXY')
@@ -1794,53 +1789,124 @@ def get_concept_info(stock_code):
         for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
             os.environ.pop(proxy_var, None)
         
-        # 先尝试从股票基本信息获取概念名称（可选步骤）
-        concept_names_from_info = []
+        # 确保NO_PROXY设置正确
+        os.environ['NO_PROXY'] = '*'
+        os.environ['no_proxy'] = '*'
+        
+        hot_rank_list = []
+        
         try:
-            df_info = None
-            max_retries = 2  # 减少重试次数
-            for attempt in range(max_retries):
+            print(f"[{datetime.now()}] 🔧 [人气榜接口] 禁用代理设置...")
+            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                original_value = os.environ.get(proxy_var)
+                if original_value:
+                    print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
+                os.environ.pop(proxy_var, None)
+            
+            os.environ['NO_PROXY'] = '*'
+            os.environ['no_proxy'] = '*'
+            print(f"[{datetime.now()}] ✅ [人气榜接口] 代理已禁用，NO_PROXY=*")
+            
+            import urllib3
+            urllib3.disable_warnings()
+            
+            # 调用AKShare的stock_hot_rank_latest_em接口（带重试）
+            df_hot_rank = None
+            for attempt in range(3):
                 try:
-                    df_info = ak.stock_individual_info_em(symbol=clean_code)
-                    if df_info is not None and not df_info.empty:
-                        # 提取概念信息（可能在不同字段）
-                        concept_field_values = []
-                        
-                        # 查找概念相关字段
-                        concept_fields = ['概念', '所属概念', '概念板块', '板块概念']
-                        for field in concept_fields:
-                            concept_row = df_info[df_info['item'] == field]
-                            if not concept_row.empty:
-                                concept_value = concept_row.iloc[0]['value']
-                                if pd.notna(concept_value) and str(concept_value).strip():
-                                    concept_field_values.append(str(concept_value))
-                        
-                        # 如果找到了概念字段值，解析概念列表（可能是逗号分隔）
-                        if concept_field_values:
-                            for value in concept_field_values:
-                                # 分割概念名称（可能是逗号、分号分隔）
-                                concepts = str(value).replace('，', ',').replace('；', ';').split(',')
-                                for concept in concepts:
-                                    concept = concept.strip()
-                                    if concept and concept not in concept_names_from_info:
-                                        concept_names_from_info.append(concept)
-                        
-                        if concept_names_from_info:
-                            print(f"[{datetime.now()}] ✅ 从股票信息获取到概念: {', '.join(concept_names_from_info)}")
+                    if attempt > 0:
+                        delay = 1.0 * attempt
+                        print(f"[{datetime.now()}] ⏳ [人气榜接口] 等待{delay:.1f}秒后重试...")
+                        time.sleep(delay)
+                    
+                    print(f"[{datetime.now()}] 📡 [人气榜接口] 尝试调用 stock_hot_rank_latest_em() (尝试 {attempt + 1}/3)...")
+                    start_time = time.time()
+                    
+                    # 调用AKShare接口
+                    df_hot_rank = ak.stock_hot_rank_latest_em()
+                    elapsed_time = time.time() - start_time
+                    
+                    if df_hot_rank is not None and not df_hot_rank.empty:
+                        print(f"[{datetime.now()}] ✅ [人气榜接口] 成功获取个股人气榜数据，耗时: {elapsed_time:.2f}秒，共{len(df_hot_rank)}条")
                         break
+                    else:
+                        print(f"[{datetime.now()}] ⚠️ [人气榜接口] 返回数据为空")
+                        time.sleep(0.5)
                 except Exception as e:
                     error_type = type(e).__name__
                     error_msg = str(e)
-                    if attempt < max_retries - 1:
-                        print(f"[{datetime.now()}] ⚠️ [概念股接口] 获取股票信息失败 (尝试 {attempt + 1}/{max_retries}): {error_type} - {error_msg[:100]}，将使用反向查找...")
-                        time.sleep(0.5)
+                    elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
+                    
+                    print(f"[{datetime.now()}] ❌ [人气榜接口] 获取人气榜数据失败 (尝试 {attempt + 1}/3)")
+                    print(f"    错误类型: {error_type}")
+                    print(f"    错误消息: {error_msg[:200]}")
+                    print(f"    耗时: {elapsed_time:.2f}秒")
+                    
+                    if attempt < 2:
+                        time.sleep(1)
                     else:
-                        print(f"[{datetime.now()}] ⚠️ [概念股接口] 获取股票信息最终失败 ({error_type})，将使用反向查找")
-                        print(f"  错误详情: {error_msg[:200]}")
+                        print(f"[{datetime.now()}] ❌ [人气榜接口] 获取人气榜数据最终失败")
+                        df_hot_rank = None
+                        break
+            
+            if df_hot_rank is not None and not df_hot_rank.empty:
+                # 解析数据并构建返回格式
+                # 根据AKShare的stock_hot_rank_latest_em返回的列名，常见的有：代码、名称、最新价、涨跌幅、成交量、成交额等
+                for idx, row in df_hot_rank.iterrows():
+                    try:
+                        # 尝试不同的列名（AKShare可能返回不同的列名）
+                        code = str(row.get('代码', row.get('股票代码', ''))).strip()
+                        name = str(row.get('名称', row.get('股票名称', ''))).strip()
+                        
+                        # 价格相关字段
+                        price = row.get('最新价', row.get('现价', row.get('价格', 0)))
+                        if pd.isna(price):
+                            price = 0
+                        
+                        # 涨跌幅
+                        change_percent = row.get('涨跌幅', row.get('涨幅', 0))
+                        if pd.isna(change_percent):
+                            change_percent = 0
+                        
+                        # 成交量
+                        volume = row.get('成交量', row.get('成交额', 0))
+                        if pd.isna(volume):
+                            volume = 0
+                        
+                        # 成交额
+                        turnover = row.get('成交额', row.get('成交金额', 0))
+                        if pd.isna(turnover):
+                            turnover = 0
+                        
+                        hot_rank_list.append({
+                            'rank': idx + 1,
+                            'code': code,
+                            'name': name,
+                            'price': float(price) if pd.notna(price) else 0,
+                            'changePercent': float(change_percent) if pd.notna(change_percent) else 0,
+                            'volume': float(volume) if pd.notna(volume) else 0,
+                            'turnover': float(turnover) if pd.notna(turnover) else 0
+                        })
+                    except Exception as e:
+                        print(f"[{datetime.now()}] ⚠️ 解析人气榜数据行失败 (行{idx}): {str(e)[:100]}")
+                        continue
+                
+                print(f"[{datetime.now()}] ✅ 成功解析 {len(hot_rank_list)} 条人气榜数据")
+            else:
+                print(f"[{datetime.now()}] ⚠️ 无法获取人气榜数据")
+                
         except Exception as e:
-            print(f"[{datetime.now()}] ⚠️ [概念股接口] 获取股票信息异常: {str(e)[:100]}，将使用反向查找")
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"[{datetime.now()}] ⚠️ [人气榜接口] 获取人气榜数据异常: {error_type}")
+            print(f"  错误消息: {error_msg[:300]}")
+            try:
+                import traceback
+                print(f"  完整堆栈: {traceback.format_exc()[:500]}")
+            except:
+                pass
         
-        # 恢复原始代理设置（如果有）
+        # 恢复原始代理设置
         if original_http_proxy:
             os.environ['HTTP_PROXY'] = original_http_proxy
         if original_https_proxy:
@@ -1850,294 +1916,23 @@ def get_concept_info(stock_code):
         if original_https_proxy_lower:
             os.environ['https_proxy'] = original_https_proxy_lower
         
-        # 使用 stock_board_concept_name_em 获取所有概念板块
-        concepts_data = []
-        
-        try:
-            # 临时移除代理环境变量（再次确保，与测试脚本保持一致）
-            print(f"[{datetime.now()}] 🔧 [概念接口] 禁用代理设置...")
-            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                original_value = os.environ.get(proxy_var)
-                if original_value:
-                    print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
-                os.environ.pop(proxy_var, None)
-            
-            # 确保NO_PROXY设置正确（禁止所有代理）
-            os.environ['NO_PROXY'] = '*'
-            os.environ['no_proxy'] = '*'
-            print(f"[{datetime.now()}] ✅ [概念接口] 代理已禁用，NO_PROXY=*")
-            
-            # 在调用AKShare之前，再次确保禁用代理
-            # 尝试通过环境变量和urllib3设置禁用代理
-            import urllib3
-            urllib3.disable_warnings()
-            
-            # 获取所有概念板块列表（带重试，增加延迟）
-            df_concept_list = None
-            for attempt in range(3):
-                try:
-                    # 每次重试前增加延迟，避免请求过快
-                    if attempt > 0:
-                        delay = 1.0 * attempt  # 第2次重试延迟1秒，第3次延迟2秒
-                        print(f"[{datetime.now()}] ⏳ [概念接口] 等待{delay:.1f}秒后重试...")
-                        time.sleep(delay)
-                    
-                    print(f"[{datetime.now()}] 📡 [概念接口] 尝试调用 stock_board_concept_name_em() (尝试 {attempt + 1}/3)...")
-                    start_time = time.time()
-                    
-                    # 调用AKShare接口
-                    df_concept_list = ak.stock_board_concept_name_em()
-                    elapsed_time = time.time() - start_time
-                    
-                    if df_concept_list is not None and not df_concept_list.empty:
-                        print(f"[{datetime.now()}] ✅ [概念接口] 成功获取概念板块列表，耗时: {elapsed_time:.2f}秒，共{len(df_concept_list)}个概念")
-                        break
-                    else:
-                        print(f"[{datetime.now()}] ⚠️ [概念接口] 返回数据为空")
-                        time.sleep(0.5)
-                except Exception as e:
-                    error_type = type(e).__name__
-                    error_msg = str(e)
-                    elapsed_time = time.time() - start_time if 'start_time' in locals() else 0
-                    
-                    print(f"[{datetime.now()}] ❌ [概念接口] 获取概念板块列表失败 (尝试 {attempt + 1}/3)")
-                    print(f"    错误类型: {error_type}")
-                    print(f"    错误消息: {error_msg}")
-                    print(f"    耗时: {elapsed_time:.2f}秒")
-                    
-                    # 详细的错误分析
-                    print(f"\n    {'='*70}")
-                    print(f"    【详细错误诊断】")
-                    print(f"    {'='*70}")
-                    
-                    if 'ConnectionError' in error_type or 'MaxRetriesExceeded' in error_type or 'MaxRetryError' in error_type:
-                        print(f"    🔍 错误类型: 网络连接错误")
-                        print(f"    - 目标服务器: push2.eastmoney.com (AKShare数据源)")
-                        print(f"    - 可能原因:")
-                        print(f"      1. 代理服务器不可用或配置错误")
-                        print(f"      2. 目标服务器不可达（防火墙/网络限制）")
-                        print(f"      3. DNS解析失败")
-                        print(f"    - 建议:")
-                        print(f"      1. 检查系统代理设置")
-                        print(f"      2. 尝试直接访问目标服务器")
-                        print(f"      3. 检查防火墙规则")
-                    elif 'ProtocolError' in error_type:
-                        print(f"    🔍 错误类型: 协议错误")
-                        print(f"    - 连接被远程端关闭")
-                        print(f"    - 可能原因:")
-                        print(f"      1. 请求频率过快，被服务器限制")
-                        print(f"      2. 代理服务器问题")
-                        print(f"      3. 服务器负载过高，主动断开连接")
-                        print(f"    - 建议:")
-                        print(f"      1. 增加请求间隔时间（当前已设置0.3-1秒延迟）")
-                        print(f"      2. 检查代理配置")
-                        print(f"      3. 稍后重试")
-                    elif 'RemoteDisconnected' in error_msg:
-                        print(f"    🔍 错误类型: 远程连接断开")
-                        print(f"    - 服务器主动关闭连接")
-                        print(f"    - 可能原因:")
-                        print(f"      1. 服务器检测到异常请求")
-                        print(f"      2. 网络不稳定导致连接中断")
-                        print(f"      3. 代理服务器问题")
-                    elif 'Timeout' in error_type:
-                        print(f"    🔍 错误类型: 请求超时")
-                        print(f"    - 服务器响应过慢或未响应")
-                        print(f"    - 建议: 增加超时时间或检查网络")
-                    else:
-                        print(f"    🔍 错误类型: {error_type}")
-                    
-                    # 代理状态检查
-                    print(f"\n    【代理状态检查】")
-                    proxy_found = False
-                    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                        value = os.environ.get(proxy_var)
-                        if value:
-                            print(f"    ⚠️ 发现代理设置: {proxy_var} = {value[:60]}...")
-                            proxy_found = True
-                        else:
-                            print(f"    ✅ {proxy_var}: 未设置")
-                    
-                    if not proxy_found:
-                        print(f"    ✅ 所有代理环境变量已清除")
-                    
-                    # 网络连接测试
-                    print(f"\n    【网络连接测试】")
-                    try:
-                        import socket
-                        test_hosts = [
-                            ('79.push2.eastmoney.com', 443, '概念板块服务器'),
-                            ('push2.eastmoney.com', 443, 'AKShare主服务器'),
-                            ('www.baidu.com', 80, '测试基本网络')
-                        ]
-                        for host, port, desc in test_hosts:
-                            try:
-                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                sock.settimeout(3)
-                                result = sock.connect_ex((host, port))
-                                sock.close()
-                                if result == 0:
-                                    print(f"    ✅ {desc}: {host}:{port} - 可连接")
-                                else:
-                                    print(f"    ❌ {desc}: {host}:{port} - 连接失败 (错误代码: {result})")
-                            except Exception as socket_e:
-                                print(f"    ❌ {desc}: {host}:{port} - 测试异常: {str(socket_e)[:60]}")
-                    except Exception as net_test_e:
-                        print(f"    ❌ 网络测试模块异常: {str(net_test_e)[:60]}")
-                    
-                    # 打印完整的异常堆栈（仅在最后一次尝试时）
-                    if attempt >= 2:
-                        print(f"\n    【完整错误堆栈】")
-                        import traceback
-                        full_trace = traceback.format_exc()
-                        print(f"    {full_trace[:1000]}")
-                    
-                    print(f"    {'='*70}\n")
-                    
-                    if attempt < 2:
-                        print(f"    ⏳ 等待1秒后重试...")
-                        time.sleep(1)
-                    else:
-                        print(f"[{datetime.now()}] ❌ [概念接口] 获取概念板块列表最终失败，将返回空概念列表")
-                        df_concept_list = None  # 设置为None，不抛出异常，允许继续执行
-                        break  # 跳出重试循环
-            
-            if df_concept_list is not None and not df_concept_list.empty:
-                print(f"[{datetime.now()}] ✅ 获取到 {len(df_concept_list)} 个概念板块列表")
-                
-                # 如果从股票信息中找到了概念名称，先匹配这些概念
-                matched_concept_codes = set()
-                if concept_names_from_info:
-                    for concept_name_info in concept_names_from_info:
-                        # 在概念板块列表中查找匹配的概念
-                        matched = df_concept_list[df_concept_list['板块名称'].str.contains(concept_name_info, na=False)]
-                        if not matched.empty:
-                            for _, row in matched.iterrows():
-                                concept_code = row.get('板块代码', '')
-                                if concept_code and concept_code not in matched_concept_codes:
-                                    matched_concept_codes.add(concept_code)
-                
-                # 如果没有从股票信息中找到概念，或找到的概念太少，通过反向查找
-                if len(matched_concept_codes) == 0 or len(matched_concept_codes) < 3:
-                        print(f"[{datetime.now()}] 通过成分股反向查找概念板块...")
-                        # 遍历概念板块，查找包含该股票的概念（限制查找数量以提高效率）
-                        max_search = 50  # 最多查找50个概念板块
-                        for idx, row in df_concept_list.head(max_search).iterrows():
-                            concept_code = row.get('板块代码', '')
-                            if concept_code and concept_code not in matched_concept_codes:
-                                try:
-                                    # 获取该概念的成分股（带重试和延迟）
-                                    df_concept_stocks = None
-                                    for retry in range(2):
-                                        try:
-                                            time.sleep(0.3)  # 添加延迟，避免请求过快
-                                            df_concept_stocks = ak.stock_board_concept_cons_em(symbol=concept_code)
-                                            if df_concept_stocks is not None and not df_concept_stocks.empty:
-                                                break
-                                        except Exception as e:
-                                            if retry < 1:
-                                                time.sleep(0.5)
-                                            else:
-                                                raise
-                                    
-                                    if df_concept_stocks is not None and not df_concept_stocks.empty:
-                                        # 检查是否包含当前股票
-                                        stock_codes_in_concept = df_concept_stocks['代码'].astype(str).str.zfill(6)
-                                        if clean_code in stock_codes_in_concept.values:
-                                            matched_concept_codes.add(concept_code)
-                                            print(f"[{datetime.now()}] ✅ 找到概念: {row.get('板块名称', '')} ({concept_code})")
-                                            if len(matched_concept_codes) >= 10:  # 最多查找10个概念
-                                                break
-                                except Exception as e:
-                                    # 某些概念可能无法获取成分股，跳过
-                                    continue
-                
-                # 构建概念数据
-                for concept_code in list(matched_concept_codes)[:10]:  # 最多返回10个概念
-                    try:
-                        matched_row = df_concept_list[df_concept_list['板块代码'] == concept_code]
-                        if not matched_row.empty:
-                            concept_name = matched_row.iloc[0].get('板块名称', '未知概念')
-                            
-                            concept_info = {
-                                'name': concept_name,
-                                'code': concept_code,
-                                'description': f'{concept_name}概念板块',
-                                'trend': '',
-                                'relatedStocks': []
-                            }
-                            
-                            # 获取该概念的相关股票（最多10只，带重试）
-                            try:
-                                df_concept_stocks = None
-                                for retry in range(3):
-                                    try:
-                                        time.sleep(0.3)  # 添加延迟
-                                        df_concept_stocks = ak.stock_board_concept_cons_em(symbol=concept_code)
-                                        if df_concept_stocks is not None and not df_concept_stocks.empty:
-                                            break
-                                    except Exception as e:
-                                        if retry < 2:
-                                            print(f"[{datetime.now()}] ⚠️ 获取概念成分股失败 {concept_name} (尝试 {retry + 1}/3): {str(e)[:80]}，重试中...")
-                                            time.sleep(1)
-                                        else:
-                                            raise
-                                
-                                if df_concept_stocks is not None and not df_concept_stocks.empty:
-                                    related_stocks = []
-                                    for idx, row in df_concept_stocks.head(10).iterrows():
-                                        stock_code_concept = str(row.get('代码', '')).zfill(6)
-                                        stock_name_concept = str(row.get('名称', ''))
-                                        stock_price = row.get('最新价', 0)
-                                        stock_change = row.get('涨跌幅', 0)
-                                        
-                                        if pd.notna(stock_price) and pd.notna(stock_change):
-                                            related_stocks.append({
-                                                'code': stock_code_concept,
-                                                'name': stock_name_concept,
-                                                'price': float(stock_price) if pd.notna(stock_price) else 0,
-                                                'changePercent': float(stock_change) if pd.notna(stock_change) else 0
-                                            })
-                                    
-                                    concept_info['relatedStocks'] = related_stocks
-                            except Exception as e:
-                                print(f"[{datetime.now()}] ⚠️ 获取概念成分股失败 {concept_name}: {str(e)}")
-                            
-                            concepts_data.append(concept_info)
-                    except Exception as e:
-                        print(f"[{datetime.now()}] ⚠️ 处理概念失败: {str(e)}")
-                        continue
-                
-                print(f"[{datetime.now()}] ✅ 找到 {len(concepts_data)} 个概念板块")
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            print(f"[{datetime.now()}] ⚠️ [概念接口] 获取概念板块列表异常: {error_type}")
-            print(f"  错误消息: {error_msg[:300]}")
-            try:
-                import traceback
-                print(f"  完整堆栈: {traceback.format_exc()[:500]}")
-            except:
-                pass
-            # 不抛出异常，继续执行，返回空的概念列表
-        
-        # 构建返回结果（确保concepts_data已初始化）
+        # 构建返回结果
         result = {
-            'stockCode': stock_code,
-            'concepts': concepts_data if concepts_data else [],  # 确保始终是列表
-            'conceptCount': len(concepts_data) if concepts_data else 0,
-            'lastUpdate': datetime.now().isoformat(),
-            'source': 'AKShare'
+            'hotRankList': hot_rank_list,
+            'count': len(hot_rank_list),
+            'updateTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'source': 'AKShare - stock_hot_rank_latest_em'
         }
         
-        if len(concepts_data) == 0:
-            print(f"[{datetime.now()}] ⚠️ 未找到概念板块数据: {stock_code}（可能原因：网络问题或该股票确实无概念板块）")
+        if len(hot_rank_list) == 0:
+            print(f"[{datetime.now()}] ⚠️ 未获取到人气榜数据")
             return jsonify({
                 'success': True,
                 'data': result,
-                'message': '该股票未归类到任何概念板块或无法获取概念板块数据'
+                'message': '无法获取个股人气榜数据'
             })
         
-        print(f"[{datetime.now()}] ✅ 成功获取概念股数据: {stock_code} - 共{len(concepts_data)}个概念")
+        print(f"[{datetime.now()}] ✅ 成功获取个股人气榜数据 - 共{len(hot_rank_list)}条")
         return jsonify({'success': True, 'data': result})
         
     except Exception as e:
@@ -2145,14 +1940,14 @@ def get_concept_info(stock_code):
         try:
             import traceback
             error_trace = traceback.format_exc()
-            print(f"[{datetime.now()}] ❌ 获取概念股数据失败: {error_msg}")
+            print(f"[{datetime.now()}] ❌ 获取个股人气榜数据失败: {error_msg}")
             print(error_trace)
         except:
-            print(f"[{datetime.now()}] ❌ 获取概念股数据失败: {error_msg}")
+            print(f"[{datetime.now()}] ❌ 获取个股人气榜数据失败: {error_msg}")
         return jsonify({
                 'success': False,
                 'error': error_msg,
-                'message': f'无法获取股票 {stock_code} 的概念股数据'
+                'message': '无法获取个股人气榜数据'
             }), 500
 
 @app.route('/api/stock/batch', methods=['POST'])
@@ -2198,7 +1993,7 @@ if __name__ == '__main__':
     print("  GET  /health - 健康检查")
     print("  GET  /api/stock/fundamental/<stock_code> - 获取单个股票基本面")
     print("  GET  /api/stock/industry/<stock_code> - 获取股票行业详情")
-    print("  GET  /api/stock/concept/<stock_code> - 获取股票概念股数据")
+    print("  GET  /api/stock/hot-rank - 获取个股人气榜最新排名")
     print("  GET  /api/stock/history/<stock_code>?months=3 - 获取历史交易数据（AKShare）")
     print("  GET  /api/stock/analyze/<stock_code>?months=3 - 大数据分析（技术指标+趋势）")
     print("  POST /api/stock/batch - 批量获取基本面")
