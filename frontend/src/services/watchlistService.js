@@ -23,9 +23,9 @@ export const watchlistService = {
     return api.delete(`/watchlist/${id}`)
   },
 
-  // 更新自选股
+  // 更新自选股成本信息
   updateStock(id, costPrice, quantity) {
-    return api.put(`/watchlist/${id}`, {
+    return api.put(`/watchlist/${id}/cost`, {
       costPrice,
       quantity
     })

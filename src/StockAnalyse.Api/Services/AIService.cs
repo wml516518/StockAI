@@ -51,7 +51,7 @@ public class AIService : IAIService
             return "请先配置AI模型API";
         }
 
-        var promptText = $"请分析股票代码{stockCode}。{additionalContext ?? ""}";
+        var promptText = $"帮我分析当前股票{stockCode}。{additionalContext ?? ""}";
         var promptSettings = await GetPromptSettingsAsync(promptId);
 
         var response = await CallAIAsync(config, promptText, promptSettings);

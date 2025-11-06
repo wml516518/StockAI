@@ -118,8 +118,19 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   // 更新自选股
   async function updateStock(id, costPrice, quantity) {
     try {
-      await watchlistService.updateStock(id, costPrice, quantity)
-      await fetchWatchlist()
+      const updatedStock = await watchlistService.updateStock(id, costPrice, quantity)
+      // 只更新对应的股票项，不重新获取整个列表
+      const index = stocks.value.findIndex(s => s.id === id)
+      if (index !== -1) {
+        // 更新成本相关字段
+        stocks.value[index].costPrice = updatedStock.costPrice
+        stocks.value[index].quantity = updatedStock.quantity
+        stocks.value[index].totalCost = updatedStock.totalCost
+        stocks.value[index].profitLoss = updatedStock.profitLoss
+        stocks.value[index].profitLossPercent = updatedStock.profitLossPercent
+        stocks.value[index].lastUpdate = updatedStock.lastUpdate
+      }
+      return updatedStock
     } catch (error) {
       console.error('更新自选股失败:', error)
       throw error

@@ -38,6 +38,71 @@ public class StockDataService : IStockDataService
         return defaultValue;
     }
 
+    /// <summary>
+    /// 安全地设置HTTP请求头，避免重复添加导致的异常
+    /// </summary>
+    private void SetRequestHeader(string name, string value)
+    {
+        try
+        {
+            // 先尝试移除，避免重复添加
+            if (_httpClient.DefaultRequestHeaders.Contains(name))
+            {
+                _httpClient.DefaultRequestHeaders.Remove(name);
+            }
+            // 使用 TryAddWithoutValidation 避免验证失败
+            if (!_httpClient.DefaultRequestHeaders.TryAddWithoutValidation(name, value))
+            {
+                // 如果 TryAddWithoutValidation 失败，尝试直接添加
+                // 但由于已移除，这里应该是安全的
+                _httpClient.DefaultRequestHeaders.Add(name, value);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // 如果header在另一个线程中被修改，捕获异常并重试
+            // 先移除（如果存在）
+            try
+            {
+                _httpClient.DefaultRequestHeaders.Remove(name);
+            }
+            catch { }
+            // 然后添加
+            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation(name, value);
+        }
+    }
+
+    /// <summary>
+    /// 清除并设置请求头
+    /// </summary>
+    private void ClearAndSetHeaders(string userAgent, string? referer = null)
+    {
+        _httpClient.DefaultRequestHeaders.Clear();
+        SetRequestHeader("User-Agent", userAgent);
+        if (!string.IsNullOrEmpty(referer))
+        {
+            SetRequestHeader("Referer", referer);
+        }
+    }
+
+    /// <summary>
+    /// 为新浪财经请求设置完整的浏览器请求头
+    /// </summary>
+    private HttpRequestMessage CreateSinaRequest(string url)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        
+        // 设置完整的浏览器请求头，避免被识别为爬虫
+        request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        request.Headers.Add("Accept", "*/*"); // 新浪财经接口接受所有类型
+        request.Headers.Add("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7");
+        request.Headers.Add("Referer", "http://finance.sina.com.cn");
+        request.Headers.Add("Connection", "keep-alive");
+        request.Headers.Add("Cache-Control", "no-cache");
+        
+        return request;
+    }
+
     public async Task<Stock?> GetRealTimeQuoteAsync(string stockCode)
     {
         try
@@ -303,9 +368,7 @@ public class StockDataService : IStockDataService
             // 补充PE(PETTM f162)与PB(f167)字段，避免PE/PB一直为0导致筛选结果为空
             var url = $"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f107,f137,f43,f46,f44,f45,f47,f48,f168,f60,f170,f116,f171,f117,f172,f169,f162,f167&fltt=2";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
             
             var response = await _httpClient.GetStringAsync(url);
             
@@ -377,15 +440,21 @@ public class StockDataService : IStockDataService
             var url = $"http://hq.sinajs.cn/list={marketPrefix}{stockCode}";
             _logger.LogDebug("请求新浪财经接口: {Url}", url);
             
-            // 设置请求头
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "http://finance.sina.com.cn");
+            // 使用 HttpRequestMessage 设置完整的浏览器请求头
+            using var request = CreateSinaRequest(url);
+            using var response = await _httpClient.SendAsync(request);
             
-            var response = await _httpClient.GetStringAsync(url);
-            _logger.LogDebug("新浪财经返回数据: {Response}", response);
+            // 检查响应状态
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("新浪财经接口返回错误状态码: {StatusCode} for {Code}", response.StatusCode, stockCode);
+                return null;
+            }
             
-            var stock = ParseSinaData(response, stockCode);
+            var responseContent = await response.Content.ReadAsStringAsync();
+            _logger.LogDebug("新浪财经返回数据: {Response}", responseContent);
+            
+            var stock = ParseSinaData(responseContent, stockCode);
             
             if (stock != null)
             {
@@ -393,7 +462,7 @@ public class StockDataService : IStockDataService
             }
             else
             {
-                _logger.LogWarning("解析新浪财经数据失败: {Response}", response);
+                _logger.LogWarning("解析新浪财经数据失败: {Response}", responseContent);
             }
             
             return stock;
@@ -416,9 +485,7 @@ public class StockDataService : IStockDataService
             var end = endDate.ToString("yyyyMMdd");
 
             var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={end}";
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
 
             var response = await _httpClient.GetStringAsync(url);
             dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
@@ -588,8 +655,7 @@ public class StockDataService : IStockDataService
             
             var url = $"http://qt.gtimg.cn/q={string.Join(",", codeList)}";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             
             // 使用GetByteArrayAsync然后手动解码，解决编码问题
             var responseBytes = await _httpClient.GetByteArrayAsync(url);
@@ -1201,9 +1267,7 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试实时行情扩展接口");
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
             
             var response = await _httpClient.GetStringAsync(url);
             dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
@@ -1250,9 +1314,7 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试F10接口获取基本面信息: {Url}", url);
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "https://data.eastmoney.com/");
             
             var response = await _httpClient.GetStringAsync(url);
             _logger.LogDebug("F10接口响应长度: {Length} 字符", response.Length);
@@ -1437,9 +1499,7 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试财务指标接口: {Url}", url);
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "https://data.eastmoney.com/");
             
             var response = await _httpClient.GetStringAsync(url);
             
@@ -1489,9 +1549,7 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试旧接口: {Url}", url);
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            _httpClient.DefaultRequestHeaders.Add("Referer", "https://data.eastmoney.com/");
+            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "https://data.eastmoney.com/");
             
             var response = await _httpClient.GetStringAsync(url);
             
@@ -1721,9 +1779,7 @@ public class StockDataService : IStockDataService
                 
                 _logger.LogDebug("请求东方财富股票列表，页码: {PageNum}, URL: {Url}", pageNum, url);
                 
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-                _httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+                ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
                 
                 var response = await _httpClient.GetStringAsync(url);
                 

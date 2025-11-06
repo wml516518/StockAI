@@ -132,13 +132,53 @@
                     </div>
                   </div>
                 </div>
-                <div class="cost-info" :class="stock.costPrice ? getCostClass(stock) : 'cost-neutral'">
-                  <div v-if="stock.costPrice">
-                    <div>成本: {{ formatPrice(stock.costPrice) }} × {{ stock.quantity || 0 }}</div>
-                    <div>盈亏: {{ formatPrice(calculateProfit(stock)) }} ({{ formatPercent(calculateProfitPercent(stock)) }})</div>
+                <div class="cost-info-section">
+                  <div class="cost-info-header">
+                    <span>成本信息</span>
+                    <button 
+                      class="btn-icon" 
+                      @click="toggleCostEdit(stock.id)"
+                      :title="editingCost[stock.id] ? '取消编辑' : '编辑成本信息'"
+                    >
+                      {{ editingCost[stock.id] ? '✕' : '✎' }}
+                    </button>
                   </div>
-                  <div v-else>
-                    未设置成本价
+                  <div v-if="editingCost[stock.id]" class="cost-info-edit">
+                    <div class="price-input-group">
+                      <label>成本价:</label>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        v-model.number="costForm[stock.id].costPrice"
+                        placeholder="输入成本价"
+                        class="price-input"
+                      />
+                    </div>
+                    <div class="price-input-group">
+                      <label>持仓数量:</label>
+                      <input 
+                        type="number" 
+                        v-model.number="costForm[stock.id].quantity"
+                        placeholder="输入持仓数量"
+                        class="price-input"
+                      />
+                    </div>
+                    <button 
+                      class="btn btn-small" 
+                      @click="handleSaveCost(stock.id)"
+                      :disabled="savingCost[stock.id]"
+                    >
+                      {{ savingCost[stock.id] ? '保存中...' : '保存' }}
+                    </button>
+                  </div>
+                  <div v-else class="cost-info" :class="stock.costPrice ? getCostClass(stock) : 'cost-neutral'">
+                    <div v-if="stock.costPrice">
+                      <div>成本: {{ formatPrice(stock.costPrice) }} × {{ stock.quantity || 0 }}</div>
+                      <div>盈亏: {{ formatPrice(calculateProfit(stock)) }} ({{ formatPercent(calculateProfitPercent(stock)) }})</div>
+                    </div>
+                    <div v-else>
+                      未设置成本价
+                    </div>
                   </div>
                 </div>
                 <div class="suggested-price-section">
@@ -185,14 +225,32 @@
                     <div v-if="stock.suggestedBuyPrice" class="suggested-price-item buy-price">
                       <span class="price-label">买入:</span>
                       <span class="price-value">{{ formatPrice(stock.suggestedBuyPrice) }}</span>
-                      <span v-if="stock.buyAlertSent" class="alert-badge" title="已达到买入价，已提醒">✓</span>
-                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) <= stock.suggestedBuyPrice" class="alert-badge alert-triggered" title="当前价格已达到买入价">🔔</span>
+                      <span v-if="stock.buyAlertSent" class="alert-badge alert-completed" title="已达到买入价，已提醒">
+                        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
+                        </svg>
+                      </span>
+                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) <= stock.suggestedBuyPrice" class="alert-badge alert-triggered" title="当前价格已达到买入价">
+                        <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
+                          <path d="M9 19H15V21H9V19Z" fill="currentColor"/>
+                        </svg>
+                      </span>
                     </div>
                     <div v-if="stock.suggestedSellPrice" class="suggested-price-item sell-price">
                       <span class="price-label">卖出:</span>
                       <span class="price-value">{{ formatPrice(stock.suggestedSellPrice) }}</span>
-                      <span v-if="stock.sellAlertSent" class="alert-badge" title="已达到卖出价，已提醒">✓</span>
-                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) >= stock.suggestedSellPrice" class="alert-badge alert-triggered" title="当前价格已达到卖出价">🔔</span>
+                      <span v-if="stock.sellAlertSent" class="alert-badge alert-completed" title="已达到卖出价，已提醒">
+                        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
+                        </svg>
+                      </span>
+                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) >= stock.suggestedSellPrice" class="alert-badge alert-triggered" title="当前价格已达到卖出价">
+                        <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
+                          <path d="M9 19H15V21H9V19Z" fill="currentColor"/>
+                        </svg>
+                      </span>
                     </div>
                     <div v-if="!stock.suggestedBuyPrice && !stock.suggestedSellPrice" class="no-suggested-price">
                       未设置建议价格
@@ -253,6 +311,11 @@ const tradingStatusText = ref(getTradingStatusText())
 const editingSuggestedPrice = ref({})
 const suggestedPriceForm = ref({})
 const savingSuggestedPrice = ref({})
+
+// 成本信息编辑相关
+const editingCost = ref({})
+const costForm = ref({})
+const savingCost = ref({})
 
 // 组件挂载时加载数据
 onMounted(async () => {
@@ -477,6 +540,41 @@ const handleSaveSuggestedPrice = async (stockId) => {
     alert('保存建议价格失败: ' + (error.response?.data?.message || error.message))
   } finally {
     delete savingSuggestedPrice.value[stockId]
+  }
+}
+
+const toggleCostEdit = (stockId) => {
+  if (editingCost.value[stockId]) {
+    // 取消编辑
+    delete editingCost.value[stockId]
+    delete costForm.value[stockId]
+  } else {
+    // 开始编辑
+    const stock = stocks.value.find(s => s.id === stockId)
+    editingCost.value[stockId] = true
+    costForm.value[stockId] = {
+      costPrice: stock?.costPrice || null,
+      quantity: stock?.quantity || null
+    }
+  }
+}
+
+const handleSaveCost = async (stockId) => {
+  try {
+    savingCost.value[stockId] = true
+    const form = costForm.value[stockId]
+    await watchlistStore.updateStock(
+      stockId,
+      form.costPrice || null,
+      form.quantity || null
+    )
+    // 立即关闭编辑模式，不等待列表刷新
+    delete editingCost.value[stockId]
+    delete costForm.value[stockId]
+  } catch (error) {
+    alert('保存成本信息失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    delete savingCost.value[stockId]
   }
 }
 
@@ -710,8 +808,31 @@ const getStockLow = (stock) => {
   color: #4caf50;
 }
 
-.cost-info {
+.cost-info-section {
   margin-top: 15px;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.cost-info-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: bold;
+  font-size: 0.9em;
+  color: #333;
+}
+
+.cost-info-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cost-info {
   padding: 8px 12px;
   border-radius: 4px;
   font-size: 0.85em;
@@ -832,22 +953,83 @@ const getStockLow = (stock) => {
 }
 
 .alert-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  cursor: pointer;
+}
+
+.alert-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.alert-badge.alert-completed {
   color: #4caf50;
-  font-weight: bold;
-  font-size: 1.1em;
+}
+
+.alert-badge.alert-completed .alert-icon {
+  animation: starTwinkle 2s ease-in-out infinite;
 }
 
 .alert-badge.alert-triggered {
-  color: #ff9800;
-  animation: pulse 1.5s infinite;
+  color: #ff6b35;
 }
 
-@keyframes pulse {
+.alert-badge.alert-triggered .bell-icon {
+  animation: bellRing 1s ease-in-out infinite;
+  transform-origin: center top;
+}
+
+@keyframes starTwinkle {
   0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  25% {
+    opacity: 0.8;
+    transform: scale(1.05);
+    filter: brightness(1.2);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.1);
+    filter: brightness(1.3);
+  }
+  75% {
+    opacity: 0.85;
+    transform: scale(1.05);
+    filter: brightness(1.2);
+  }
+}
+
+@keyframes bellRing {
+  0% {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  5%, 15% {
+    transform: rotate(-12deg) scale(1.05);
+  }
+  10% {
+    transform: rotate(12deg) scale(1.05);
+  }
+  20% {
+    transform: rotate(-8deg) scale(1.02);
+  }
+  25% {
+    transform: rotate(8deg) scale(1.02);
+  }
+  30%, 100% {
+    transform: rotate(0deg) scale(1);
     opacity: 1;
   }
   50% {
-    opacity: 0.5;
+    transform: rotate(0deg) scale(1.15);
+    opacity: 0.95;
   }
 }
 
