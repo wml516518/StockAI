@@ -1374,7 +1374,14 @@ public class AIController : ControllerBase
             var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
                 ?? "http://localhost:5001";
             
-            var url = $"{pythonServiceUrl}/api/stock/hot-rank";
+            var normalizedStockCode = (stockCode ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(normalizedStockCode))
+            {
+                return string.Empty;
+            }
+
+            var encodedStockCode = Uri.EscapeDataString(normalizedStockCode);
+            var url = $"{pythonServiceUrl}/api/stock/hot-rank/{encodedStockCode}";
             
             _logger.LogDebug("尝试从Python服务获取个股人气榜数据: {Url}", url);
             
@@ -1401,96 +1408,90 @@ public class AIController : ControllerBase
             var responseContent = await response.Content.ReadAsStringAsync();
             var jsonData = Newtonsoft.Json.Linq.JObject.Parse(responseContent);
             
-            if (jsonData["success"]?.ToString() == "True" && jsonData["data"] != null)
+            if (jsonData["success"]?.ToObject<bool>() == true)
             {
                 var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
-                if (data != null)
+                if (data == null)
                 {
-                    var hotRankList = data["hotRankList"] as Newtonsoft.Json.Linq.JArray;
-                    var updateTime = data["updateTime"]?.ToString() ?? "";
-                    
-                    if (hotRankList != null && hotRankList.Count > 0)
-                    {
-                        // 查找当前股票在人气榜中的排名（使用API返回的rank字段）
-                        var stockRankInfo = (Newtonsoft.Json.Linq.JObject?)null;
-                        
-                        for (int i = 0; i < hotRankList.Count; i++)
-                        {
-                            var item = hotRankList[i] as Newtonsoft.Json.Linq.JObject;
-                            if (item != null)
-                            {
-                                var code = item["code"]?.ToString() ?? "";
-                                // 标准化股票代码比较（去除前缀，只比较6位数字）
-                                var normalizedCode = code.Replace("sh", "").Replace("sz", "").Replace("SH", "").Replace("SZ", "").Trim();
-                                var normalizedStockCode = stockCode.Replace("sh", "").Replace("sz", "").Replace("SH", "").Replace("SZ", "").Trim();
-                                
-                                if (normalizedCode == normalizedStockCode || 
-                                    normalizedCode.EndsWith(normalizedStockCode) || 
-                                    normalizedStockCode.EndsWith(normalizedCode))
-                                {
-                                    stockRankInfo = item;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        var hotRankText = $@"
-
-【个股人气榜数据】（数据来源：AKShare - stock_hot_rank_latest_em）
-{(string.IsNullOrEmpty(updateTime) ? "" : $"更新时间：{updateTime}")}
-
-";
-                        
-                        if (stockRankInfo != null)
-                        {
-                            var rank = stockRankInfo["rank"]?.ToString() ?? "N/A";
-                            var rankChange = stockRankInfo["rankChange"]?.ToString() ?? "N/A";
-                            var hisRankChange = stockRankInfo["hisRankChange"]?.ToString() ?? "N/A";
-                            var name = stockRankInfo["name"]?.ToString() ?? "";
-                            var code = stockRankInfo["code"]?.ToString() ?? "";
-                            
-                            hotRankText += $"**该股票在人气榜中的排名：第{rank}名**\n\n";
-                            hotRankText += $"**排名变化信息：**\n";
-                            hotRankText += $"- 股票名称：{name}\n";
-                            hotRankText += $"- 股票代码：{code}\n";
-                            hotRankText += $"- 当前排名：第{rank}名\n";
-                            hotRankText += $"- 排名变化（与上一期相比）：{rankChange}\n";
-                            hotRankText += $"- 历史排名变化：{hisRankChange}\n\n";
-                        }
-                        else
-                        {
-                            hotRankText += $"**该股票未进入当前人气榜前{hotRankList.Count}名**\n\n";
-                        }
-                        
-                        // 显示人气榜前10名（只显示排名信息）
-                        hotRankText += $"**人气榜前10名：**\n";
-                        int displayCount = Math.Min(hotRankList.Count, 10);
-                        for (int i = 0; i < displayCount; i++)
-                        {
-                            var item = hotRankList[i] as Newtonsoft.Json.Linq.JObject;
-                            if (item != null)
-                            {
-                                var rank = item["rank"]?.ToString() ?? "N/A";
-                                var name = item["name"]?.ToString() ?? "";
-                                var code = item["code"]?.ToString() ?? "";
-                                var rankChange = item["rankChange"]?.ToString() ?? "N/A";
-                                var hisRankChange = item["hisRankChange"]?.ToString() ?? "N/A";
-                                
-                                hotRankText += $"{rank}. {name}({code}) 排名变化：{rankChange} 历史排名变化：{hisRankChange}\n";
-                            }
-                        }
-                        
-                        hotRankText += "\n**提示：请结合以上个股人气榜数据（排名、排名变化、历史排名变化），分析该股票的市场关注度、投资者情绪变化趋势，以及人气排名对股价走势的影响。**\n";
-                        
-                        return hotRankText;
-                    }
-                    else
-                    {
-                        return "\n【个股人气榜数据】（数据来源：AKShare）\n\n当前无法获取个股人气榜数据。\n";
-                    }
+                    _logger.LogInformation("未从Python服务获取到有效的人气榜数据");
+                    return "";
                 }
+
+                static string FormatChange(string? label, int? value)
+                {
+                    if (!value.HasValue)
+                    {
+                        return $"{label}: 暂无数据";
+                    }
+
+                    var sign = value.Value > 0 ? "+" : string.Empty;
+                    return $"{label}: {sign}{value}";
+                }
+
+                int? ParseNullableInt(Newtonsoft.Json.Linq.JToken? token)
+                {
+                    if (token == null)
+                    {
+                        return null;
+                    }
+
+                    if (int.TryParse(token.ToString(), out var parsedInt))
+                    {
+                        return parsedInt;
+                    }
+
+                    if (double.TryParse(token.ToString(), out var parsedDouble))
+                    {
+                        return (int)Math.Round(parsedDouble);
+                    }
+
+                    return null;
+                }
+
+                var rank = ParseNullableInt(data["rank"]);
+                var rankChange = ParseNullableInt(data["rankChange"]);
+                var hisRankChange = ParseNullableInt(data["hisRankChange"]);
+                var marketAllCount = ParseNullableInt(data["marketAllCount"]);
+                var calcTime = data["calcTime"]?.ToString();
+                var symbol = data["symbol"]?.ToString() ?? normalizedStockCode;
+                var innerCode = data["innerCode"]?.ToString();
+
+                var builder = new StringBuilder();
+                builder.AppendLine();
+                builder.AppendLine("【个股人气榜数据】（数据来源：AKShare - stock_hot_rank_latest_em）");
+                if (!string.IsNullOrWhiteSpace(calcTime))
+                {
+                    builder.AppendLine($"更新时间：{calcTime}");
+                }
+
+                builder.AppendLine();
+
+                if (rank.HasValue)
+                {
+                    var totalText = marketAllCount.HasValue ? $"/ 共{marketAllCount}只股票" : string.Empty;
+                    builder.AppendLine($"**股票 {symbol} 当前人气排名: 第{rank}{totalText}**");
+                    builder.AppendLine();
+                    builder.AppendLine("**排名变化信息：**");
+                    builder.AppendLine($"- {FormatChange("与上一期相比的排名变化", rankChange)}");
+                    builder.AppendLine($"- {FormatChange("历史区间排名变化", hisRankChange)}");
+                }
+                else
+                {
+                    builder.AppendLine("当前未能获取到该股票的人气排名数据。");
+                }
+
+                if (!string.IsNullOrWhiteSpace(innerCode))
+                {
+                    builder.AppendLine();
+                    builder.AppendLine($"内部代码：{innerCode}");
+                }
+
+                builder.AppendLine();
+                builder.AppendLine("**提示：请结合人气排名及其变化，分析市场关注度与情绪趋势，对投资决策进行辅助判断。**");
+
+                return builder.ToString();
             }
-            
+
             return "";
         }
         catch (System.Net.Http.HttpRequestException ex)

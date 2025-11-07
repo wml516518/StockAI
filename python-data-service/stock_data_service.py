@@ -1747,6 +1747,105 @@ def get_industry_info(stock_code):
             'trace': error_trace if os.getenv('FLASK_ENV') == 'development' else None
         }), 500
 
+@app.route('/api/stock/hot-rank/<stock_code>', methods=['GET'])
+def get_hot_rank_by_code(stock_code):
+    """根据股票代码获取最新人气排名"""
+    try:
+        request_time = datetime.now()
+        print(f"[{request_time}] 请求个股人气榜数据: {stock_code}")
+
+        if not stock_code:
+            return jsonify({'success': False, 'error': 'stock_code_required'}), 400
+
+        clean_code = stock_code.strip()
+        normalized = clean_code.replace('-', '').replace('_', '').upper()
+
+        # 拆分前缀和纯数字部分
+        prefix = ''
+        digits = ''.join(ch for ch in normalized if ch.isdigit())
+
+        if normalized.startswith('SZ') or normalized.startswith('SH'):
+            prefix = normalized[:2]
+            if len(normalized) >= 2 and digits:
+                digits = normalized[2:]
+        elif len(digits) == 6:
+            if digits.startswith('6'):
+                prefix = 'SH'
+            else:
+                prefix = 'SZ'
+        else:
+            # 无法从传入的代码推断出有效的股票代码
+            return jsonify({'success': False, 'error': 'invalid_stock_code', 'message': f'无法解析股票代码 {stock_code}'}), 400
+
+        if len(digits) != 6 or not digits.isdigit():
+            return jsonify({'success': False, 'error': 'invalid_stock_code', 'message': f'股票代码格式错误 {stock_code}'}), 400
+
+        symbol = f"{prefix}{digits}"
+
+        print(f"[{datetime.now()}] 解析股票代码成功: 输入={stock_code}, 规范化后={symbol}")
+
+        df_hot_rank = ak.stock_hot_rank_latest_em(symbol=symbol)
+
+        if df_hot_rank is None or df_hot_rank.empty:
+            print(f"[{datetime.now()}] ⚠️ stock_hot_rank_latest_em 返回空数据: {symbol}")
+            return jsonify({'success': True, 'data': None, 'message': '暂无人气排名数据'}), 200
+
+        # 将DataFrame转换为字典
+        data_map = {}
+        for _, row in df_hot_rank.iterrows():
+            item = str(row.get('item', '')).strip()
+            value = row.get('value')
+
+            if isinstance(value, (np.generic, np.ndarray)):
+                try:
+                    value = value.item()
+                except Exception:
+                    value = value.tolist() if hasattr(value, 'tolist') else value
+
+            if item:
+                data_map[item] = value
+
+        def try_parse_int(val):
+            try:
+                if val is None or val == '':
+                    return None
+                return int(float(val))
+            except Exception:
+                return None
+
+        response_data = {
+            'stockCode': digits,
+            'symbol': symbol,
+            'marketType': data_map.get('marketType'),
+            'marketAllCount': try_parse_int(data_map.get('marketAllCount')),
+            'calcTime': data_map.get('calcTime'),
+            'innerCode': data_map.get('innerCode'),
+            'srcSecurityCode': data_map.get('srcSecurityCode'),
+            'rank': try_parse_int(data_map.get('rank')),
+            'rankChange': try_parse_int(data_map.get('rankChange')),
+            'hisRankChange': try_parse_int(data_map.get('hisRankChange')),
+            'hisRankChangeRank': try_parse_int(data_map.get('hisRankChange_rank')),
+            'flag': try_parse_int(data_map.get('flag'))
+        }
+
+        print(f"[{datetime.now()}] ✅ 成功获取人气排名: {symbol} -> 排名 {response_data['rank']}")
+
+        return jsonify({
+            'success': True,
+            'data': response_data,
+            'source': 'AKShare - stock_hot_rank_latest_em'
+        })
+
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[{datetime.now()}] ❌ 获取个股人气榜数据失败: {error_msg}")
+        try:
+            print(traceback.format_exc())
+        except Exception:
+            pass
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+
 @app.route('/api/stock/hot-rank', methods=['GET'])
 def get_hot_rank():
     """
