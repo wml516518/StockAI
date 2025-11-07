@@ -10,6 +10,9 @@ using Microsoft.Extensions.Caching.Memory;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text.RegularExpressions;
 
 namespace StockAnalyse.Api.Services;
 
@@ -186,6 +189,7 @@ public class NewsService : INewsService{
     {
         _context = context;
         _httpClient = httpClient;
+        _httpClient.Timeout = TimeSpan.FromSeconds(30);
         _logger = logger;
         _cache = cache;
         _serviceScopeFactory = serviceScopeFactory;
@@ -249,7 +253,6 @@ public class NewsService : INewsService{
             request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             
             // 设置30秒超时
-            _httpClient.Timeout = TimeSpan.FromSeconds(30);
             var response = await _httpClient.SendAsync(request);
             
             if (!response.IsSuccessStatusCode)
@@ -365,94 +368,161 @@ public class NewsService : INewsService{
         }
     }
 
-    public async Task<List<FinancialNews>> GetLatestNewsAsync(int count = 50)
+    public Task<List<FinancialNews>> GetLatestNewsAsync(int count = 50)
     {
-        // 直接从外部API获取，不保存到数据库
-        return await GetNewsFromApiAsync(count);
+        _logger.LogInformation("GetLatestNewsAsync 已禁用外部API，当前仅支持基于AKShare的个股新闻");
+        return Task.FromResult(new List<FinancialNews>());
     }
 
-    public async Task<PagedResult<FinancialNews>> GetLatestNewsPagedAsync(int pageIndex = 1, int pageSize = 20)
+    public Task<PagedResult<FinancialNews>> GetLatestNewsPagedAsync(int pageIndex = 1, int pageSize = 20)
     {
-        // 立即输出到控制台，确保能看到
-        _logger.LogDebug("GetLatestNewsPagedAsync 开始: PageIndex={PageIndex}, PageSize={PageSize}", pageIndex, pageSize);
-        
-        pageIndex = Math.Max(1, pageIndex);
-        pageSize = Math.Max(1, Math.Min(100, pageSize)); // 限制每页最多100条
-
-        _logger.LogInformation("============================================");
-        _logger.LogInformation("📰 [NewsService] GetLatestNewsPagedAsync 开始");
-        _logger.LogInformation("📰 [NewsService] 参数: PageIndex={PageIndex}, PageSize={PageSize}", pageIndex, pageSize);
-        _logger.LogInformation("============================================");
-
-        // 从外部API获取数据以支持分页
-        // 注意：天行数据API最多只返回50条新闻，这是外部API的限制
-        // 所以我们最多只能获取50条，然后在这50条中进行分页
-        var requestedCount = 50; // 固定请求50条（天行API的最大值）
-        _logger.LogInformation("📰 [NewsService] 准备从API获取 {RequestedCount} 条新闻（天行API限制为50条，将在这50条中进行分页）", requestedCount);
-        
-        var allNews = await GetNewsFromApiAsync(requestedCount);
-        
-        _logger.LogInformation("📰 [NewsService] 实际获取到 {ActualCount} 条新闻", allNews.Count);
-        
-        var totalCount = allNews.Count;
-        var items = allNews
-            .Skip((pageIndex - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
-
-        _logger.LogInformation("📰 [NewsService] 分页结果: TotalCount={TotalCount}, ItemsCount={ItemsCount}, PageIndex={PageIndex}, PageSize={PageSize}", 
-            totalCount, items.Count, pageIndex, pageSize);
-
-        return new PagedResult<FinancialNews>
+        _logger.LogInformation("GetLatestNewsPagedAsync 已禁用外部API，返回空结果");
+        return Task.FromResult(new PagedResult<FinancialNews>
         {
-            Items = items,
-            TotalCount = totalCount,
-            PageIndex = pageIndex,
-            PageSize = pageSize
-        };
+            Items = new List<FinancialNews>(),
+            TotalCount = 0,
+            PageIndex = Math.Max(1, pageIndex),
+            PageSize = Math.Max(1, Math.Min(100, pageSize))
+        });
     }
 
     public async Task<List<FinancialNews>> GetNewsByStockAsync(string stockCode)
     {
-        // 从外部API获取新闻，然后在内存中过滤股票代码
-        var allNews = await GetNewsFromApiAsync(100);
-        
-        return allNews
-            .Where(n => n.StockCodes != null && n.StockCodes.Contains(stockCode))
-            .OrderByDescending(n => n.PublishTime)
-            .ToList();
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return new List<FinancialNews>();
+        }
+
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL")
+                ?? "http://localhost:5001";
+
+            var normalizedCode = stockCode.Trim();
+            var url = $"{pythonServiceUrl}/api/news/stock/{normalizedCode}";
+
+            _logger.LogInformation("从Python服务(AKShare)获取个股新闻: {Url}", url);
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (!request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"))
+            {
+                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            }
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var response = await _httpClient.SendAsync(request, cts.Token);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
+                _logger.LogWarning("Python服务获取个股新闻失败: 状态码={StatusCode}, 错误={Error}", response.StatusCode, errorContent);
+                return new List<FinancialNews>();
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cts.Token);
+
+            var root = document.RootElement;
+            if (!root.TryGetProperty("success", out var successElement) || !successElement.GetBoolean())
+            {
+                _logger.LogWarning("Python服务返回的success不为true: {Json}", root.ToString());
+                return new List<FinancialNews>();
+            }
+
+            if (!root.TryGetProperty("data", out var dataElement))
+            {
+                _logger.LogWarning("Python服务返回的数据中缺少data字段");
+                return new List<FinancialNews>();
+            }
+
+            if (!dataElement.TryGetProperty("items", out var itemsElement) || itemsElement.ValueKind != JsonValueKind.Array)
+            {
+                _logger.LogWarning("Python服务返回的数据中缺少items数组");
+                return new List<FinancialNews>();
+            }
+
+            var result = new List<(int index, FinancialNews news)>();
+            var position = 0;
+
+            foreach (var item in itemsElement.EnumerateArray())
+            {
+                static string? GetString(JsonElement element, string propertyName)
+                {
+                    if (element.TryGetProperty(propertyName, out var valueElement) && valueElement.ValueKind == JsonValueKind.String)
+                    {
+                        var value = valueElement.GetString();
+                        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+                    }
+
+                    return null;
+                }
+
+                var publishTime = DateTime.Now;
+                var publishRaw = GetString(item, "publishTime");
+                if (!string.IsNullOrWhiteSpace(publishRaw))
+                {
+                    if (DateTimeOffset.TryParse(publishRaw, out var offsetTime))
+                    {
+                        publishTime = offsetTime.LocalDateTime;
+                    }
+                    else if (DateTime.TryParse(publishRaw, out var parsedTime))
+                    {
+                        publishTime = parsedTime;
+                    }
+                }
+
+                var news = new FinancialNews
+                {
+                    Title = GetString(item, "title") ?? string.Empty,
+                    Content = GetString(item, "content") ?? string.Empty,
+                    Source = GetString(item, "source") ?? "AKShare",
+                    Url = GetString(item, "url"),
+                    PublishTime = publishTime,
+                    StockCodes = new List<string> { stockCode },
+                    FetchTime = DateTime.Now,
+                    Keywords = GetString(item, "keywords"),
+                    Summary = GetString(item, "summary")
+                };
+
+                if (string.IsNullOrWhiteSpace(news.Summary))
+                {
+                    news.Summary = news.Content;
+                }
+
+                if (string.IsNullOrWhiteSpace(news.Content) && !string.IsNullOrWhiteSpace(news.Summary))
+                {
+                    news.Content = news.Summary;
+                }
+
+                result.Add((position, news));
+                position++;
+            }
+
+            // Python服务已按发布时间倒序返回前10条，保持原有顺序
+            return result
+                .OrderBy(tuple => tuple.index)
+                .Select(tuple => tuple.news)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "从Python服务获取个股新闻失败: {StockCode}", stockCode);
+            return new List<FinancialNews>();
+        }
     }
 
     public async Task FetchNewsAsync()
     {
-        try
-        {
-            _logger.LogInformation("开始抓取金融消息");
-            
-            // 仅使用天行数据
-            await FetchTianApiNewsAsync();
-            
-            _logger.LogInformation("金融消息抓取完成");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "抓取新闻失败");
-        }
+        _logger.LogInformation("FetchNewsAsync 已禁用外部API，跳过抓取");
+        await Task.CompletedTask;
     }
     
     // 只从天行数据抓取财经新闻（用于定时任务）
     public async Task FetchTianApiNewsOnlyAsync()
     {
-        try
-        {
-            _logger.LogInformation("开始单独抓取天行数据财经新闻");
-            await FetchTianApiNewsAsync();
-            _logger.LogInformation("天行数据财经新闻抓取完成");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "单独抓取天行数据财经新闻失败: {Message}", ex.Message);
-        }
+        _logger.LogInformation("FetchTianApiNewsOnlyAsync 已禁用外部API，跳过抓取");
+        await Task.CompletedTask;
     }
     
     // 保存新闻到数据库
@@ -508,7 +578,6 @@ public class NewsService : INewsService{
             request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             
             // 设置30秒超时
-            _httpClient.Timeout = TimeSpan.FromSeconds(30);
             var response = await _httpClient.SendAsync(request);
             
             // 记录响应状态码
@@ -779,47 +848,25 @@ public class NewsService : INewsService{
         return newsList;
     }
 
-    public async Task<List<FinancialNews>> SearchNewsAsync(string keyword)
+    public Task<List<FinancialNews>> SearchNewsAsync(string keyword)
     {
-        // 从外部API获取新闻，然后在内存中搜索
-        var allNews = await GetNewsFromApiAsync(100); // 获取更多新闻以支持搜索
-        
-        return allNews
-            .Where(n => 
-                (n.Title != null && n.Title.Contains(keyword, StringComparison.OrdinalIgnoreCase)) ||
-                (n.Content != null && n.Content.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
-            .OrderByDescending(n => n.PublishTime)
-            .ToList();
+        _logger.LogInformation("SearchNewsAsync 已禁用外部API，返回空列表");
+        return Task.FromResult(new List<FinancialNews>());
     }
 
-    public async Task<PagedResult<FinancialNews>> SearchNewsPagedAsync(string keyword, int pageIndex = 1, int pageSize = 20)
+    public Task<PagedResult<FinancialNews>> SearchNewsPagedAsync(string keyword, int pageIndex = 1, int pageSize = 20)
     {
+        _logger.LogInformation("SearchNewsPagedAsync 已禁用外部API，返回空结果");
         pageIndex = Math.Max(1, pageIndex);
-        pageSize = Math.Max(1, Math.Min(100, pageSize)); // 限制每页最多100条
+        pageSize = Math.Max(1, Math.Min(100, pageSize));
 
-        // 从外部API获取新闻，然后在内存中搜索和分页
-        var allNews = await GetNewsFromApiAsync(200); // 获取更多新闻以支持搜索和分页
-        
-        var filteredNews = allNews
-            .Where(n => 
-                (n.Title != null && n.Title.Contains(keyword, StringComparison.OrdinalIgnoreCase)) ||
-                (n.Content != null && n.Content.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
-            .OrderByDescending(n => n.PublishTime)
-            .ToList();
-        
-        var totalCount = filteredNews.Count;
-        var items = filteredNews
-            .Skip((pageIndex - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
-
-        return new PagedResult<FinancialNews>
+        return Task.FromResult(new PagedResult<FinancialNews>
         {
-            Items = items,
-            TotalCount = totalCount,
+            Items = new List<FinancialNews>(),
+            TotalCount = 0,
             PageIndex = pageIndex,
             PageSize = pageSize
-        };
+        });
     }
 
 

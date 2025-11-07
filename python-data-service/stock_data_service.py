@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 import os
 import warnings
 import time
+from bs4 import BeautifulSoup
 
 # 全局禁用代理以解决连接问题（与测试脚本test_industry_name_em.py保持一致）
 # 首先移除所有代理环境变量（与测试脚本保持一致）
@@ -226,6 +227,153 @@ def get_trade_data(stock_code):
             'error': error_msg,
             'trace': error_trace if os.getenv('FLASK_ENV') == 'development' else None
         }), 500
+
+def _normalize_stock_code(stock_code: str) -> str:
+    """标准化股票代码为6位数字，兼容带市场前缀的写法"""
+    if not stock_code:
+        return ""
+    clean_code = stock_code.strip().upper()
+    if clean_code.startswith("SH") or clean_code.startswith("SZ"):
+        clean_code = clean_code[2:]
+    return clean_code.zfill(6)
+
+
+def _fetch_news_article_content(url: str) -> str:
+    """根据新闻链接抓取正文内容，返回纯文本"""
+    if not url:
+        return ""
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive",
+        }
+
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        if response.status_code != 200:
+            print(f"[{datetime.now()}] ⚠️ 抓取新闻正文失败，状态码: {response.status_code}, URL: {url}")
+            return ""
+
+        # 尝试使用页面自带编码，否则回退到apparent_encoding
+        if not response.encoding or response.encoding.lower() in ("utf-8", "utf8", "" ):
+            response.encoding = response.apparent_encoding or "utf-8"
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # 常见的正文容器选择器
+        selectors = [
+            "div#ContentBody",
+            "div#artibody",
+            "div.article-content",
+            "div.article-body",
+            "div#newsContent",
+            "div.article-infor",
+            "div.txtinfos",
+        ]
+
+        text_content = ""
+        for selector in selectors:
+            node = soup.select_one(selector)
+            if node:
+                paragraphs = [p.get_text(strip=True) for p in node.find_all(['p', 'div', 'span']) if p.get_text(strip=True)]
+                text_content = "\n".join(paragraphs)
+                if text_content:
+                    break
+
+        if not text_content:
+            paragraphs = [p.get_text(strip=True) for p in soup.find_all('p') if p.get_text(strip=True)]
+            text_content = "\n".join(paragraphs)
+
+        if not text_content:
+            raw_text = soup.get_text(separator='\n')
+            lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+            text_content = "\n".join(lines[:200])
+
+        return text_content.strip()
+    except Exception as e:
+        print(f"[{datetime.now()}] ⚠️ 抓取新闻正文发生异常: {e}. URL: {url}")
+        return ""
+
+
+@app.route('/api/news/stock/<stock_code>', methods=['GET'])
+def get_stock_news(stock_code):
+    """获取指定股票的最新新闻（基于AKShare stock_news_em）"""
+    start_time = time.time()
+    try:
+        clean_code = _normalize_stock_code(stock_code)
+        if not clean_code:
+            return jsonify({'success': True, 'data': {'stockCode': stock_code, 'items': []}})
+
+        print(f"[{datetime.now()}] 获取个股新闻: 输入={stock_code}, 标准化={clean_code}")
+
+        df_news = ak.stock_news_em(symbol=clean_code)
+
+        if df_news is None or df_news.empty:
+            print(f"[{datetime.now()}] ⚠️ AKShare stock_news_em 返回空数据: {clean_code}")
+            return jsonify({'success': True, 'data': {'stockCode': stock_code, 'items': []}})
+
+        df_news = df_news.copy()
+
+        publish_col = '发布时间'
+        if publish_col in df_news.columns:
+            df_news[publish_col] = pd.to_datetime(df_news[publish_col], errors='coerce')
+            df_news = df_news.sort_values(by=publish_col, ascending=False)
+        else:
+            df_news = df_news.sort_values(by=df_news.columns[0], ascending=False)
+
+        top_news = df_news.head(10)
+
+        items = []
+        for _, row in top_news.iterrows():
+            keywords = str(row.get('关键词', '') or '').strip()
+            title = str(row.get('新闻标题', '') or '').strip()
+            summary = str(row.get('新闻内容', '') or '').strip()
+            publish_time = row.get(publish_col) if publish_col in row else None
+            source = str(row.get('文章来源', '') or '').strip()
+            url = str(row.get('新闻链接', '') or '').strip()
+
+            if isinstance(publish_time, pd.Timestamp) and not pd.isna(publish_time):
+                publish_time_str = publish_time.to_pydatetime().isoformat()
+            else:
+                publish_time_str = str(publish_time) if publish_time is not None else ''
+
+            full_content = _fetch_news_article_content(url) if url else ''
+
+            items.append({
+                'keywords': keywords,
+                'title': title,
+                'summary': summary,
+                'publishTime': publish_time_str,
+                'source': source,
+                'url': url,
+                'content': full_content or summary or title,
+            })
+        elapsed = time.time() - start_time
+        print(f"[{datetime.now()}] ✅ 成功获取个股新闻 {len(items)} 条，用时 {elapsed:.2f}s")
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'stockCode': stock_code,
+                'normalizedCode': clean_code,
+                'count': len(items),
+                'fetchedAt': datetime.now().isoformat(),
+                'items': items
+            }
+        })
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[{datetime.now()}] ❌ 获取个股新闻失败: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'trace': traceback.format_exc() if os.getenv('FLASK_ENV') == 'development' else None
+        }), 500
+
 
 @app.route('/api/test/history/<stock_code>', methods=['GET'])
 def test_history_api(stock_code):
@@ -578,143 +726,75 @@ def get_history_data(stock_code):
         
         print(f"[{datetime.now()}] 从AKShare获取历史数据: {symbol}, 时间范围: {start_date.date()} 至 {end_date.date()}")
         
-        # 使用AKShare获取历史数据
-        # 尝试多种AKShare接口
+        # 使用AKShare获取历史数据，按照优先级逐步回退
         df = None
         method_used = None
-        
-        # 方法1: stock_zh_a_hist（主要方法，带市场前缀）
+
         try:
             print(f"[{datetime.now()}] 尝试方法1: stock_zh_a_hist")
             print(f"[{datetime.now()}] 参数: symbol={symbol}, period=daily, start_date={start_date.strftime('%Y%m%d')}, end_date={end_date.strftime('%Y%m%d')}, adjust=qfq")
-            df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                   start_date=start_date.strftime("%Y%m%d"),
-                                   end_date=end_date.strftime("%Y%m%d"),
-                                   adjust="qfq")
-            if df is not None and not df.empty:
+            df_candidate = ak.stock_zh_a_hist(
+                symbol=symbol,
+                period="daily",
+                start_date=start_date.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d"),
+                adjust="qfq"
+            )
+            if df_candidate is not None and not df_candidate.empty:
+                df = df_candidate
                 method_used = "stock_zh_a_hist"
                 print(f"[{datetime.now()}] ✅ 方法1成功，获取 {len(df)} 条数据")
             else:
                 print(f"[{datetime.now()}] ⚠️ 方法1返回空数据")
         except Exception as e1:
-            error_detail = traceback.format_exc()
             print(f"[{datetime.now()}] ⚠️ 方法1失败: {str(e1)}")
-            print(f"[{datetime.now()}] 错误详情: {error_detail[:500]}")
-        
-        # 方法2: stock_zh_a_hist (无复权)
+            print(traceback.format_exc()[:500])
+
         if df is None or df.empty:
             try:
-                print(f"[{datetime.now()}] 尝试方法2: stock_zh_a_hist (无复权)")
-                print(f"[{datetime.now()}] 参数: symbol={symbol}, period=daily, start_date={start_date.strftime('%Y%m%d')}, end_date={end_date.strftime('%Y%m%d')}, adjust=''")
-                df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                       start_date=start_date.strftime("%Y%m%d"),
-                                       end_date=end_date.strftime("%Y%m%d"),
-                                       adjust="")
-                if df is not None and not df.empty:
-                    method_used = "stock_zh_a_hist (无复权)"
-                    print(f"[{datetime.now()}] ✅ 方法2成功，获取 {len(df)} 条数据")
+                print(f"[{datetime.now()}] 尝试方法2: stock_zh_a_daily")
+                df_candidate = ak.stock_zh_a_daily(symbol=symbol)
+                if df_candidate is not None and not df_candidate.empty:
+                    date_col = None
+                    for col in ['日期', 'date', 'Date', '交易日期']:
+                        if col in df_candidate.columns:
+                            date_col = col
+                            break
+
+                    if date_col:
+                        df_candidate[date_col] = pd.to_datetime(df_candidate[date_col])
+                        df_candidate = df_candidate[(df_candidate[date_col] >= start_date) & (df_candidate[date_col] <= end_date)]
+
+                    if df_candidate is not None and not df_candidate.empty:
+                        df = df_candidate
+                        method_used = "stock_zh_a_daily"
+                        print(f"[{datetime.now()}] ✅ 方法2成功，获取 {len(df)} 条数据")
+                    else:
+                        print(f"[{datetime.now()}] ⚠️ 方法2过滤后为空数据")
                 else:
                     print(f"[{datetime.now()}] ⚠️ 方法2返回空数据")
             except Exception as e2:
-                error_detail = traceback.format_exc()
                 print(f"[{datetime.now()}] ⚠️ 方法2失败: {str(e2)}")
-                print(f"[{datetime.now()}] 错误详情: {error_detail[:500]}")
-        
-        # 方法3: stock_zh_a_hist (后复权)
+                print(traceback.format_exc()[:500])
+
         if df is None or df.empty:
             try:
-                print(f"[{datetime.now()}] 尝试方法3: stock_zh_a_hist (后复权)")
-                print(f"[{datetime.now()}] 参数: symbol={symbol}, period=daily, start_date={start_date.strftime('%Y%m%d')}, end_date={end_date.strftime('%Y%m%d')}, adjust=hfq")
-                df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                       start_date=start_date.strftime("%Y%m%d"),
-                                       end_date=end_date.strftime("%Y%m%d"),
-                                       adjust="hfq")
-                if df is not None and not df.empty:
-                    method_used = "stock_zh_a_hist (后复权)"
+                print(f"[{datetime.now()}] 尝试方法3: stock_zh_a_hist_tx")
+                df_candidate = ak.stock_zh_a_hist_tx(
+                    symbol=symbol,
+                    start_date=start_date.strftime("%Y%m%d"),
+                    end_date=end_date.strftime("%Y%m%d")
+                )
+                if df_candidate is not None and not df_candidate.empty:
+                    df = df_candidate
+                    method_used = "stock_zh_a_hist_tx"
                     print(f"[{datetime.now()}] ✅ 方法3成功，获取 {len(df)} 条数据")
                 else:
                     print(f"[{datetime.now()}] ⚠️ 方法3返回空数据")
             except Exception as e3:
-                error_detail = traceback.format_exc()
                 print(f"[{datetime.now()}] ⚠️ 方法3失败: {str(e3)}")
-                print(f"[{datetime.now()}] 错误详情: {error_detail[:500]}")
-        
-        # 方法4: 尝试使用更长的日期范围（可能数据不足）
-        if df is None or df.empty:
-            try:
-                print(f"[{datetime.now()}] 尝试方法4: stock_zh_a_hist (6个月数据)")
-                start_date_long = end_date - timedelta(days=6 * 30)
-                df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                       start_date=start_date_long.strftime("%Y%m%d"),
-                                       end_date=end_date.strftime("%Y%m%d"),
-                                       adjust="qfq")
-                if df is not None and not df.empty:
-                    # 过滤到只保留3个月的数据
-                    date_col = None
-                    for col in ['日期', 'date', 'Date', '交易日期']:
-                        if col in df.columns:
-                            date_col = col
-                            break
-                    if date_col:
-                        df[date_col] = pd.to_datetime(df[date_col])
-                        df = df[df[date_col] >= start_date]
-                    if len(df) > 0:
-                        method_used = "stock_zh_a_hist (6个月)"
-                        print(f"[{datetime.now()}] ✅ 方法4成功，获取 {len(df)} 条数据")
-                    else:
-                        df = None
-                else:
-                    print(f"[{datetime.now()}] ⚠️ 方法4返回空数据")
-            except Exception as e4:
-                error_detail = traceback.format_exc()
-                print(f"[{datetime.now()}] ⚠️ 方法4失败: {str(e4)}")
-                print(f"[{datetime.now()}] 错误详情: {error_detail[:500]}")
-        
-        # 方法5: 如果日线数据都失败，尝试使用分时数据（stock_zh_a_minute）作为补充
-        if df is None or df.empty:
-            try:
-                print(f"[{datetime.now()}] 尝试方法5: stock_zh_a_minute (分时数据作为补充)")
-                df_minute = ak.stock_zh_a_minute(symbol=symbol, period="1")
-                
-                if df_minute is not None and not df_minute.empty:
-                    # 将分时数据按日期聚合为日线数据
-                    if 'day' in df_minute.columns:
-                        df_minute['day'] = pd.to_datetime(df_minute['day'])
-                        df_minute['date'] = df_minute['day'].dt.date
-                        
-                        # 按日期分组，取每日的开盘、最高、最低、收盘、成交量
-                        daily_data = df_minute.groupby('date').agg({
-                            'open': 'first',      # 开盘价：当日第一条的开盘价
-                            'high': 'max',        # 最高价：当日最高
-                            'low': 'min',         # 最低价：当日最低
-                            'close': 'last',      # 收盘价：当日最后一条的收盘价
-                            'volume': 'sum'       # 成交量：当日累计
-                        }).reset_index()
-                        
-                        # 过滤日期范围
-                        daily_data = daily_data[daily_data['date'] >= start_date.date()]
-                        daily_data = daily_data[daily_data['date'] <= end_date.date()]
-                        
-                        if len(daily_data) > 0:
-                            # 添加成交额（估算：使用收盘价*成交量）
-                            daily_data['turnover'] = daily_data['close'] * daily_data['volume']
-                            
-                            # 重命名列以匹配标准格式
-                            daily_data.rename(columns={'date': '日期'}, inplace=True)
-                            df = daily_data
-                            method_used = "stock_zh_a_minute (分时聚合)"
-                            print(f"[{datetime.now()}] ✅ 方法5成功，从分时数据聚合出 {len(df)} 条日线数据")
-                        else:
-                            df = None
-                    else:
-                        print(f"[{datetime.now()}] ⚠️ 方法5：分时数据缺少日期列")
-                else:
-                    print(f"[{datetime.now()}] ⚠️ 方法5返回空数据")
-            except Exception as e5:
-                error_detail = traceback.format_exc()
-                print(f"[{datetime.now()}] ⚠️ 方法5失败: {str(e5)}")
-                print(f"[{datetime.now()}] 错误详情: {error_detail[:500]}")
-        
+                print(traceback.format_exc()[:500])
+
         if df is None or df.empty:
             raise ValueError(f"所有AKShare方法都失败，无法获取股票 {clean_code} 的历史数据")
         

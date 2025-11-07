@@ -903,65 +903,33 @@ public class AIController : ControllerBase
                 var stockNewsList = await _newsService.GetNewsByStockAsync(stockCode) ?? new List<FinancialNews>();
                 _logger.LogInformation("获取到与股票 {StockCode} 直接相关的新闻 {Count} 条", stockCode, stockNewsList.Count);
 
-                var industryNewsList = new List<FinancialNews>();
                 bool usedGeneralNewsFallback = false;
-                if (!string.IsNullOrWhiteSpace(industryNameForNews))
-                {
-                    industryNewsList = await GetIndustryRelatedNewsAsync(
-                        industryNameForNews,
-                        industryKeywords,
-                        stockNewsList,
-                        maxCount: 8);
-                    _logger.LogInformation("获取到行业相关新闻 {Count} 条 (行业: {IndustryName})", industryNewsList.Count, industryNameForNews);
-                }
 
-                if (stockNewsList.Count == 0 && industryNewsList.Count == 0)
+                if (stockNewsList.Count == 0)
                 {
-                    _logger.LogInformation("未找到与股票或行业相关的新闻，获取最新财经新闻作为参考");
+                    _logger.LogInformation("未找到与股票直接相关的新闻，获取最新财经新闻作为参考");
                     stockNewsList = await _newsService.GetLatestNewsAsync(10) ?? new List<FinancialNews>();
                     usedGeneralNewsFallback = stockNewsList.Count > 0;
                 }
 
-                if (stockNewsList.Count > 0 || industryNewsList.Count > 0)
+                if (stockNewsList.Count > 0)
                 {
                     var builder = new StringBuilder();
                     builder.AppendLine("【新闻舆论信息】");
 
-                    if (stockNewsList.Count > 0)
+                    builder.AppendLine("与股票直接相关的新闻：");
+                    if (usedGeneralNewsFallback)
                     {
-                        builder.AppendLine("与股票直接相关的新闻：");
-                        if (usedGeneralNewsFallback)
-                        {
-                            builder.AppendLine("（未检索到该股票或行业的直接新闻，以下为最新财经要闻供参考）");
-                        }
-                        AppendNewsItems(builder, stockNewsList.OrderByDescending(n => n.PublishTime).Take(6));
+                        builder.AppendLine("（未检索到该股票的直接新闻，以下为最新财经要闻供参考）");
                     }
-
-                    if (industryNewsList.Count > 0)
-                    {
-                        if (stockNewsList.Count > 0)
-                        {
-                            builder.AppendLine();
-                        }
-                        builder.AppendLine("所属行业热点动态：");
-                        AppendNewsItems(builder, industryNewsList.OrderByDescending(n => n.PublishTime).Take(6));
-                        if (!string.IsNullOrWhiteSpace(industryNameForNews))
-                        {
-                            builder.AppendLine($"（聚焦行业：{industryNameForNews}）");
-                        }
-                    }
-
-                    if (stockNewsList.Count == 0 && industryNewsList.Count > 0)
-                    {
-                        builder.AppendLine("注：当前未检索到该股票代码直接关联的新闻，已提供行业新闻作为参考。");
-                    }
+                    AppendNewsItems(builder, stockNewsList.OrderByDescending(n => n.PublishTime).Take(6));
 
                     builder.AppendLine("\n请结合上述新闻，分析市场情绪、重大事件及潜在影响。");
                     newsSection = builder.ToString().Trim();
                 }
                 else
                 {
-                    newsSection = "【新闻舆论信息】\n当前未获取到与该股票或所属行业相关的新闻，请提示用户关注潜在的政策、行业或公司动态。";
+                    newsSection = "【新闻舆论信息】\n当前未获取到与该股票相关的新闻，请提示用户关注公司公告、政策变化及行业消息。";
                 }
 
                 if (!string.IsNullOrEmpty(newsSection))
@@ -1239,9 +1207,23 @@ public class AIController : ControllerBase
         {
             var publishTime = newsItem.PublishTime.ToString("yyyy-MM-dd HH:mm");
             builder.AppendLine($"- [{publishTime}] {newsItem.Source ?? "未知来源"}：{newsItem.Title ?? "无标题"}");
+            if (!string.IsNullOrWhiteSpace(newsItem.Keywords))
+            {
+                builder.AppendLine($"  关键词：{newsItem.Keywords}");
+            }
+
+            var summaryText = !string.IsNullOrWhiteSpace(newsItem.Summary)
+                ? newsItem.Summary
+                : null;
+
+            if (!string.IsNullOrWhiteSpace(summaryText))
+            {
+                builder.AppendLine($"  摘要：{TrimContent(summaryText, 200)}");
+            }
+
             if (!string.IsNullOrWhiteSpace(newsItem.Content))
             {
-                builder.AppendLine($"  摘要：{TrimContent(newsItem.Content, 200)}");
+                builder.AppendLine($"  正文摘录：{TrimContent(newsItem.Content, summaryText == null ? 400 : 320)}");
             }
             if (!string.IsNullOrWhiteSpace(newsItem.Url))
             {

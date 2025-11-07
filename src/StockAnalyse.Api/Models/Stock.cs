@@ -130,6 +130,10 @@ public class FinancialNews
     public List<string>? StockCodes { get; set; } // 相关股票代码
     public int ViewCount { get; set; }
     public DateTime FetchTime { get; set; }
+    [NotMapped]
+    public string? Keywords { get; set; }
+    [NotMapped]
+    public string? Summary { get; set; }
 }
 
 /// <summary>
