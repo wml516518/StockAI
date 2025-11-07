@@ -166,37 +166,49 @@ public static class DatabaseSeeder
         }
 
         // 检查并添加AI提示词
-        if (!context.AIPrompts.Any())
+        var requiredPrompts = new List<AIPrompt>
         {
-            var aiPrompts = new List<AIPrompt>
+            new AIPrompt
             {
-                new AIPrompt
-                {
-                    Name = "基本面分析",
-                    SystemPrompt = "你是一名资深的A股分析师。请结合财务数据、技术指标、消息面、行业地位，对指定股票进行结构化分析，并给出风险提示与操作建议。",
-                    Temperature = 0.7,
-                    IsDefault = true,
-                    IsActive = true
-                },
-                new AIPrompt
-                {
-                    Name = "新闻分析",
-                    SystemPrompt = "你是一名资深的金融新闻分析师。请分析新闻内容对市场的影响，重点关注：1. 新闻涉及的股票和行业；2. 可能对市场的影响；3. 投资机会和风险提示。请给出专业的分析意见。",
-                    Temperature = 0.7,
-                    IsDefault = false,
-                    IsActive = true
-                },
-                new AIPrompt
-                {
-                    Name = "技术分析",
-                    SystemPrompt = "你是一名专业的技术分析师。请结合K线形态、成交量、技术指标（如MACD、RSI等），对股票的走势进行分析，并给出支撑位、压力位和操作建议。",
-                    Temperature = 0.7,
-                    IsDefault = false,
-                    IsActive = true
-                }
-            };
+                Name = "基本面分析",
+                SystemPrompt = "你是一名资深的A股分析师。请结合财务数据、技术指标、消息面、行业地位，对指定股票进行结构化分析，并给出风险提示与操作建议。",
+                Temperature = 0.7,
+                IsDefault = true,
+                IsActive = true
+            },
+            new AIPrompt
+            {
+                Name = "新闻分析",
+                SystemPrompt = "你是一名资深的金融新闻分析师。请分析新闻内容对市场的影响，重点关注：1. 新闻涉及的股票和行业；2. 可能对市场的影响；3. 投资机会和风险提示。请给出专业的分析意见。",
+                Temperature = 0.7,
+                IsDefault = false,
+                IsActive = true
+            },
+            new AIPrompt
+            {
+                Name = "技术分析",
+                SystemPrompt = "你是一名专业的技术分析师。请结合K线形态、成交量、技术指标（如MACD、RSI等），对股票的走势进行分析，并给出支撑位、压力位和操作建议。",
+                Temperature = 0.7,
+                IsDefault = false,
+                IsActive = true
+            },
+            new AIPrompt
+            {
+                Name = "综合分析",
+                SystemPrompt = "你是一名资深的投资顾问。请综合基本面、新闻舆论和技术面分析结果，对股票{stockCode}进行总结，给出清晰的整体判断、风险提示与操作建议。",
+                Temperature = 0.7,
+                IsDefault = false,
+                IsActive = true
+            }
+        };
 
-            context.AIPrompts.AddRange(aiPrompts);
+        var existingPromptNames = context.AIPrompts.Select(p => p.Name).ToHashSet();
+        foreach (var prompt in requiredPrompts)
+        {
+            if (!existingPromptNames.Contains(prompt.Name))
+            {
+                context.AIPrompts.Add(prompt);
+            }
         }
         
         context.SaveChanges();

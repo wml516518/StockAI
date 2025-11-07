@@ -3,6 +3,8 @@ using StockAnalyse.Api.Services.Interfaces;
 using StockAnalyse.Api.Models;
 using System.Net.Http;
 using Microsoft.Extensions.Caching.Memory;
+using System.Collections.Generic;
+using System.Text;
 
 namespace StockAnalyse.Api.Controllers;
 
@@ -12,14 +14,16 @@ public class AIController : ControllerBase
 {
     private readonly IAIService _aiService;
     private readonly IStockDataService _stockDataService;
+    private readonly INewsService _newsService;
     private readonly ILogger<AIController> _logger;
     private readonly HttpClient _httpClient;
     private readonly IMemoryCache _cache;
 
-    public AIController(IAIService aiService, IStockDataService stockDataService, ILogger<AIController> logger, IHttpClientFactory httpClientFactory, IMemoryCache cache)
+    public AIController(IAIService aiService, IStockDataService stockDataService, INewsService newsService, ILogger<AIController> logger, IHttpClientFactory httpClientFactory, IMemoryCache cache)
     {
         _aiService = aiService;
         _stockDataService = stockDataService;
+        _newsService = newsService;
         _logger = logger;
         _httpClient = httpClientFactory.CreateClient();
         _httpClient.Timeout = TimeSpan.FromSeconds(60);
@@ -45,7 +49,7 @@ public class AIController : ControllerBase
         _logger.LogInformation("开始分析股票: {StockCode}", stockCode);
         
         // 获取分析类型（默认为comprehensive）
-        var analysisType = request?.AnalysisType ?? "comprehensive";
+        var analysisType = (request?.AnalysisType ?? "comprehensive").ToLowerInvariant();
         
         // 构建缓存键（包含股票代码和分析类型）
         var cacheKey = $"ai_analysis_{stockCode}_{analysisType}";
@@ -76,6 +80,10 @@ public class AIController : ControllerBase
         
         try
         {
+            string fundamentalSection = string.Empty;
+            string technicalSection = string.Empty;
+            string newsSection = string.Empty;
+            bool technicalAppendedToContext = false;
             // 获取股票基本面和实时行情数据
             // 注意：GetFundamentalInfoAsync会自动优先使用Python服务（AKShare），如果不可用则回退到其他数据源
             _logger.LogInformation("步骤1: 正在获取股票基本面信息（优先使用Python服务/AKShare数据源）...");
@@ -750,6 +758,8 @@ public class AIController : ControllerBase
                 _logger.LogInformation("🤖 [AIController] ✅ 已格式化历史交易数据，长度: {Length} 字符", historyText.Length);
             }
             
+            technicalSection = $"{historyText}{pythonAnalysisText}{tradeDataText}".Trim();
+            
             if (fundamentalInfo != null)
             {
                 _logger.LogDebug("步骤4: 构建包含基本面信息的分析上下文");
@@ -789,12 +799,16 @@ public class AIController : ControllerBase
 - 市净率(PB)：{(fundamentalInfo.PB.HasValue ? fundamentalInfo.PB.Value.ToString("F2") : stock?.PB?.ToString("F2") ?? "N/A")}
 ";
                 
-                enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                    ? fundamentalText + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText
-                    : enhancedContext + fundamentalText + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText;
+                fundamentalSection = (fundamentalText + industryInfoText + hotRankText).Trim();
+                if (!string.IsNullOrEmpty(fundamentalSection))
+                {
+                    enhancedContext = string.IsNullOrEmpty(enhancedContext)
+                        ? fundamentalSection
+                        : $"{enhancedContext}{fundamentalSection}";
+                }
                 
-                _logger.LogDebug("已构建包含基本面信息和历史数据的上下文，上下文长度: {Length} 字符", enhancedContext.Length);
-                _logger.LogInformation("🤖 [AIController] ✅ 已构建包含基本面信息和历史数据的上下文，长度: {Length} 字符", enhancedContext.Length);
+                _logger.LogDebug("已构建包含基本面信息和历史数据的上下文，上下文长度: {Length} 字符", enhancedContext?.Length ?? 0);
+                _logger.LogInformation("🤖 [AIController] ✅ 已构建包含基本面信息和历史数据的上下文，长度: {Length} 字符", enhancedContext?.Length ?? 0);
             }
             else if (stock != null)
             {
@@ -811,9 +825,13 @@ public class AIController : ControllerBase
 - 市净率(PB)：{(stock.PB?.ToString("F2") ?? "N/A")}
 - 换手率：{stock.TurnoverRate:F2}%
 ";
-                enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                    ? stockInfo + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText
-                    : enhancedContext + stockInfo + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText;
+                fundamentalSection = (stockInfo + industryInfoText + hotRankText).Trim();
+                if (!string.IsNullOrEmpty(fundamentalSection))
+                {
+                    enhancedContext = string.IsNullOrEmpty(enhancedContext)
+                        ? fundamentalSection
+                        : $"{enhancedContext}{fundamentalSection}";
+                }
             }
             else
             {
@@ -824,29 +842,222 @@ public class AIController : ControllerBase
                 if (!string.IsNullOrEmpty(historyText) || !string.IsNullOrEmpty(pythonAnalysisText) || !string.IsNullOrEmpty(tradeDataText) || 
                     !string.IsNullOrEmpty(industryInfoText) || !string.IsNullOrEmpty(hotRankText))
                 {
-                    enhancedContext = string.IsNullOrEmpty(enhancedContext) 
-                        ? industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText
-                        : enhancedContext + industryInfoText + hotRankText + historyText + pythonAnalysisText + tradeDataText;
+                    fundamentalSection = (industryInfoText + hotRankText).Trim();
+                    var combinedBuilder = new StringBuilder();
+                    if (!string.IsNullOrEmpty(fundamentalSection))
+                    {
+                        combinedBuilder.AppendLine(fundamentalSection);
+                    }
+                    if (!string.IsNullOrEmpty(technicalSection))
+                    {
+                        combinedBuilder.AppendLine(technicalSection);
+                        technicalAppendedToContext = true;
+                    }
+                    var combinedContext = combinedBuilder.ToString();
+                    if (!string.IsNullOrEmpty(combinedContext))
+                    {
+                        enhancedContext = string.IsNullOrEmpty(enhancedContext) 
+                            ? combinedContext
+                            : $"{enhancedContext}{combinedContext}";
+                    }
                 }
+            }
+            
+            if (!technicalAppendedToContext && !string.IsNullOrEmpty(technicalSection))
+            {
+                enhancedContext = string.IsNullOrEmpty(enhancedContext)
+                    ? technicalSection
+                    : $"{enhancedContext}{technicalSection}";
+                technicalAppendedToContext = true;
+            }
+            
+            // 获取新闻舆论信息
+            try
+            {
+                var newsList = await _newsService.GetNewsByStockAsync(stockCode);
+                if (newsList == null || newsList.Count == 0)
+                {
+                    _logger.LogInformation("未找到与股票 {StockCode} 直接相关的新闻，获取最新财经新闻作为参考", stockCode);
+                    newsList = await _newsService.GetLatestNewsAsync(10);
+                }
+
+                if (newsList != null && newsList.Count > 0)
+                {
+                    var builder = new StringBuilder();
+                    builder.AppendLine("【新闻舆论信息】");
+                    foreach (var newsItem in newsList.Take(10))
+                    {
+                        var publishTime = newsItem.PublishTime.ToString("yyyy-MM-dd HH:mm");
+                        builder.AppendLine($"- [{publishTime}] {newsItem.Source ?? "未知来源"}：{newsItem.Title ?? "无标题"}");
+                        if (!string.IsNullOrWhiteSpace(newsItem.Content))
+                        {
+                            builder.AppendLine($"  摘要：{TrimContent(newsItem.Content, 200)}");
+                        }
+                        if (!string.IsNullOrWhiteSpace(newsItem.Url))
+                        {
+                            builder.AppendLine($"  链接：{newsItem.Url}");
+                        }
+                    }
+
+                    builder.AppendLine("\n请结合上述新闻，分析市场情绪、重大事件及潜在影响。");
+                    newsSection = builder.ToString().Trim();
+                }
+                else
+                {
+                    newsSection = "【新闻舆论信息】\n当前未获取到与该股票相关的新闻，请提示用户关注潜在的政策、行业或公司动态。";
+                }
+
+                if (!string.IsNullOrEmpty(newsSection))
+                {
+                    enhancedContext = string.IsNullOrEmpty(enhancedContext)
+                        ? newsSection
+                        : $"{enhancedContext}{newsSection}";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "获取新闻舆论信息时发生异常");
+                newsSection = "【新闻舆论信息】\n新闻数据获取失败，请提醒用户稍后重试或手动关注相关新闻。";
+                enhancedContext = string.IsNullOrEmpty(enhancedContext)
+                    ? newsSection
+                    : $"{enhancedContext}{newsSection}";
             }
             
             _logger.LogInformation("步骤5: 调用AI服务进行分析");
             _logger.LogInformation("🤖 [AIController] 步骤5: 调用AI服务进行分析");
             
-            var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, enhancedContext, request?.ModelId);
-            
-            _logger.LogInformation("AI分析完成，结果长度: {Length} 字符", result?.Length ?? 0);
-            _logger.LogInformation("🤖 [AIController] ✅ AI分析完成，结果长度: {Length} 字符", result?.Length ?? 0);
-            
-            // 确保返回正确的响应格式
-            if (string.IsNullOrEmpty(result))
+            var placeholders = new Dictionary<string, string?>
+            {
+                ["{stockCode}"] = stockCode
+            };
+
+            string finalResult;
+            string fundamentalAnalysisResult = string.Empty;
+            string newsAnalysisResult = string.Empty;
+            string technicalAnalysisResult = string.Empty;
+
+            switch (analysisType)
+            {
+                case "fundamental":
+                {
+                    var contextForFundamental = !string.IsNullOrWhiteSpace(fundamentalSection)
+                        ? fundamentalSection
+                        : "当前未能获取到详尽的基本面数据，请结合常见财务指标与行业逻辑给出分析。";
+                    finalResult = await _aiService.ExecutePromptAsync(
+                        "基本面分析",
+                        BuildFundamentalPrompt(contextForFundamental),
+                        placeholders,
+                        request?.ModelId
+                    );
+                    break;
+                }
+                case "news":
+                {
+                    var contextForNews = !string.IsNullOrWhiteSpace(newsSection)
+                        ? newsSection
+                        : "当前未获取到相关新闻，请提示需重点关注公司公告、政策变化及行业消息。";
+                    finalResult = await _aiService.ExecutePromptAsync(
+                        "新闻分析",
+                        BuildNewsPrompt(contextForNews),
+                        placeholders,
+                        request?.ModelId
+                    );
+                    break;
+                }
+                case "technical":
+                {
+                    var contextForTechnical = !string.IsNullOrWhiteSpace(technicalSection)
+                        ? technicalSection
+                        : "当前未能获取到详细的技术面数据，请根据有限信息给出趋势判断。";
+                    finalResult = await _aiService.ExecutePromptAsync(
+                        "技术分析",
+                        BuildTechnicalPrompt(contextForTechnical),
+                        placeholders,
+                        request?.ModelId
+                    );
+                    break;
+                }
+                default:
+                {
+                    var contextForFundamental = !string.IsNullOrWhiteSpace(fundamentalSection)
+                        ? fundamentalSection
+                        : "当前未能获取到详尽的基本面数据，请结合常见财务指标与行业逻辑进行分析。";
+                    fundamentalAnalysisResult = await _aiService.ExecutePromptAsync(
+                        "基本面分析",
+                        BuildFundamentalPrompt(contextForFundamental),
+                        placeholders,
+                        request?.ModelId
+                    );
+
+                    var contextForNews = !string.IsNullOrWhiteSpace(newsSection)
+                        ? newsSection
+                        : "当前未获取到相关新闻，请提示需重点关注公司公告、政策变化及行业消息。";
+                    newsAnalysisResult = await _aiService.ExecutePromptAsync(
+                        "新闻分析",
+                        BuildNewsPrompt(contextForNews),
+                        placeholders,
+                        request?.ModelId
+                    );
+
+                    var contextForTechnical = !string.IsNullOrWhiteSpace(technicalSection)
+                        ? technicalSection
+                        : "当前未能获取到详细的技术面数据，请根据有限信息给出趋势判断。";
+                    technicalAnalysisResult = await _aiService.ExecutePromptAsync(
+                        "技术分析",
+                        BuildTechnicalPrompt(contextForTechnical),
+                        placeholders,
+                        request?.ModelId
+                    );
+
+                    var combinedResultsBuilder = new StringBuilder();
+                    combinedResultsBuilder.AppendLine("【基本面分析】");
+                    combinedResultsBuilder.AppendLine(!string.IsNullOrWhiteSpace(fundamentalAnalysisResult) ? fundamentalAnalysisResult : "未获取到基本面分析结果。");
+                    combinedResultsBuilder.AppendLine();
+                    combinedResultsBuilder.AppendLine("【新闻面分析】");
+                    combinedResultsBuilder.AppendLine(!string.IsNullOrWhiteSpace(newsAnalysisResult) ? newsAnalysisResult : "未获取到新闻面分析结果。");
+                    combinedResultsBuilder.AppendLine();
+                    combinedResultsBuilder.AppendLine("【技术面分析】");
+                    combinedResultsBuilder.AppendLine(!string.IsNullOrWhiteSpace(technicalAnalysisResult) ? technicalAnalysisResult : "未获取到技术面分析结果。");
+
+                    var combinedResults = combinedResultsBuilder.ToString().Trim();
+                    var summaryPlaceholders = new Dictionary<string, string?>
+                    {
+                        ["{stockCode}"] = stockCode,
+                        ["{stockResult}"] = combinedResults
+                    };
+
+                    var summaryPrompt = @"以下是股票{stockCode}的多维度分析结果：
+{stockResult}
+
+请扮演资深投资顾问，从以下角度输出综合总结：
+1. 总体判断
+2. 主要机会
+3. 主要风险
+4. 操作建议
+5. 需持续关注的要点";
+
+                    var resolvedSummaryPrompt = ApplyPlaceholders(summaryPrompt, summaryPlaceholders);
+
+                    finalResult = await _aiService.ExecutePromptAsync(
+                        "综合分析",
+                        summaryPrompt,
+                        summaryPlaceholders,
+                        request?.ModelId
+                    );
+                    break;
+                }
+            }
+
+            _logger.LogInformation("AI分析完成，结果长度: {Length} 字符", finalResult?.Length ?? 0);
+            _logger.LogInformation("🤖 [AIController] ✅ AI分析完成，结果长度: {Length} 字符", finalResult?.Length ?? 0);
+
+            if (string.IsNullOrWhiteSpace(finalResult))
             {
                 _logger.LogWarning("🤖 [AIController] ⚠️ AI分析结果为空");
                 return Ok("AI分析完成，但未返回结果。请检查AI服务配置。");
             }
-            
-            // 记录响应大小（用于调试）
-            var responseSizeKB = (result.Length * 2) / 1024.0; // 估算JSON大小（UTF-8，每个中文字符约2字节）
+
+            var responseSizeKB = (finalResult.Length * 2) / 1024.0;
             _logger.LogDebug("响应大小估算: {SizeKB:F2} KB", responseSizeKB);
             _logger.LogInformation("🤖 [AIController] 📊 响应大小估算: {SizeKB:F2} KB", responseSizeKB);
             
@@ -860,7 +1071,7 @@ public class AIController : ControllerBase
             var analysisTime = DateTime.Now;
             var cachedResult = new CachedAnalysisResult
             {
-                Analysis = result,
+                Analysis = finalResult,
                 AnalysisTime = analysisTime,
                 StockCode = stockCode,
                 AnalysisType = analysisType
@@ -879,8 +1090,8 @@ public class AIController : ControllerBase
             // 返回JSON格式，包含分析结果
             return Ok(new { 
                 success = true, 
-                analysis = result,
-                length = result.Length,
+                analysis = finalResult,
+                length = finalResult.Length,
                 sizeKB = Math.Round(responseSizeKB, 2),
                 timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 cached = false,
@@ -1305,6 +1516,76 @@ public class AIController : ControllerBase
             return "";
         }
     }
+
+    private static string TrimContent(string? content, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return "（无可用摘要）";
+        }
+
+        var trimmed = content.Trim();
+        if (trimmed.Length <= maxLength)
+        {
+            return trimmed;
+        }
+
+        var safeLength = Math.Min(maxLength, trimmed.Length);
+        return trimmed.Substring(0, safeLength) + "...";
+    }
+
+    private static string BuildFundamentalPrompt(string context)
+    {
+        return $@"请基于以下关于股票{{stockCode}}的基本面、行业及市场数据进行分析，并提供结构化投资建议：
+{context}
+
+请按以下结构输出：
+1. 核心观点
+2. 财务与成长性
+3. 行业竞争与公司地位
+4. 主要风险
+5. 操作建议";
+    }
+
+    private static string BuildNewsPrompt(string context)
+    {
+        return $@"以下是与股票{{stockCode}}相关的新闻及舆论信息，请分析市场情绪与潜在影响，并给出风险提示：
+{context}
+
+请按以下结构输出：
+1. 市场情绪与舆论方向
+2. 关键事件及潜在影响
+3. 行业或政策因素
+4. 机会点
+5. 风险提示与建议";
+    }
+
+    private static string BuildTechnicalPrompt(string context)
+    {
+        return $@"以下是股票{{stockCode}}的技术面与交易数据，请结合趋势、指标与量能进行分析，并给出操作建议：
+{context}
+
+请按以下结构输出：
+1. 价格趋势与关键价位
+2. 技术指标信号
+3. 成交量与资金动向
+4. 买卖信号与风险
+5. 操作建议";
+    }
+
+    private static string ApplyPlaceholders(string template, IDictionary<string, string?> placeholders)
+    {
+        var result = template;
+        foreach (var kv in placeholders)
+        {
+            if (!string.IsNullOrEmpty(kv.Key))
+            {
+                result = result.Replace(kv.Key, kv.Value ?? string.Empty);
+            }
+        }
+        return result;
+    }
+
 }
 
 public class ChatRequest

@@ -5,6 +5,7 @@ using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace StockAnalyse.Api.Services;
@@ -56,6 +57,54 @@ public class AIService : IAIService
 
         var response = await CallAIAsync(config, promptText, promptSettings);
         return response;
+    }
+
+    public async Task<string> ExecutePromptAsync(string? promptName, string userPrompt, IDictionary<string, string?>? placeholders = null, int? modelId = null)
+    {
+        var config = modelId.HasValue 
+            ? await _context.AIModelConfigs.FirstOrDefaultAsync(c => c.Id == modelId.Value)
+            : await GetActiveAIConfigAsync();
+
+        if (config == null)
+        {
+            _logger.LogWarning("AI模型尚未配置，无法执行提示词: {PromptName}", promptName ?? "默认提示");
+            return "请先配置AI模型API";
+        }
+
+        AIPrompt? prompt = null;
+        if (!string.IsNullOrWhiteSpace(promptName))
+        {
+            prompt = await _context.AIPrompts.FirstOrDefaultAsync(p => p.Name == promptName && p.IsActive);
+            if (prompt == null)
+            {
+                _logger.LogWarning("未找到名称为 {PromptName} 的提示词，使用默认提示词设置", promptName);
+            }
+        }
+
+        AIPromptSettings settings;
+        if (prompt != null)
+        {
+            settings = new AIPromptSettings
+            {
+                SystemPrompt = ApplyPlaceholders(prompt.SystemPrompt ?? string.Empty, placeholders),
+                Temperature = prompt.Temperature
+            };
+        }
+        else
+        {
+            var fallbackSettings = await GetPromptSettingsAsync(null);
+            settings = new AIPromptSettings
+            {
+                SystemPrompt = ApplyPlaceholders(fallbackSettings.SystemPrompt, placeholders),
+                Temperature = fallbackSettings.Temperature
+            };
+        }
+
+        var finalUserPrompt = ApplyPlaceholders(userPrompt ?? string.Empty, placeholders);
+
+        _logger.LogInformation("执行AI提示词: PromptName={PromptName}, 用户提示长度={Length}", promptName ?? "默认提示", finalUserPrompt.Length);
+
+        return await CallAIAsync(config, finalUserPrompt, settings);
     }
 
     public async Task<string> ChatAsync(string message, string? context = null)
@@ -148,6 +197,26 @@ public class AIService : IAIService
             _logger.LogError(ex, "调用AI失败");
             return "AI调用失败：" + ex.Message;
         }
+    }
+
+    private static string ApplyPlaceholders(string? template, IDictionary<string, string?>? placeholders)
+    {
+        if (string.IsNullOrEmpty(template) || placeholders == null || placeholders.Count == 0)
+        {
+            return template ?? string.Empty;
+        }
+
+        var result = template;
+        foreach (var kvp in placeholders)
+        {
+            if (string.IsNullOrEmpty(kvp.Key))
+            {
+                continue;
+            }
+            result = result.Replace(kvp.Key, kvp.Value ?? string.Empty);
+        }
+
+        return result;
     }
 
     private async Task<string> CallDeepSeekAsync(AIModelConfig config, string userPrompt, AIPromptSettings settings)
