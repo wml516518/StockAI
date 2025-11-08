@@ -150,21 +150,21 @@ def get_trade_data(stock_code):
                     for _, row in df_minute.iterrows():
                         # 处理时间字段，确保是datetime对象
                         time_val = row.get('day', '')
+                        time_str = ''
                         if pd.notna(time_val):
                             if isinstance(time_val, str):
                                 try:
                                     # 尝试将字符串转换为datetime
                                     from datetime import datetime as dt
                                     time_val = pd.to_datetime(time_val)
-                                except:
+                                except Exception:
                                     # 如果转换失败，使用原始字符串
                                     time_str = str(time_val)
-                            elif hasattr(time_val, 'strftime'):
-                                time_str = time_val.strftime("%Y-%m-%d %H:%M:%S")
-                            else:
-                                time_str = str(time_val)
-                        else:
-                            time_str = ''
+                            if not time_str:
+                                if hasattr(time_val, 'strftime'):
+                                    time_str = time_val.strftime("%Y-%m-%d %H:%M:%S")
+                                else:
+                                    time_str = str(time_val)
                         
                         minute_data.append({
                             'time': time_str,
@@ -696,6 +696,185 @@ def get_fundamental(stock_code):
             'trace': error_trace
         }), 500
 
+def _normalize_stock_identifier(stock_code: str):
+    clean_code = stock_code.strip().zfill(6)
+    symbol = f"sh{clean_code}" if clean_code.startswith('6') else f"sz{clean_code}"
+    return clean_code, symbol
+
+
+def _filter_dataframe_by_date_range(df: pd.DataFrame, start_date: datetime, end_date: datetime):
+    if df is None or df.empty:
+        return None, None
+
+    df = df.copy()
+    date_column = None
+    for col in ['日期', 'date', 'Date', '交易日期']:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+            df = df[df[col].notna()]
+            date_column = col
+            break
+
+    if date_column is not None:
+        df = df[(df[date_column] >= start_date) & (df[date_column] <= end_date)]
+        if df.empty:
+            return None, date_column
+
+    return df, date_column
+
+
+def _fetch_history_dataframe_with_fallback(stock_code: str, months: int, allow_extended: bool = True):
+    clean_code, symbol = _normalize_stock_identifier(stock_code)
+    end_date = datetime.now()
+    target_start_date = end_date - timedelta(days=months * 30)
+
+    adjust_options = ['qfq', 'hfq', '']
+    months_candidates = [months]
+    if allow_extended and months < 6:
+        months_candidates.append(6)
+    months_candidates = [m for m in months_candidates if m > 0]
+
+    def log_attempt(source, months_span, adjust_value):
+        adjust_label = adjust_value if adjust_value else '无复权'
+        print(f"[{datetime.now()}] 尝试{source}: {symbol}, 月数: {months_span}, 复权: {adjust_label}")
+
+    # 优先尝试 stock_zh_a_hist，涵盖前复权和后复权
+    for months_span in months_candidates:
+        attempt_start = end_date - timedelta(days=months_span * 30)
+        for adjust in adjust_options:
+            log_attempt("stock_zh_a_hist", months_span, adjust)
+            try:
+                df_candidate = ak.stock_zh_a_hist(
+                    symbol=symbol,
+                    period="daily",
+                    start_date=attempt_start.strftime("%Y%m%d"),
+                    end_date=end_date.strftime("%Y%m%d"),
+                    adjust=adjust or ""
+                )
+                if df_candidate is not None and not df_candidate.empty:
+                    df_filtered, date_col = _filter_dataframe_by_date_range(df_candidate, target_start_date, end_date)
+                    if df_filtered is not None and not df_filtered.empty:
+                        method = f"stock_zh_a_hist ({months_span}个月, {adjust or '无复权'})"
+                        if months_span != months:
+                            method += " -> 过滤至目标区间"
+                        return df_filtered, method, target_start_date, end_date
+                    else:
+                        print(f"[{datetime.now()}] stock_zh_a_hist 返回数据，但过滤后为空 (复权: {adjust or '无复权'})")
+            except Exception as exc:
+                print(f"[{datetime.now()}] ⚠️ stock_zh_a_hist 调用失败: {str(exc)}")
+                print(traceback.format_exc()[:500])
+
+    # 尝试日级别数据
+    try:
+        print(f"[{datetime.now()}] 尝试 stock_zh_a_daily: {symbol}")
+        df_candidate = ak.stock_zh_a_daily(symbol=symbol)
+        if df_candidate is not None and not df_candidate.empty:
+            df_filtered, _ = _filter_dataframe_by_date_range(df_candidate, target_start_date, end_date)
+            if df_filtered is not None and not df_filtered.empty:
+                return df_filtered, "stock_zh_a_daily", target_start_date, end_date
+            else:
+                print(f"[{datetime.now()}] stock_zh_a_daily 过滤后为空")
+    except Exception as exc:
+        print(f"[{datetime.now()}] ⚠️ stock_zh_a_daily 调用失败: {str(exc)}")
+        print(traceback.format_exc()[:500])
+
+    # 尝试腾讯历史数据接口
+    months_for_tx = months_candidates if months_candidates else [months]
+    for months_span in months_for_tx:
+        attempt_start = end_date - timedelta(days=months_span * 30)
+        try:
+            print(f"[{datetime.now()}] 尝试 stock_zh_a_hist_tx: {symbol}, 月数: {months_span}")
+            df_candidate = ak.stock_zh_a_hist_tx(
+                symbol=symbol,
+                start_date=attempt_start.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d")
+            )
+            if df_candidate is not None and not df_candidate.empty:
+                df_filtered, _ = _filter_dataframe_by_date_range(df_candidate, target_start_date, end_date)
+                if df_filtered is not None and not df_filtered.empty:
+                    method = f"stock_zh_a_hist_tx ({months_span}个月)"
+                    if months_span != months:
+                        method += " -> 过滤至目标区间"
+                    return df_filtered, method, target_start_date, end_date
+                else:
+                    print(f"[{datetime.now()}] stock_zh_a_hist_tx 过滤后为空")
+        except Exception as exc:
+            print(f"[{datetime.now()}] ⚠️ stock_zh_a_hist_tx 调用失败: {str(exc)}")
+            print(traceback.format_exc()[:500])
+
+    raise ValueError(f"所有AKShare方法都失败，无法获取股票 {clean_code} 的历史数据")
+
+
+def _convert_history_df_to_records(df: pd.DataFrame):
+    records = []
+    if df is None or df.empty:
+        return records
+
+    for _, row in df.iterrows():
+        date_val = None
+        for col_name in ['日期', 'date', 'Date', '交易日期']:
+            if col_name in row.index and pd.notna(row[col_name]):
+                value = row[col_name]
+                if isinstance(value, str):
+                    date_val = value
+                elif hasattr(value, 'strftime'):
+                    date_val = value.strftime("%Y-%m-%d")
+                else:
+                    date_val = str(value)
+                break
+
+        if not date_val:
+            continue
+
+        def extract_float(columns, default=0.0):
+            for col in columns:
+                if col in row.index and pd.notna(row[col]):
+                    try:
+                        return float(row[col])
+                    except Exception:
+                        continue
+            return default
+
+        open_val = extract_float(['开盘', 'open', 'Open', '开盘价'])
+        close_val = extract_float(['收盘', 'close', 'Close', '收盘价'])
+        high_val = extract_float(['最高', 'high', 'High', '最高价'], default=close_val if close_val > 0 else 0.0)
+        low_val = extract_float(['最低', 'low', 'Low', '最低价'], default=close_val if close_val > 0 else 0.0)
+        volume_val = extract_float(['成交量', 'volume', 'Volume'])
+        turnover_val = extract_float(['成交额', 'amount', 'Amount', '成交金额', 'turnover'])
+
+        if close_val <= 0:
+            continue
+
+        records.append({
+            'tradeDate': date_val,
+            'open': open_val,
+            'close': close_val,
+            'high': high_val if high_val > 0 else close_val,
+            'low': low_val if low_val > 0 else close_val,
+            'volume': volume_val,
+            'turnover': turnover_val
+        })
+
+    return records
+
+
+def _build_history_payload(stock_code: str, months: int, allow_extended: bool = True):
+    df, method_used, start_date, end_date = _fetch_history_dataframe_with_fallback(stock_code, months, allow_extended)
+    records = _convert_history_df_to_records(df)
+
+    if not records:
+        raise ValueError("数据转换失败，无法解析AKShare返回的数据格式")
+
+    return {
+        'stockCode': stock_code,
+        'startDate': start_date.strftime("%Y-%m-%d"),
+        'endDate': end_date.strftime("%Y-%m-%d"),
+        'totalRecords': len(records),
+        'method': method_used,
+        'data': records
+    }
+
+
 @app.route('/api/stock/history/<stock_code>', methods=['GET'])
 def get_history_data(stock_code):
     """
@@ -711,184 +890,10 @@ def get_history_data(stock_code):
     try:
         months = int(request.args.get('months', 3))
         print(f"[{datetime.now()}] 请求股票历史数据: {stock_code}, 月数: {months}")
-        
-        clean_code = stock_code.strip().zfill(6)
-        
-        # 计算日期范围
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=months * 30)
-        
-        # 确定市场前缀
-        if clean_code.startswith('6'):
-            symbol = f"sh{clean_code}"
-        else:
-            symbol = f"sz{clean_code}"
-        
-        print(f"[{datetime.now()}] 从AKShare获取历史数据: {symbol}, 时间范围: {start_date.date()} 至 {end_date.date()}")
-        
-        # 使用AKShare获取历史数据，按照优先级逐步回退
-        df = None
-        method_used = None
 
-        try:
-            print(f"[{datetime.now()}] 尝试方法1: stock_zh_a_hist")
-            print(f"[{datetime.now()}] 参数: symbol={symbol}, period=daily, start_date={start_date.strftime('%Y%m%d')}, end_date={end_date.strftime('%Y%m%d')}, adjust=qfq")
-            df_candidate = ak.stock_zh_a_hist(
-                symbol=symbol,
-                period="daily",
-                start_date=start_date.strftime("%Y%m%d"),
-                end_date=end_date.strftime("%Y%m%d"),
-                adjust="qfq"
-            )
-            if df_candidate is not None and not df_candidate.empty:
-                df = df_candidate
-                method_used = "stock_zh_a_hist"
-                print(f"[{datetime.now()}] ✅ 方法1成功，获取 {len(df)} 条数据")
-            else:
-                print(f"[{datetime.now()}] ⚠️ 方法1返回空数据")
-        except Exception as e1:
-            print(f"[{datetime.now()}] ⚠️ 方法1失败: {str(e1)}")
-            print(traceback.format_exc()[:500])
+        result = _build_history_payload(stock_code, months)
 
-        if df is None or df.empty:
-            try:
-                print(f"[{datetime.now()}] 尝试方法2: stock_zh_a_daily")
-                df_candidate = ak.stock_zh_a_daily(symbol=symbol)
-                if df_candidate is not None and not df_candidate.empty:
-                    date_col = None
-                    for col in ['日期', 'date', 'Date', '交易日期']:
-                        if col in df_candidate.columns:
-                            date_col = col
-                            break
-
-                    if date_col:
-                        df_candidate[date_col] = pd.to_datetime(df_candidate[date_col])
-                        df_candidate = df_candidate[(df_candidate[date_col] >= start_date) & (df_candidate[date_col] <= end_date)]
-
-                    if df_candidate is not None and not df_candidate.empty:
-                        df = df_candidate
-                        method_used = "stock_zh_a_daily"
-                        print(f"[{datetime.now()}] ✅ 方法2成功，获取 {len(df)} 条数据")
-                    else:
-                        print(f"[{datetime.now()}] ⚠️ 方法2过滤后为空数据")
-                else:
-                    print(f"[{datetime.now()}] ⚠️ 方法2返回空数据")
-            except Exception as e2:
-                print(f"[{datetime.now()}] ⚠️ 方法2失败: {str(e2)}")
-                print(traceback.format_exc()[:500])
-
-        if df is None or df.empty:
-            try:
-                print(f"[{datetime.now()}] 尝试方法3: stock_zh_a_hist_tx")
-                df_candidate = ak.stock_zh_a_hist_tx(
-                    symbol=symbol,
-                    start_date=start_date.strftime("%Y%m%d"),
-                    end_date=end_date.strftime("%Y%m%d")
-                )
-                if df_candidate is not None and not df_candidate.empty:
-                    df = df_candidate
-                    method_used = "stock_zh_a_hist_tx"
-                    print(f"[{datetime.now()}] ✅ 方法3成功，获取 {len(df)} 条数据")
-                else:
-                    print(f"[{datetime.now()}] ⚠️ 方法3返回空数据")
-            except Exception as e3:
-                print(f"[{datetime.now()}] ⚠️ 方法3失败: {str(e3)}")
-                print(traceback.format_exc()[:500])
-
-        if df is None or df.empty:
-            raise ValueError(f"所有AKShare方法都失败，无法获取股票 {clean_code} 的历史数据")
-        
-        # 转换为标准格式
-        result = {
-            'stockCode': stock_code,
-            'startDate': start_date.strftime("%Y-%m-%d"),
-            'endDate': end_date.strftime("%Y-%m-%d"),
-            'totalRecords': len(df),
-            'method': method_used,
-            'data': []
-        }
-        
-        # 转换数据格式（处理不同的列名）
-        for _, row in df.iterrows():
-            # 尝试多种可能的列名
-            date_col = None
-            for col_name in ['日期', 'date', 'Date', '交易日期']:
-                if col_name in row.index:
-                    date_val = row[col_name]
-                    if pd.notna(date_val):
-                        if isinstance(date_val, str):
-                            date_col = date_val
-                        else:
-                            date_col = date_val.strftime("%Y-%m-%d")
-                        break
-            
-            # 获取价格和成交量数据
-            open_val = 0
-            close_val = 0
-            high_val = 0
-            low_val = 0
-            volume_val = 0
-            turnover_val = 0
-            
-            # 处理日期（可能是date对象）
-            if date_col is None:
-                # 尝试从索引中获取日期
-                if 'date' in row.index:
-                    date_val = row['date']
-                    if pd.notna(date_val):
-                        if isinstance(date_val, str):
-                            date_col = date_val
-                        elif hasattr(date_val, 'strftime'):
-                            date_col = date_val.strftime("%Y-%m-%d")
-                        else:
-                            date_col = str(date_val)
-            
-            for col in ['开盘', 'open', 'Open', '开盘价']:
-                if col in row.index and pd.notna(row[col]):
-                    open_val = float(row[col])
-                    break
-            
-            for col in ['收盘', 'close', 'Close', '收盘价']:
-                if col in row.index and pd.notna(row[col]):
-                    close_val = float(row[col])
-                    break
-            
-            for col in ['最高', 'high', 'High', '最高价']:
-                if col in row.index and pd.notna(row[col]):
-                    high_val = float(row[col])
-                    break
-            
-            for col in ['最低', 'low', 'Low', '最低价']:
-                if col in row.index and pd.notna(row[col]):
-                    low_val = float(row[col])
-                    break
-            
-            for col in ['成交量', 'volume', 'Volume']:
-                if col in row.index and pd.notna(row[col]):
-                    volume_val = float(row[col])
-                    break
-            
-            for col in ['成交额', 'amount', 'Amount', '成交金额', 'turnover']:
-                if col in row.index and pd.notna(row[col]):
-                    turnover_val = float(row[col])
-                    break
-            
-            # 只添加有效数据
-            if date_col and close_val > 0:
-                result['data'].append({
-                    'tradeDate': date_col,
-                    'open': open_val,
-                    'close': close_val,
-                    'high': high_val if high_val > 0 else close_val,
-                    'low': low_val if low_val > 0 else close_val,
-                    'volume': volume_val,
-                    'turnover': turnover_val
-                })
-        
-        if len(result['data']) == 0:
-            raise ValueError(f"数据转换失败，无法解析AKShare返回的数据格式")
-        
-        print(f"[{datetime.now()}] ✅ 成功获取 {len(result['data'])} 条历史数据: {stock_code} (使用方法: {method_used})")
+        print(f"[{datetime.now()}] ✅ 成功获取 {result['totalRecords']} 条历史数据: {stock_code} (使用方法: {result['method']})")
         return jsonify({'success': True, 'data': result})
         
     except Exception as e:
@@ -918,165 +923,20 @@ def analyze_stock_data(stock_code):
         months = int(request.args.get('months', 3))
         print(f"[{datetime.now()}] 开始分析股票数据: {stock_code}, 月数: {months}")
         
-        # 先获取历史数据（直接调用内部逻辑，避免HTTP调用）
+        # 先获取历史数据（复用 /history 逻辑，支持多种复权和时间范围尝试）
         try:
-            clean_code = stock_code.strip().zfill(6)
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=months * 30)
-            
-            # 确定市场前缀
-            if clean_code.startswith('6'):
-                symbol = f"sh{clean_code}"
-            else:
-                symbol = f"sz{clean_code}"
-            
-            print(f"[{datetime.now()}] 从AKShare获取历史数据用于分析: {symbol}")
-            
-            # 尝试获取数据
-            df = None
-            method_used = None
-            
-            # 方法1: stock_zh_a_hist（AKShare标准接口）
-            try:
-                print(f"[{datetime.now()}] [分析] 尝试方法1: stock_zh_a_hist")
-                df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                       start_date=start_date.strftime("%Y%m%d"),
-                                       end_date=end_date.strftime("%Y%m%d"),
-                                       adjust="qfq")
-                if df is not None and not df.empty:
-                    method_used = "stock_zh_a_hist"
-                    print(f"[{datetime.now()}] [分析] ✅ 方法1成功，获取 {len(df)} 条数据")
-            except Exception as e1:
-                print(f"[{datetime.now()}] [分析] ⚠️ 方法1失败: {str(e1)}")
-            
-            # 方法2: stock_zh_a_hist (无复权)
-            if df is None or df.empty:
-                try:
-                    print(f"[{datetime.now()}] [分析] 尝试方法2: stock_zh_a_hist (无复权)")
-                    df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                           start_date=start_date.strftime("%Y%m%d"),
-                                           end_date=end_date.strftime("%Y%m%d"),
-                                           adjust="")
-                    if df is not None and not df.empty:
-                        method_used = "stock_zh_a_hist (无复权)"
-                        print(f"[{datetime.now()}] [分析] ✅ 方法2成功，获取 {len(df)} 条数据")
-                except Exception as e2:
-                    print(f"[{datetime.now()}] [分析] ⚠️ 方法2失败: {str(e2)}")
-            
-            # 方法3: stock_zh_a_hist（备用，需要市场前缀）
-            if df is None or df.empty:
-                try:
-                    print(f"[{datetime.now()}] [分析] 尝试方法3: stock_zh_a_hist")
-                    df = ak.stock_zh_a_hist(symbol=symbol, period="daily", 
-                                           start_date=start_date.strftime("%Y%m%d"),
-                                           end_date=end_date.strftime("%Y%m%d"),
-                                           adjust="qfq")
-                    if df is not None and not df.empty:
-                        method_used = "stock_zh_a_hist"
-                        print(f"[{datetime.now()}] [分析] ✅ 方法3成功，获取 {len(df)} 条数据")
-                except Exception as e3:
-                    print(f"[{datetime.now()}] [分析] ⚠️ 方法3失败: {str(e3)}")
-            
-            # 方法4: 尝试使用更长的日期范围
-            if df is None or df.empty:
-                try:
-                    print(f"[{datetime.now()}] [分析] 尝试方法4: stock_zh_a_hist (6个月)")
-                    start_date_long = end_date - timedelta(days=6 * 30)
-                    df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
-                                           start_date=start_date_long.strftime("%Y%m%d"),
-                                           end_date=end_date.strftime("%Y%m%d"),
-                                           adjust="qfq")
-                    if df is not None and not df.empty:
-                        # 过滤到只保留3个月的数据
-                        if '日期' in df.columns:
-                            df['日期'] = pd.to_datetime(df['日期'])
-                            df = df[df['日期'] >= start_date]
-                        if len(df) > 0:
-                            method_used = "stock_zh_a_hist (6个月)"
-                            print(f"[{datetime.now()}] [分析] ✅ 方法4成功，获取 {len(df)} 条数据")
-                        else:
-                            df = None
-                except Exception as e4:
-                    print(f"[{datetime.now()}] [分析] ⚠️ 方法4失败: {str(e4)}")
-            
-            if df is None or df.empty:
-                return jsonify({
-                    'success': False,
-                    'error': '无法获取历史数据',
-                    'message': f'所有AKShare方法都失败，无法获取股票 {stock_code} 的历史数据'
-                }), 500
-            
-            # 转换数据格式
-            history_records = []
-            for _, row in df.iterrows():
-                date_col = None
-                for col_name in ['日期', 'date', 'Date', '交易日期']:
-                    if col_name in row.index:
-                        date_val = row[col_name]
-                        if pd.notna(date_val):
-                            if isinstance(date_val, str):
-                                date_col = date_val
-                            else:
-                                date_col = date_val.strftime("%Y-%m-%d")
-                            break
-                
-                # 获取价格数据
-                open_val = 0
-                close_val = 0
-                high_val = 0
-                low_val = 0
-                volume_val = 0
-                turnover_val = 0
-                
-                for col in ['开盘', 'open', 'Open', '开盘价']:
-                    if col in row.index and pd.notna(row[col]):
-                        open_val = float(row[col])
-                        break
-                
-                for col in ['收盘', 'close', 'Close', '收盘价']:
-                    if col in row.index and pd.notna(row[col]):
-                        close_val = float(row[col])
-                        break
-                
-                for col in ['最高', 'high', 'High', '最高价']:
-                    if col in row.index and pd.notna(row[col]):
-                        high_val = float(row[col])
-                        break
-                
-                for col in ['最低', 'low', 'Low', '最低价']:
-                    if col in row.index and pd.notna(row[col]):
-                        low_val = float(row[col])
-                        break
-                
-                for col in ['成交量', 'volume', 'Volume']:
-                    if col in row.index and pd.notna(row[col]):
-                        volume_val = float(row[col])
-                        break
-                
-                for col in ['成交额', 'amount', 'Amount', '成交金额']:
-                    if col in row.index and pd.notna(row[col]):
-                        turnover_val = float(row[col])
-                        break
-                
-                if date_col and close_val > 0:
-                    history_records.append({
-                        'tradeDate': date_col,
-                        'open': open_val,
-                        'close': close_val,
-                        'high': high_val if high_val > 0 else close_val,
-                        'low': low_val if low_val > 0 else close_val,
-                        'volume': volume_val,
-                        'turnover': turnover_val
-                    })
-            
+            history_payload = _build_history_payload(stock_code, months, allow_extended=True)
+            history_records = history_payload['data']
+            method_used = history_payload.get('method', '未知')
+
             if len(history_records) == 0:
                 return jsonify({
                     'success': False,
                     'error': '历史数据为空或格式不正确'
                 }), 500
-            
+
             print(f"[{datetime.now()}] ✅ 成功获取 {len(history_records)} 条历史数据用于分析 (方法: {method_used})")
-            
+
         except Exception as e:
             error_msg = str(e)
             error_trace = traceback.format_exc()
