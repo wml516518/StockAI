@@ -3,48 +3,87 @@
     <div class="content">
       <div class="card">
         <h3>AI股票分析</h3>
-        <div class="form-group">
-          <label>股票代码</label>
-          <input v-model="stockCode" type="text" placeholder="输入要分析的股票代码">
+
+        <div class="session-tabs">
+          <div class="tab-list">
+            <button
+              v-for="session in sessions"
+              :key="session.id"
+              :class="['session-tab', { active: session.id === activeSessionId }]"
+              @click="setActiveSession(session.id)"
+            >
+              <span class="tab-label">
+                {{ getSessionLabel(session) }}
+                <span v-if="session.analyzing" class="tab-loading-dot"></span>
+              </span>
+              <span
+                v-if="sessions.length > 1"
+                class="tab-close"
+                @click.stop="closeSession(session.id)"
+                title="关闭分析页签"
+              >
+                ×
+              </span>
+            </button>
+            <button class="add-session-tab" @click="handleAddSession" title="新增分析页签">
+              ＋ 新分析
+            </button>
+          </div>
         </div>
-        <div class="form-group">
-          <label>分析类型</label>
-          <select v-model="analysisType" class="form-control">
-            <option value="comprehensive">综合分析</option>
-            <option value="fundamental">基本面分析</option>
-            <option value="news">新闻舆论分析</option>
-            <option value="technical">技术面分析</option>
-          </select>
-        </div>
-        <button class="btn" @click="handleAnalyze" :disabled="analyzing">开始分析</button>
-        <button v-if="isCached" class="btn btn-secondary" @click="handleRefreshAnalysis" :disabled="analyzing" style="margin-left: 10px;">
-          🔄 重新分析
-        </button>
-        
-        <div v-if="analyzing" class="loading-state">
-          <div class="loading-spinner"></div>
-          <p>AI正在分析中，请稍候...</p>
-        </div>
-        
-        <div v-if="result" class="result-card">
-          <div class="result-header">
-            <h4>分析结果</h4>
-            <div v-if="analysisDate" class="analysis-date">
-              <span v-if="isCached" class="cache-badge">📦 缓存数据</span>
-              📅 分析时间：{{ analysisTime || analysisDate }}
-              <span v-if="stockInfo" class="stock-info">（{{ stockInfo.name }}，当前价：{{ stockInfo.currentPrice?.toFixed(2) || 'N/A' }}）</span>
+
+        <div v-if="currentSession" class="session-body">
+          <div class="form-group">
+            <label>股票代码</label>
+            <input v-model="currentSession.stockCode" type="text" placeholder="输入要分析的股票代码">
+          </div>
+          <div class="form-group">
+            <label>分析类型</label>
+            <select v-model="currentSession.analysisType" class="form-control">
+              <option value="comprehensive">综合分析</option>
+              <option value="fundamental">基本面分析</option>
+              <option value="news">新闻舆论分析</option>
+              <option value="technical">技术面分析</option>
+            </select>
+          </div>
+          <div class="actions">
+            <button class="btn" @click="handleAnalyzeCurrent()" :disabled="currentSession.analyzing">开始分析</button>
+            <button
+              v-if="currentSession.isCached"
+              class="btn btn-secondary"
+              @click="handleRefreshAnalysis"
+              :disabled="currentSession.analyzing"
+            >
+              🔄 重新分析
+            </button>
+          </div>
+
+          <div v-if="currentSession.analyzing" class="loading-state">
+            <div class="loading-spinner"></div>
+            <p>AI正在分析中，请稍候...</p>
+          </div>
+
+          <div v-if="currentSession.result" class="result-card">
+            <div class="result-header">
+              <h4>分析结果</h4>
+              <div v-if="currentSession.analysisDate" class="analysis-date">
+                <span v-if="currentSession.isCached" class="cache-badge">📦 缓存数据</span>
+                📅 分析时间：{{ currentSession.analysisTime || currentSession.analysisDate }}
+                <span v-if="currentSession.stockInfo" class="stock-info">（{{ currentSession.stockInfo.name }}，当前价：{{ formatNumber(currentSession.stockInfo?.currentPrice) }}）</span>
+              </div>
             </div>
+
+            <div v-if="chartImageSrc" class="chart-section">
+              <h5>技术面图表</h5>
+              <img :src="chartImageSrc" alt="股价走势图" class="chart-image" />
+              <ul v-if="chartHighlights.length" class="chart-highlights">
+                <li v-for="item in chartHighlights" :key="item.label">
+                  <strong>{{ item.label }}：</strong>{{ item.value }}
+                </li>
+              </ul>
+            </div>
+
+            <div class="analysis-content">{{ currentSession.result }}</div>
           </div>
-          <div v-if="chartImageSrc" class="chart-section">
-            <h5>技术面图表</h5>
-            <img :src="chartImageSrc" alt="股价走势图" class="chart-image" />
-            <ul v-if="chartHighlights.length" class="chart-highlights">
-              <li v-for="item in chartHighlights" :key="item.label">
-                <strong>{{ item.label }}：</strong>{{ item.value }}
-              </li>
-            </ul>
-          </div>
-          <div class="analysis-content">{{ result }}</div>
         </div>
       </div>
     </div>
@@ -52,30 +91,27 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onActivated, watch, computed } from 'vue'
+import { onMounted, onActivated, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import api from '../services/api'
 import { stockService } from '../services/stockService'
+import { useAiAnalysisStore, normalizeStockCode } from '../stores/aiAnalysis'
+import { useWatchlistStore } from '../stores/watchlist'
 
 const route = useRoute()
-const stockCode = ref('')
-const analysisType = ref('comprehensive')
-const analyzing = ref(false)
-const result = ref('')
-const analysisDate = ref('')
-const analysisTime = ref('')
-const stockInfo = ref(null)
-const isCached = ref(false)
-const hasAnalyzed = ref(false) // 标记是否已经分析过（防止重复调用）
-const lastAnalyzedStockCode = ref('') // 记录上次分析的股票代码
-const technicalChart = ref(null)
+const aiAnalysisStore = useAiAnalysisStore()
+const watchlistStore = useWatchlistStore()
+const { sessions, activeSessionId, currentSession } = storeToRefs(aiAnalysisStore)
+const { analysisTypeLabels } = aiAnalysisStore
 
 const chartImageSrc = computed(() => {
-  if (!technicalChart.value?.imageBase64) {
+  const chart = currentSession.value?.technicalChart
+  if (!chart?.imageBase64) {
     return ''
   }
-  const contentType = technicalChart.value.contentType || 'image/png'
-  return `data:${contentType};base64,${technicalChart.value.imageBase64}`
+  const contentType = chart.contentType || 'image/png'
+  return `data:${contentType};base64,${chart.imageBase64}`
 })
 
 const formatNumber = (value, digits = 2) => {
@@ -92,7 +128,7 @@ const formatPercent = (value, digits = 2) => {
 }
 
 const chartHighlights = computed(() => {
-  const highlights = technicalChart.value?.highlights
+  const highlights = currentSession.value?.technicalChart?.highlights
   if (!highlights || typeof highlights !== 'object') {
     return []
   }
@@ -146,88 +182,23 @@ const chartHighlights = computed(() => {
   return items
 })
 
-// 监听路由参数变化，当股票代码变化时自动触发分析
-watch(() => route.query.stockCode, (newStockCode, oldStockCode) => {
-  if (newStockCode && newStockCode !== oldStockCode) {
-    console.log('股票代码变化:', oldStockCode, '->', newStockCode)
-    // 股票代码变化，重置状态
-    stockCode.value = newStockCode
-    hasAnalyzed.value = false
-    lastAnalyzedStockCode.value = ''
-    result.value = ''
-    analysisDate.value = ''
-    analysisTime.value = ''
-    stockInfo.value = null
-    isCached.value = false
-    technicalChart.value = null
-    
-    // 自动触发分析（会先检查缓存）
-    if (!analyzing.value) {
-      handleAnalyze(false) // false表示不强制刷新，会先检查缓存
-    }
-  }
-})
-
-// 从路由参数获取股票代码
-onMounted(() => {
-  if (route.query.stockCode) {
-    const currentStockCode = route.query.stockCode
-    stockCode.value = currentStockCode
-    
-    // 如果是新股票代码，重置状态并触发分析
-    if (currentStockCode !== lastAnalyzedStockCode.value) {
-      hasAnalyzed.value = false
-      lastAnalyzedStockCode.value = ''
-      
-      // 只有在没有分析过且不在分析中时才调用
-      if (!analyzing.value) {
-        handleAnalyze(false) // false表示不强制刷新，会先检查缓存
-      }
-    }
-  }
-})
-
-onActivated(() => {
-  if (route.query.stockCode) {
-    const currentStockCode = route.query.stockCode
-    stockCode.value = currentStockCode
-    
-    // 如果是新股票代码，重置状态并触发分析
-    if (currentStockCode !== lastAnalyzedStockCode.value) {
-      hasAnalyzed.value = false
-      lastAnalyzedStockCode.value = ''
-      
-      // 只有在没有分析过且不在分析中时才调用
-      if (!analyzing.value) {
-        handleAnalyze(false) // false表示不强制刷新，会先检查缓存
-      }
-    }
-  }
-})
-
-// 格式化日期
 const formatDate = (date) => {
   if (!date) return ''
-  
-  // 如果已经是格式化的字符串（yyyy-MM-dd HH:mm:ss），直接返回
+
   if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}/.test(date)) {
     return date.replace('T', ' ').substring(0, 19)
   }
-  
-  // 尝试解析日期
+
   const d = new Date(date)
-  
-  // 检查日期是否有效
+
   if (isNaN(d.getTime())) {
     console.warn('无效的日期值:', date)
     return ''
   }
-  
-  // 检查是否是无效的默认日期（如0001-01-01或年份小于1900）
+
   const year = d.getFullYear()
   if (year < 1900 || year === 1) {
     console.warn('检测到无效的默认日期值，使用当前时间:', date, '年份:', year)
-    // 使用当前时间作为回退
     const now = new Date()
     const nowYear = now.getFullYear()
     const nowMonth = String(now.getMonth() + 1).padStart(2, '0')
@@ -237,22 +208,41 @@ const formatDate = (date) => {
     const nowSeconds = String(now.getSeconds()).padStart(2, '0')
     return `${nowYear}-${nowMonth}-${nowDay} ${nowHours}:${nowMinutes}:${nowSeconds}`
   }
-  
-  // 格式化为 yyyy-MM-dd HH:mm:ss
+
   const month = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   const hours = String(d.getHours()).padStart(2, '0')
   const minutes = String(d.getMinutes()).padStart(2, '0')
   const seconds = String(d.getSeconds()).padStart(2, '0')
-  
+
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
-// 根据分析类型生成上下文描述
+const getSessionLabel = (session) => {
+  if (!session) return '新分析'
+  const name = session.stockInfo?.name || session.displayName?.trim()
+  const code = session.stockCode?.trim()
+  const typeLabel = analysisTypeLabels[session.analysisType] || analysisTypeLabels.comprehensive
+  const base = name || code || '新分析'
+  return `${base}（${typeLabel}）`
+}
+
+const setActiveSession = (sessionId) => {
+  aiAnalysisStore.setActiveSession(sessionId)
+}
+
+const handleAddSession = () => {
+  aiAnalysisStore.addSession()
+}
+
+const closeSession = (sessionId) => {
+  aiAnalysisStore.closeSession(sessionId)
+}
+
 const getAnalysisContext = (type, stockData = null, dataDate = null) => {
   const dateInfo = dataDate ? `\n\n**重要提示**：本次分析基于 ${formatDate(dataDate)} 的最新数据。` : ''
   const stockInfo = stockData ? `\n\n**股票基本信息**：\n- 股票名称：${stockData.name || '未知'}\n- 当前价格：${stockData.currentPrice || 'N/A'}\n- 涨跌幅：${stockData.changePercent || 0}%\n- 市盈率(PE)：${stockData.pe || 'N/A'}\n- 市净率(PB)：${stockData.pb || 'N/A'}\n` : ''
-  
+
   const contexts = {
     fundamental: `请重点从以下基本面维度进行分析：${dateInfo}${stockInfo}
 1. **财务数据**：营收、净利润、ROE、资产负债率等财务指标
@@ -263,7 +253,7 @@ const getAnalysisContext = (type, stockData = null, dataDate = null) => {
 6. **风险因素**：财务风险、经营风险、行业风险等
 
 请提供详细的基本面分析，重点关注财务健康度和投资价值。`,
-    
+
     news: `请重点从以下新闻舆论维度进行分析：${dateInfo}${stockInfo}
 1. **最新新闻**：与该股票相关的最新新闻和消息
 2. **市场情绪**：新闻反映的市场情绪和投资者预期
@@ -273,7 +263,7 @@ const getAnalysisContext = (type, stockData = null, dataDate = null) => {
 6. **风险提示**：负面消息、潜在风险、不利因素
 
 请结合最新新闻和舆论环境，分析对股价的潜在影响。`,
-    
+
     technical: `请重点从以下技术面维度进行分析：${dateInfo}${stockInfo}
 1. **价格趋势**：当前价格走势、支撑位、阻力位
 2. **技术指标**：MA、MACD、RSI、KDJ等主要技术指标
@@ -283,7 +273,7 @@ const getAnalysisContext = (type, stockData = null, dataDate = null) => {
 6. **短期走势**：短期、中期、长期趋势判断
 
 请提供详细的技术分析，重点关注买卖时机和价格目标位。`,
-    
+
     comprehensive: `请进行综合分析，涵盖以下所有维度：${dateInfo}${stockInfo}
 1. **基本面**：财务数据、盈利能力、成长性、估值、行业地位
 2. **技术面**：价格趋势、技术指标、成交量、形态分析
@@ -293,50 +283,49 @@ const getAnalysisContext = (type, stockData = null, dataDate = null) => {
 
 请提供全面的综合分析报告，给出明确的投资建议和风险提示。`
   }
-  
+
   return contexts[type] || contexts.comprehensive
 }
 
-const handleRefreshAnalysis = () => {
-  handleAnalyze(true)
-}
+const handleAnalyze = async (session, forceRefresh = false) => {
+  if (!session) {
+    return
+  }
 
-const handleAnalyze = async (forceRefresh = false) => {
-  if (!stockCode.value.trim()) {
+  if (!session.stockCode?.trim()) {
     alert('请输入股票代码')
     return
   }
-  
-  // 如果正在分析中，避免重复调用
-  if (analyzing.value) {
+
+  if (session.analyzing) {
     console.log('分析正在进行中，跳过重复调用')
     return
   }
-  
-  analyzing.value = true
-  result.value = ''
-  analysisDate.value = ''
-  analysisTime.value = ''
-  stockInfo.value = null
-  isCached.value = false
-  technicalChart.value = null
-  
+
+  const code = normalizeStockCode(session.stockCode)
+  session.stockCode = code
+  session.analyzing = true
+  session.result = ''
+  session.analysisDate = ''
+  session.analysisTime = ''
+  session.stockInfo = null
+  session.isCached = false
+  session.technicalChart = null
+  session.rating = null
+  session.actionSuggestion = null
+
   try {
-    // 先获取股票最新数据，用于获取分析日期
-    const code = stockCode.value.trim().toUpperCase()
     console.log('正在获取股票最新数据...', code)
-    
+
     let stockData = null
     let dataDate = null
-    
+
     try {
       stockData = await stockService.getStock(code)
       if (stockData) {
-        // 检查lastUpdate是否有效（不能是默认的0001-01-01）
         let lastUpdateValue = stockData.lastUpdate
         if (lastUpdateValue) {
           const testDate = new Date(lastUpdateValue)
-          // 如果年份小于1900或等于1，说明是无效的默认日期
           if (isNaN(testDate.getTime()) || testDate.getFullYear() < 1900 || testDate.getFullYear() === 1) {
             console.warn('股票数据的lastUpdate无效，使用当前时间:', lastUpdateValue)
             lastUpdateValue = new Date().toISOString()
@@ -344,84 +333,82 @@ const handleAnalyze = async (forceRefresh = false) => {
         } else {
           lastUpdateValue = new Date().toISOString()
         }
-        
+
         dataDate = lastUpdateValue
-        stockInfo.value = {
+        session.stockInfo = {
           name: stockData.name,
           currentPrice: stockData.currentPrice,
           changePercent: stockData.changePercent,
           pe: stockData.pe,
           pb: stockData.pb
         }
-        analysisDate.value = formatDate(dataDate)
+        session.analysisDate = formatDate(dataDate)
         console.log('获取到股票数据:', stockData.name, '更新时间:', dataDate)
+        if (stockData.name && stockData.name !== session.displayName) {
+          session.displayName = stockData.name
+        }
       } else {
-        // 如果没有获取到股票数据，使用当前时间
         dataDate = new Date().toISOString()
-        analysisDate.value = formatDate(dataDate)
+        session.analysisDate = formatDate(dataDate)
       }
     } catch (error) {
       console.warn('获取股票数据失败，将使用当前时间:', error)
       dataDate = new Date().toISOString()
-      analysisDate.value = formatDate(dataDate)
+      session.analysisDate = formatDate(dataDate)
     }
-    
-    // 生成分析上下文，包含股票数据和日期信息
-    const context = getAnalysisContext(analysisType.value, stockData, dataDate)
-    
-    // 后端接口路径是 /api/ai/analyze/{stockCode}
-    // AI分析可能需要较长时间，设置超时时间为10分钟
-    console.log('开始调用AI分析接口...', { forceRefresh, analysisType: analysisType.value })
+
+    const context = getAnalysisContext(session.analysisType, stockData, dataDate)
+
+    console.log('开始调用AI分析接口...', { forceRefresh, analysisType: session.analysisType })
     const response = await api.post(`/ai/analyze/${code}`, {
       context: context,
-      analysisType: analysisType.value,
+      analysisType: session.analysisType,
       forceRefresh: forceRefresh
     }, {
-      timeout: 600000 // 10分钟 = 600000毫秒（AI分析可能包含大量数据）
+      timeout: 600000
     })
-    
+
     console.log('AI分析响应:', response)
     console.log('响应类型:', typeof response)
-    
-    // 后端现在返回JSON对象 { success: true, analysis: "...", length: xxx, cached: true/false, analysisTime: "..." }
+
     if (response && typeof response === 'object') {
-      // 优先使用analysis字段
       if (response.analysis) {
-        result.value = response.analysis
+        session.result = response.analysis
       } else if (response.result) {
-        result.value = response.result
+        session.result = response.result
       } else if (response.message) {
-        result.value = response.message
+        session.result = response.message
       } else if (typeof response === 'string') {
-        // 如果整个响应是字符串（旧格式兼容）
-        result.value = response
+        session.result = response
       } else {
-        // 其他情况，尝试转换为字符串
-        result.value = JSON.stringify(response, null, 2)
-      }
-      
-      // 处理缓存状态和分析时间
-      isCached.value = response.cached === true
-      if (response.analysisTime) {
-        analysisTime.value = response.analysisTime
-      } else if (response.timestamp) {
-        analysisTime.value = response.timestamp
+        session.result = JSON.stringify(response, null, 2)
       }
 
-      technicalChart.value = response.technicalChart || null
-      
-      console.log('AI分析结果已设置，长度:', result.value?.length || 0, '是否缓存:', isCached.value, '分析时间:', analysisTime.value)
-      
-      // 标记已分析，并记录当前分析的股票代码
-      hasAnalyzed.value = true
-      lastAnalyzedStockCode.value = code // 记录当前分析的股票代码
+      session.isCached = response.cached === true
+      if (response.analysisTime) {
+        session.analysisTime = response.analysisTime
+      } else if (response.timestamp) {
+        session.analysisTime = response.timestamp
+      }
+
+      session.technicalChart = response.technicalChart || null
+      session.rating = response.rating || null
+      session.actionSuggestion = response.actionSuggestion || null
+
+      console.log('AI分析结果已设置，长度:', session.result?.length || 0, '是否缓存:', session.isCached, '分析时间:', session.analysisTime)
+
+      session.hasAnalyzed = true
+      session.lastAnalyzedStockCode = code
+
+      watchlistStore.setStockRecommendation(code, session.rating, session.actionSuggestion)
     } else if (typeof response === 'string') {
-      // 如果后端直接返回字符串（向后兼容）
-      result.value = response
-      technicalChart.value = null
+      session.result = response
+      session.technicalChart = null
+      watchlistStore.setStockRecommendation(code, session.rating, session.actionSuggestion)
     } else {
-      result.value = '分析完成，但响应格式异常'
-      technicalChart.value = null
+      session.result = '分析完成，但响应格式异常'
+      session.technicalChart = null
+      watchlistStore.setStockRecommendation(code, session.rating, session.actionSuggestion)
     }
   } catch (error) {
     console.error('AI分析失败:', error)
@@ -432,17 +419,15 @@ const handleAnalyze = async (forceRefresh = false) => {
       status: error.response?.status,
       data: error.response?.data
     })
-    
+
     if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-      result.value = '分析超时: AI分析时间过长（已设置10分钟超时），请稍后重试或检查AI服务配置'
+      session.result = '分析超时: AI分析时间过长（已设置10分钟超时），请稍后重试或检查AI服务配置'
     } else if (error.message?.includes('Network Error') || error.code === 'ERR_NETWORK') {
-      result.value = '网络错误: 无法连接到后端服务。请检查：\n1. 后端服务是否正常运行\n2. 网络连接是否正常\n3. 查看浏览器控制台获取详细错误信息'
+      session.result = '网络错误: 无法连接到后端服务。请检查：\n1. 后端服务是否正常运行\n2. 网络连接是否正常\n3. 查看浏览器控制台获取详细错误信息'
     } else if (error.response) {
-      // HTTP错误响应
       const status = error.response.status
       const data = error.response.data
-      
-      // 处理错误消息，避免显示 [object Object]
+
       let errorMessage = '未知错误'
       if (data) {
         if (typeof data === 'string') {
@@ -454,7 +439,6 @@ const handleAnalyze = async (forceRefresh = false) => {
         } else if (data.title) {
           errorMessage = data.title
         } else {
-          // 尝试将对象转换为可读字符串
           try {
             errorMessage = JSON.stringify(data, null, 2)
           } catch {
@@ -464,27 +448,81 @@ const handleAnalyze = async (forceRefresh = false) => {
       } else if (error.message) {
         errorMessage = error.message
       }
-      
-      result.value = `分析失败 (HTTP ${status}): ${errorMessage}`
-      
-      // 在控制台输出完整错误信息以便调试
+
+      session.result = `分析失败 (HTTP ${status}): ${errorMessage}`
+
       console.error('完整错误响应:', {
         status,
         data: error.response.data,
         headers: error.response.headers
       })
     } else {
-      result.value = '分析失败: ' + (error.message || '未知错误')
+      session.result = '分析失败: ' + (error.message || '未知错误')
     }
-    technicalChart.value = null
+    session.technicalChart = null
   } finally {
-    analyzing.value = false
-    // 如果失败，重置分析状态，允许重试
-    if (!result.value || result.value.includes('失败') || result.value.includes('错误')) {
-      hasAnalyzed.value = false
+    session.analyzing = false
+    if (!session.result || session.result.includes('失败') || session.result.includes('错误')) {
+      session.hasAnalyzed = false
     }
   }
 }
+
+const handleAnalyzeCurrent = (forceRefresh = false) => {
+  if (!currentSession.value) return
+  handleAnalyze(currentSession.value, forceRefresh)
+}
+
+const handleRefreshAnalysis = () => {
+  handleAnalyzeCurrent(true)
+}
+
+const upsertSessionFromRoute = () => {
+  const stockCode = route.query.stockCode
+  const analysisType = route.query.analysisType
+
+  if (!stockCode) {
+    aiAnalysisStore.ensureDefaultSession()
+    return
+  }
+
+  const stockName = route.query.stockName
+  const session = aiAnalysisStore.upsertSession(stockCode, analysisType, stockName)
+  const normalizedCode = normalizeStockCode(stockCode)
+
+  if (session && !session.analyzing) {
+    const shouldAnalyze = !session.hasAnalyzed || session.lastAnalyzedStockCode !== normalizedCode
+    if (shouldAnalyze) {
+      handleAnalyze(session, false)
+    }
+  }
+}
+
+watch(
+  () => route.query.stockCode,
+  (newStockCode, oldStockCode) => {
+    if (newStockCode === oldStockCode) {
+      return
+    }
+    upsertSessionFromRoute()
+  }
+)
+
+onMounted(() => {
+  if (sessions.value.length === 0) {
+    aiAnalysisStore.ensureDefaultSession()
+  }
+  upsertSessionFromRoute()
+})
+
+onActivated(() => {
+  if (sessions.value.length === 0) {
+    aiAnalysisStore.ensureDefaultSession()
+  } else if (!currentSession.value) {
+    aiAnalysisStore.ensureDefaultSession()
+  }
+  upsertSessionFromRoute()
+})
 </script>
 
 <style scoped>
@@ -645,9 +683,111 @@ const handleAnalyze = async (forceRefresh = false) => {
   margin-right: 8px;
 }
 
+.session-tabs {
+  margin-bottom: 20px;
+}
+
+.tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.session-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #d0d5ff;
+  border-radius: 6px;
+  background: #f5f7ff;
+  color: #1f3c88;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.session-tab:hover {
+  background: #e5e9ff;
+}
+
+.session-tab.active {
+  background: #667eea;
+  color: #fff;
+  border-color: #667eea;
+  box-shadow: 0 4px 10px rgba(102, 126, 234, 0.25);
+}
+
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-close {
+  margin-left: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  color: inherit;
+}
+
+.tab-close:hover {
+  opacity: 0.8;
+}
+
+.add-session-tab {
+  padding: 6px 12px;
+  border: 1px dashed #99a3ff;
+  border-radius: 6px;
+  background: transparent;
+  color: #5a6ded;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.add-session-tab:hover {
+  background: #eef1ff;
+}
+
+.tab-loading-dot {
+  width: 8px;
+  height: 8px;
+  background-color: currentColor;
+  border-radius: 50%;
+  animation: tab-blink 1s ease-in-out infinite;
+}
+
+@keyframes tab-blink {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.session-body {
+  margin-top: 10px;
+}
+
 @media (max-width: 768px) {
   .content {
     padding: 15px;
+  }
+
+  .tab-list {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .session-tab,
+  .add-session-tab {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 </style>

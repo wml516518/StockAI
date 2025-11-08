@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Watchlist from '../views/Watchlist.vue'
 import Screen from '../views/Screen.vue'
 import QuantTrading from '../views/QuantTrading.vue'
-import News from '../views/News.vue'
 import AI from '../views/AI.vue'
 import Settings from '../views/Settings.vue'
 
@@ -25,11 +24,6 @@ const routes = [
     path: '/quant',
     name: 'QuantTrading',
     component: QuantTrading
-  },
-  {
-    path: '/news',
-    name: 'News',
-    component: News
   },
   {
     path: '/ai',

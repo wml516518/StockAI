@@ -98,38 +98,6 @@
         <button class="btn" @click="saveSettings">💾 保存设置</button>
       </div>
 
-      <!-- 金融消息定时刷新设置 -->
-      <div class="card">
-        <h3>金融消息定时刷新设置</h3>
-        <div class="form-group">
-          <label>新闻刷新间隔（分钟）</label>
-          <input 
-            v-model.number="newsRefreshInterval" 
-            type="number" 
-            min="5" 
-            max="1440" 
-            step="5"
-          >
-          <p class="help-text">
-            推荐设置：5-15分钟（高频） | 30-60分钟（常规） | 120分钟以上（低频）
-          </p>
-        </div>
-        <div class="form-group">
-          <label>
-            <input 
-              type="checkbox" 
-              v-model="newsAutoRefreshEnabled"
-              style="width: auto; margin-right: 5px;"
-            >
-            启用新闻自动刷新
-          </label>
-        </div>
-        <div class="form-actions">
-          <button class="btn" @click="updateNewsRefreshSettings">💾 更新新闻刷新设置</button>
-          <button class="btn" @click="forceRefreshNews">🔄 立即刷新新闻</button>
-        </div>
-      </div>
-
       <!-- 当前状态 -->
       <div class="card">
         <h3>当前状态</h3>
@@ -251,7 +219,6 @@ import { ref, onMounted, onActivated } from 'vue'
 import { useWatchlistStore } from '../stores/watchlist'
 import { aiPromptService } from '../services/aiPromptService'
 import { aiModelConfigService } from '../services/aiModelConfigService'
-import { newsService } from '../services/newsService'
 
 const watchlistStore = useWatchlistStore()
 
@@ -259,10 +226,6 @@ const watchlistStore = useWatchlistStore()
 const refreshInterval = ref(3)
 const autoRefreshEnabled = ref(true)
 const lastRefreshTime = ref('--')
-
-// 新闻刷新设置
-const newsRefreshInterval = ref(30)
-const newsAutoRefreshEnabled = ref(true)
 
 // AI提示词管理
 const prompts = ref([])
@@ -295,7 +258,6 @@ onMounted(() => {
   loadSettings()
   loadPrompts()
   loadConfigs()
-  loadNewsRefreshSettings()
   updateLastRefreshTime()
 })
 
@@ -303,7 +265,6 @@ onActivated(() => {
   loadSettings()
   loadPrompts()
   loadConfigs()
-  loadNewsRefreshSettings()
 })
 
 // 加载股票行情刷新设置
@@ -340,40 +301,6 @@ const saveSettings = () => {
 const updateLastRefreshTime = () => {
   const now = new Date()
   lastRefreshTime.value = now.toLocaleTimeString('zh-CN')
-}
-
-// 加载新闻刷新设置
-const loadNewsRefreshSettings = async () => {
-  try {
-    const settings = await newsService.getRefreshSettings()
-    newsRefreshInterval.value = settings.intervalMinutes || 30
-    newsAutoRefreshEnabled.value = settings.enabled !== false
-  } catch (error) {
-    console.error('加载新闻刷新设置失败：', error)
-  }
-}
-
-// 更新新闻刷新设置
-const updateNewsRefreshSettings = async () => {
-  try {
-    await newsService.updateRefreshSettings({
-      intervalMinutes: newsRefreshInterval.value,
-      enabled: newsAutoRefreshEnabled.value
-    })
-    alert('新闻刷新设置已更新！')
-  } catch (error) {
-    alert('更新失败：' + error.message)
-  }
-}
-
-// 强制刷新新闻
-const forceRefreshNews = async () => {
-  try {
-    await newsService.fetchNews()
-    alert('新闻刷新任务已启动，请稍后查看新闻页面')
-  } catch (error) {
-    alert('刷新失败：' + error.message)
-  }
 }
 
 // AI提示词管理

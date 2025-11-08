@@ -45,6 +45,11 @@ export const watchlistService = {
     })
   },
 
+  // 删除分类
+  deleteCategory(id) {
+    return api.delete(`/watchlist/categories/${id}`)
+  },
+
   // 更新自选股分类
   updateCategory(id, categoryId) {
     return api.put(`/watchlist/${id}/category`, {

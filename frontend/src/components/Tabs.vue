@@ -21,7 +21,6 @@ const tabs = [
   { path: '/watchlist', label: '自选股' },
   { path: '/screen', label: '条件选股' },
   { path: '/quant', label: '📊 量化交易' },
-  { path: '/news', label: '金融新闻' },
   { path: '/ai', label: 'AI分析' },
   { path: '/settings', label: '⚙️ 设置' }
 ]

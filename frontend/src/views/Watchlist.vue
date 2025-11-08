@@ -59,6 +59,51 @@
         </div>
       </div>
 
+    <!-- 分类管理 -->
+    <div class="card">
+      <div class="card-header">
+        <h3 style="margin: 0;">分类管理</h3>
+        <div class="category-summary" v-if="categories.length">
+          当前分类数：<span>{{ categories.length }}</span>
+        </div>
+      </div>
+      <div v-if="categories.length === 0" class="loading">暂无分类，请先创建分类</div>
+      <div v-else class="category-management">
+        <div
+          v-for="category in categories"
+          :key="category.id || category.Id"
+          class="category-item"
+        >
+          <div class="category-info">
+            <span
+              class="category-color-dot"
+              :style="{ backgroundColor: category.color || category.Color || '#667eea' }"
+            ></span>
+            <div class="category-text">
+              <div class="category-name-line">
+                <span class="category-name">{{ category.name || category.Name }}</span>
+                <span class="category-count">股票数：{{ categoryCounts[category.id || category.Id] || 0 }}</span>
+              </div>
+              <div
+                class="category-description"
+                v-if="category.description || category.Description"
+              >
+                {{ category.description || category.Description }}
+              </div>
+            </div>
+          </div>
+          <button
+            class="btn btn-small btn-danger"
+            @click="handleDeleteCategory(category)"
+            :disabled="deletingCategoryId === (category.id || category.Id)"
+            title="删除分类"
+          >
+            {{ deletingCategoryId === (category.id || category.Id) ? '删除中...' : '删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
       <!-- 自选股列表 -->
       <div class="card">
         <div class="card-header">
@@ -99,9 +144,23 @@
                         {{ cat.name || cat.Name }}
                       </option>
                     </select>
-                    <button class="btn btn-small btn-info" @click="handleAIAnalyze(stock.stockCode)" title="AI分析">🤖 AI分析</button>
+                    <button class="btn btn-small btn-info" @click="handleAIAnalyze(stock)" title="AI分析">🤖 AI分析</button>
                     <button class="btn btn-small btn-danger" @click="handleRemoveStock(stock.id)">删除</button>
                   </div>
+                </div>
+                <div v-if="hasAiInsight(stock)" class="ai-insight">
+                  <span
+                    v-if="getStockRating(stock)"
+                    :class="getRatingBadgeClass(getStockRating(stock))"
+                  >
+                    {{ getStockRating(stock) }}
+                  </span>
+                  <span
+                    v-if="getStockActionSuggestion(stock)"
+                    class="action-chip"
+                  >
+                    {{ getStockActionSuggestion(stock) }}
+                  </span>
                 </div>
                 <div class="price-section">
                   <div class="current-price" :class="getPriceClass(getStockChangePercent(stock))">
@@ -270,10 +329,12 @@
 import { ref, onMounted, onUnmounted, onActivated, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
+import { useAiAnalysisStore } from '../stores/aiAnalysis'
 import api from '../services/api'
 import { isTradingTime, getTradingStatusText } from '../utils/tradingTime'
 
 const watchlistStore = useWatchlistStore()
+const aiAnalysisStore = useAiAnalysisStore()
 const route = useRoute()
 const router = useRouter()
 const stocks = computed(() => watchlistStore.stocks)
@@ -285,6 +346,72 @@ const autoRefreshEnabled = computed({
 })
 const refreshInterval = computed(() => watchlistStore.refreshInterval)
 const stocksByCategory = computed(() => watchlistStore.stocksByCategory)
+const stockInsightsMap = computed(() => watchlistStore.stockInsights || {})
+
+const normalizeStockCode = (code) => {
+  if (!code) return ''
+  return code.toString().trim().toUpperCase()
+}
+
+const categoryCounts = computed(() => {
+  const counts = {}
+  stocks.value.forEach(stock => {
+    const categoryId =
+      stock.watchlistCategoryId ||
+      stock.category?.id ||
+      stock.Category?.id ||
+      null
+    if (categoryId) {
+      counts[categoryId] = (counts[categoryId] || 0) + 1
+    }
+  })
+  return counts
+})
+
+const getStockRating = (stock) => {
+  if (!stock) {
+    return null
+  }
+  if (stock.aiRating) {
+    return stock.aiRating
+  }
+  const insight = stockInsightsMap.value[normalizeStockCode(stock.stockCode)]
+  return insight?.rating || null
+}
+
+const getStockActionSuggestion = (stock) => {
+  if (!stock) {
+    return null
+  }
+  let suggestion = stock.aiActionSuggestion
+  if (!suggestion) {
+    const insight = stockInsightsMap.value[normalizeStockCode(stock.stockCode)]
+    suggestion = insight?.actionSuggestion || null
+  }
+  if (!suggestion) {
+    return null
+  }
+  return suggestion.length > 10 ? suggestion.slice(0, 10) : suggestion
+}
+
+const hasAiInsight = (stock) => {
+  return !!(getStockRating(stock) || getStockActionSuggestion(stock))
+}
+
+const getRatingBadgeClass = (rating) => {
+  switch (rating) {
+    case '优':
+      return 'rating-badge excellence'
+    case '良':
+      return 'rating-badge good'
+    case '中':
+      return 'rating-badge neutral'
+    case '差':
+      return 'rating-badge risk'
+    default:
+      return 'rating-badge neutral'
+  }
+}
 
 const form = ref({
   stockCode: '',
@@ -302,6 +429,7 @@ const categoryForm = ref({
 const showCreateCategory = ref(false)
 let refreshTimer = null
 let tradingStatusTimer = null
+const deletingCategoryId = ref(null)
 
 // 交易状态相关
 const isTradingTimeNow = ref(isTradingTime())
@@ -498,6 +626,45 @@ const handleCreateCategory = async () => {
   }
 }
 
+const handleDeleteCategory = async (category) => {
+  const id = category?.id || category?.Id
+  if (!id) {
+    return
+  }
+  if (categories.value.length <= 1) {
+    alert('至少需要保留一个分类，无法删除。')
+    return
+  }
+
+  const count = categoryCounts.value[id] || 0
+  const name = category?.name || category?.Name || ''
+  const displayName = name || `ID ${id}`
+  const message =
+    count > 0
+      ? `分类「${displayName}」下仍有 ${count} 只股票，删除后这些股票将移动到“未分类”。确定继续删除吗？`
+      : `确定要删除分类「${displayName}」吗？`
+
+  if (!confirm(message)) {
+    return
+  }
+
+  try {
+    deletingCategoryId.value = id
+    await watchlistStore.deleteCategory(id)
+    await watchlistStore.fetchCategories()
+    await watchlistStore.fetchWatchlist()
+  } catch (error) {
+    const errorMessage =
+      error?.response?.data?.message ||
+      error?.response?.data?.error ||
+      error?.message ||
+      '删除分类失败，请稍后重试'
+    alert(errorMessage)
+  } finally {
+    deletingCategoryId.value = null
+  }
+}
+
 const handleCategoryChange = async (stockId, categoryId) => {
   try {
     await watchlistStore.updateCategory(stockId, parseInt(categoryId))
@@ -616,9 +783,24 @@ const formatPercent = (percent) => {
 }
 
 // AI分析
-const handleAIAnalyze = (stockCode) => {
-  // 跳转到AI分析页面，并传递股票代码
-  router.push({ path: '/ai', query: { stockCode } })
+const handleAIAnalyze = (stockItem) => {
+  if (!stockItem) {
+    return
+  }
+  const code = typeof stockItem === 'string' ? stockItem : stockItem.stockCode
+  if (!code) {
+    return
+  }
+  const name =
+    typeof stockItem === 'object'
+      ? stockItem.stock?.name || stockItem.stockName || stockItem.stock?.Name || ''
+      : ''
+  aiAnalysisStore.upsertSession(code, undefined, name)
+  const query = { stockCode: code }
+  if (name) {
+    query.stockName = name
+  }
+  router.push({ path: '/ai', query })
 }
 
 // 获取股票价格相关的辅助函数
@@ -768,8 +950,143 @@ const getStockLow = (stock) => {
   box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
 }
 
+.category-management {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.category-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: #fdfdfd;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.category-item:hover {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+.category-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.category-color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.15);
+  margin-top: 4px;
+}
+
+.category-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.category-name-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.category-name {
+  font-weight: 600;
+  color: #1f2933;
+}
+
+.category-count {
+  font-size: 0.85em;
+  color: #556987;
+  background: #eef2ff;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.category-description {
+  font-size: 0.85em;
+  color: #5f6c7b;
+  max-width: 380px;
+}
+
+.category-summary {
+  font-size: 0.9em;
+  color: #546172;
+}
+
 .price-section {
   margin: 15px 0;
+}
+
+.ai-insight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  background: #f7f8ff;
+  border: 1px solid #e4e9ff;
+  border-radius: 8px;
+}
+
+.rating-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.rating-badge.excellence {
+  color: #067647;
+  background: #e0f7ec;
+  border: 1px solid #6dd8ac;
+}
+
+.rating-badge.good {
+  color: #2458b5;
+  background: #e3ecff;
+  border: 1px solid #a8c6ff;
+}
+
+.rating-badge.neutral {
+  color: #6b7280;
+  background: #f4f5f7;
+  border: 1px solid #d4d7dd;
+}
+
+.rating-badge.risk {
+  color: #b91c1c;
+  background: #fde8e8;
+  border: 1px solid #f8b4b4;
+}
+
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.9em;
+  font-weight: 500;
+  color: #25304f;
+  background: #ffffff;
+  border: 1px solid #d9def3;
+  box-shadow: 0 1px 3px rgba(37, 48, 79, 0.08);
 }
 
 .current-price {

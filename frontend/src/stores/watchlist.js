@@ -10,6 +10,27 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   const loading = ref(false)
   const autoRefreshEnabled = ref(true)
   const refreshInterval = ref(3)
+  const stockInsights = ref({})
+
+  const normalizeStockCode = (code) => {
+    if (!code) return ''
+    return code.toString().trim().toUpperCase()
+  }
+
+  const applyInsightsToStocks = () => {
+    if (!stocks.value?.length) {
+      return
+    }
+    stocks.value.forEach(stock => {
+      const code = normalizeStockCode(stock.stockCode)
+      const insight = stockInsights.value[code]
+      if (insight) {
+        stock.aiRating = insight.rating
+        stock.aiActionSuggestion = insight.actionSuggestion
+        stock.aiUpdatedAt = insight.updatedAt
+      }
+    })
+  }
 
   // 计算属性
   const stocksByCategory = computed(() => {
@@ -47,6 +68,8 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       
       stocks.value = dataArray
       console.log('最终设置的自选股数量:', stocks.value.length)
+
+      applyInsightsToStocks()
       
       if (stocks.value.length > 0) {
         console.log('第一条股票数据:', JSON.stringify(stocks.value[0], null, 2))
@@ -91,6 +114,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       }
       // 添加到列表
       stocks.value.push(newStock)
+      applyInsightsToStocks()
       // 注意：不要在这里调用 refreshPrices，因为自动刷新定时器会处理
       return newStock
     } catch (error) {
@@ -107,7 +131,10 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       // 只从列表中移除，不重新获取整个列表
       const index = stocks.value.findIndex(s => s.id === id)
       if (index !== -1) {
-        stocks.value.splice(index, 1)
+        const removed = stocks.value.splice(index, 1)[0]
+        if (removed?.stockCode) {
+          delete stockInsights.value[normalizeStockCode(removed.stockCode)]
+        }
       }
     } catch (error) {
       console.error('删除自选股失败:', error)
@@ -144,6 +171,33 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       await fetchCategories()
     } catch (error) {
       console.error('创建分类失败:', error)
+      throw error
+    }
+  }
+
+  // 删除分类
+  async function deleteCategory(id) {
+    try {
+      await watchlistService.deleteCategory(id)
+      const index = categories.value.findIndex(c => c.id === id || c.Id === id)
+      if (index !== -1) {
+        categories.value.splice(index, 1)
+      }
+      // 将已删除分类的股票移动到未分类
+      stocks.value.forEach(stock => {
+        const stockCategoryId = stock.watchlistCategoryId || stock.category?.id || stock.Category?.id
+        if (stockCategoryId === id) {
+          stock.watchlistCategoryId = null
+          if (stock.category) {
+            stock.category = null
+          }
+          if (stock.Category) {
+            stock.Category = null
+          }
+        }
+      })
+    } catch (error) {
+      console.error('删除分类失败:', error)
       throw error
     }
   }
@@ -185,6 +239,37 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     } catch (error) {
       console.error('更新建议价格失败:', error)
       throw error
+    }
+  }
+
+  function setStockRecommendation(stockCode, rating, actionSuggestion) {
+    const code = normalizeStockCode(stockCode)
+    if (!code) {
+      return
+    }
+
+    const normalizedRating = rating ? rating.trim() : null
+    const normalizedSuggestion = actionSuggestion ? actionSuggestion.trim() : null
+
+    if (normalizedRating || normalizedSuggestion) {
+      stockInsights.value[code] = {
+        rating: normalizedRating,
+        actionSuggestion: normalizedSuggestion,
+        updatedAt: new Date().toISOString()
+      }
+    } else {
+      delete stockInsights.value[code]
+    }
+
+    const target = stocks.value.find(
+      s => normalizeStockCode(s.stockCode) === code
+    )
+    if (target) {
+      target.aiRating = normalizedRating
+      target.aiActionSuggestion = normalizedSuggestion
+      target.aiUpdatedAt = new Date().toISOString()
+    } else {
+      applyInsightsToStocks()
     }
   }
 
@@ -341,15 +426,18 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     autoRefreshEnabled,
     refreshInterval,
     stocksByCategory,
+    stockInsights,
     fetchWatchlist,
     fetchCategories,
     addStock,
     removeStock,
     updateStock,
     createCategory,
+    deleteCategory,
     updateCategory,
     updateSuggestedPrice,
-    refreshPrices
+    refreshPrices,
+    setStockRecommendation
   }
 })
 

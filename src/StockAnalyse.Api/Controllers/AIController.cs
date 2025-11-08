@@ -92,6 +92,8 @@ public class AIController : ControllerBase
                     timestamp = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                     cached = true,
                     analysisTime = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    rating = cachedResult.Rating,
+                    actionSuggestion = cachedResult.ActionSuggestion,
                     technicalChart = !string.IsNullOrWhiteSpace(cachedResult.TechnicalChartImageBase64)
                         ? new
                         {
@@ -1136,7 +1138,43 @@ public class AIController : ControllerBase
             {
                 _logger.LogWarning("🤖 [AIController] ⚠️ 响应较大 ({SizeKB:F2} KB)，可能影响传输", responseSizeKB);
             }
-            
+
+            string? rating = null;
+            string? actionSuggestion = null;
+            try
+            {
+                var recommendationPrompt = BuildRecommendationSummaryPrompt(stockCode, finalResult);
+                var recommendationResponse = await _aiService.ExecutePromptAsync(
+                    "分析结果评级与操作建议",
+                    recommendationPrompt,
+                    placeholders,
+                    request?.ModelId
+                );
+
+                if (!string.IsNullOrWhiteSpace(recommendationResponse))
+                {
+                    var trimmed = recommendationResponse.Trim();
+                    if (trimmed.StartsWith("```", StringComparison.Ordinal))
+                    {
+                        var firstBreak = trimmed.IndexOf('\n');
+                        var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+                        if (firstBreak >= 0 && lastFence > firstBreak)
+                        {
+                            trimmed = trimmed.Substring(firstBreak + 1, lastFence - firstBreak - 1).Trim();
+                        }
+                    }
+
+                    var summaryJson = JObject.Parse(trimmed);
+                    rating = summaryJson["rating"]?.ToString()?.Trim();
+                    actionSuggestion = summaryJson["actionSuggestion"]?.ToString()?.Trim()
+                        ?? summaryJson["suggestion"]?.ToString()?.Trim();
+                }
+            }
+            catch (Exception summaryEx)
+            {
+                _logger.LogWarning(summaryEx, "提取股票评级和操作建议失败");
+            }
+
             // 保存到缓存（永久缓存，直到手动刷新）
             var analysisTime = DateTime.Now;
             var technicalChartResponse = !string.IsNullOrEmpty(technicalChartImageBase64)
@@ -1155,7 +1193,9 @@ public class AIController : ControllerBase
                 AnalysisType = analysisType,
                 TechnicalChartImageBase64 = technicalChartImageBase64,
                 TechnicalChartContentType = technicalChartContentType,
-                TechnicalChartHighlights = technicalChartHighlightsToken?.ToString(Newtonsoft.Json.Formatting.None)
+                TechnicalChartHighlights = technicalChartHighlightsToken?.ToString(Newtonsoft.Json.Formatting.None),
+                Rating = rating,
+                ActionSuggestion = actionSuggestion
             };
             
             // 使用MemoryCacheEntryOptions设置缓存（不设置过期时间，永久缓存）
@@ -1177,6 +1217,8 @@ public class AIController : ControllerBase
                 timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 cached = false,
                 analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                rating,
+                actionSuggestion,
                 technicalChart = technicalChartResponse
             });
         }
@@ -1209,7 +1251,9 @@ public class AIController : ControllerBase
                     AnalysisType = analysisType,
                     TechnicalChartImageBase64 = null,
                     TechnicalChartContentType = "image/png",
-                    TechnicalChartHighlights = null
+                    TechnicalChartHighlights = null,
+                    Rating = null,
+                    ActionSuggestion = null
                 };
                 
                 var cacheOptions = new MemoryCacheEntryOptions
@@ -1227,6 +1271,8 @@ public class AIController : ControllerBase
                     timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                     cached = false,
                     analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    rating = (string?)null,
+                    actionSuggestion = (string?)null,
                     technicalChart = (object?)null
                 });
             }
@@ -1260,6 +1306,20 @@ public class AIController : ControllerBase
     {
         var result = await _aiService.GetStockRecommendationAsync(stockCode);
         return Ok(result);
+    }
+
+    private string BuildRecommendationSummaryPrompt(string stockCode, string analysisContent)
+    {
+        return @$"你是一名资深投顾。请根据以下关于股票 {stockCode} 的分析内容，提炼评级与操作建议，并严格按照要求输出：
+- 仅输出一个 JSON 对象，不要附加任何解释或注释。
+- JSON 对象必须包含字段：""rating"" 和 ""actionSuggestion""。
+- ""rating"" 必须从 ""优"", ""良"", ""中"", ""差"" 中选择。
+- ""actionSuggestion"" 需给出简明的操作提示，限制在 10 个中文字符以内，不得包含标点符号，可参考 ""速买"", ""谨慎观望"", ""逢高减持"", ""果断止损"" 等表达。
+
+分析内容如下（可能较长）：
+<analysis>
+{analysisContent}
+</analysis>";
     }
 
     private void AppendNewsItems(StringBuilder builder, IEnumerable<FinancialNews> newsItems)
@@ -1914,5 +1974,7 @@ public class CachedAnalysisResult
     public string? TechnicalChartImageBase64 { get; set; }
     public string? TechnicalChartContentType { get; set; }
     public string? TechnicalChartHighlights { get; set; }
+    public string? Rating { get; set; }
+    public string? ActionSuggestion { get; set; }
 }
 
