@@ -6,6 +6,7 @@ using Microsoft.Extensions.Caching.Memory;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Newtonsoft.Json.Linq;
 
 namespace StockAnalyse.Api.Controllers;
 
@@ -70,7 +71,19 @@ public class AIController : ControllerBase
             {
                 _logger.LogInformation("使用缓存的AI分析结果: {StockCode} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
                     stockCode, analysisType, cachedResult.AnalysisTime);
-                
+                JToken? cachedHighlights = null;
+                if (!string.IsNullOrWhiteSpace(cachedResult.TechnicalChartHighlights))
+                {
+                    try
+                    {
+                        cachedHighlights = JToken.Parse(cachedResult.TechnicalChartHighlights);
+                    }
+                    catch (Exception parseEx)
+                    {
+                        _logger.LogWarning(parseEx, "解析缓存的图表高亮信息失败");
+                    }
+                }
+
                 return Ok(new
                 {
                     success = true,
@@ -78,7 +91,15 @@ public class AIController : ControllerBase
                     length = cachedResult.Analysis?.Length ?? 0,
                     timestamp = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                     cached = true,
-                    analysisTime = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    analysisTime = cachedResult.AnalysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    technicalChart = !string.IsNullOrWhiteSpace(cachedResult.TechnicalChartImageBase64)
+                        ? new
+                        {
+                            imageBase64 = cachedResult.TechnicalChartImageBase64,
+                            contentType = cachedResult.TechnicalChartContentType ?? "image/png",
+                            highlights = cachedHighlights
+                        }
+                        : null
                 });
             }
         }
@@ -96,6 +117,9 @@ public class AIController : ControllerBase
             string? industryNameForNews = null;
             IndustryInfoResult? industryInfoResult = null;
             bool technicalAppendedToContext = false;
+            string? technicalChartImageBase64 = null;
+            string technicalChartContentType = "image/png";
+            JToken? technicalChartHighlightsToken = null;
             // 获取股票基本面和实时行情数据
             // 注意：GetFundamentalInfoAsync会自动优先使用Python服务（AKShare），如果不可用则回退到其他数据源
             _logger.LogInformation("步骤1: 正在获取股票基本面信息（优先使用Python服务/AKShare数据源）...");
@@ -575,6 +599,18 @@ public class AIController : ControllerBase
                             var trends = analysisData["trends"] as Newtonsoft.Json.Linq.JObject;
                             var statistics = analysisData["statistics"] as Newtonsoft.Json.Linq.JObject;
                             var insights = analysisData["insights"] as Newtonsoft.Json.Linq.JArray;
+                            var chart = analysisData["chart"] as Newtonsoft.Json.Linq.JObject;
+                            
+                            if (chart != null)
+                            {
+                                technicalChartImageBase64 = chart["imageBase64"]?.ToString();
+                                var contentTypeFromChart = chart["contentType"]?.ToString();
+                                if (!string.IsNullOrWhiteSpace(contentTypeFromChart))
+                                {
+                                    technicalChartContentType = contentTypeFromChart;
+                                }
+                                technicalChartHighlightsToken = chart["highlights"];
+                            }
                             
                             // 辅助函数：安全获取数值
                             Func<Newtonsoft.Json.Linq.JToken?, string> SafeGetDouble = (token) => 
@@ -648,6 +684,15 @@ public class AIController : ControllerBase
                                 }
                             }
                             
+                            if (!string.IsNullOrEmpty(technicalChartImageBase64))
+                            {
+                                pythonAnalysisText += $@"
+
+**图表洞察：**
+- 已生成股价走势图，标注最高价、最低价及当前价等关键点位，请在页面中查看图表并结合文字分析综合判断。
+";
+                            }
+
                             pythonAnalysisText += $@"
 
 **提示：请结合以上Python大数据分析结果（技术指标、趋势分析等），结合基本面信息和历史交易数据，给出综合的投资建议和未来走势预测。**
@@ -1094,12 +1139,23 @@ public class AIController : ControllerBase
             
             // 保存到缓存（永久缓存，直到手动刷新）
             var analysisTime = DateTime.Now;
+            var technicalChartResponse = !string.IsNullOrEmpty(technicalChartImageBase64)
+                ? new
+                {
+                    imageBase64 = technicalChartImageBase64,
+                    contentType = technicalChartContentType,
+                    highlights = technicalChartHighlightsToken
+                }
+                : null;
             var cachedResult = new CachedAnalysisResult
             {
                 Analysis = finalResult,
                 AnalysisTime = analysisTime,
                 StockCode = stockCode,
-                AnalysisType = analysisType
+                AnalysisType = analysisType,
+                TechnicalChartImageBase64 = technicalChartImageBase64,
+                TechnicalChartContentType = technicalChartContentType,
+                TechnicalChartHighlights = technicalChartHighlightsToken?.ToString(Newtonsoft.Json.Formatting.None)
             };
             
             // 使用MemoryCacheEntryOptions设置缓存（不设置过期时间，永久缓存）
@@ -1120,7 +1176,8 @@ public class AIController : ControllerBase
                 sizeKB = Math.Round(responseSizeKB, 2),
                 timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 cached = false,
-                analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss")
+                analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                technicalChart = technicalChartResponse
             });
         }
         catch (Exception ex)
@@ -1149,7 +1206,10 @@ public class AIController : ControllerBase
                     Analysis = result,
                     AnalysisTime = analysisTime,
                     StockCode = stockCode,
-                    AnalysisType = analysisType
+                    AnalysisType = analysisType,
+                    TechnicalChartImageBase64 = null,
+                    TechnicalChartContentType = "image/png",
+                    TechnicalChartHighlights = null
                 };
                 
                 var cacheOptions = new MemoryCacheEntryOptions
@@ -1166,7 +1226,8 @@ public class AIController : ControllerBase
                     length = result.Length,
                     timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
                     cached = false,
-                    analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss")
+                    analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    technicalChart = (object?)null
                 });
             }
             catch (Exception ex2)
@@ -1850,5 +1911,8 @@ public class CachedAnalysisResult
     public DateTime AnalysisTime { get; set; }
     public string StockCode { get; set; } = string.Empty;
     public string AnalysisType { get; set; } = "comprehensive";
+    public string? TechnicalChartImageBase64 { get; set; }
+    public string? TechnicalChartContentType { get; set; }
+    public string? TechnicalChartHighlights { get; set; }
 }
 

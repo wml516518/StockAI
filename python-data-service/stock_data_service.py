@@ -23,6 +23,40 @@ import os
 import warnings
 import time
 from bs4 import BeautifulSoup
+import io
+import base64
+
+try:
+    import matplotlib  # type: ignore
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt  # type: ignore
+    import matplotlib.dates as mdates  # type: ignore
+    from matplotlib.ticker import MaxNLocator  # type: ignore
+    from matplotlib import font_manager  # type: ignore
+    MATPLOTLIB_AVAILABLE = True
+except Exception as matplotlib_import_error:
+    matplotlib = None
+    plt = None
+    mdates = None
+    MaxNLocator = None
+    MATPLOTLIB_AVAILABLE = False
+    print(f"[{datetime.now()}] ⚠️ 未能导入matplotlib，图表生成功能不可用: {matplotlib_import_error}")
+else:
+    try:
+        font_candidates = ["Microsoft YaHei", "SimHei", "STHeiti", "Heiti TC", "Arial Unicode MS"]
+        selected_font = None
+        for font_name in font_candidates:
+            try:
+                font_manager.findfont(font_name, fallback_to_default=False)  # type: ignore[attr-defined]
+                selected_font = font_name
+                break
+            except Exception:
+                continue
+        if selected_font:
+            plt.rcParams["font.family"] = selected_font
+        plt.rcParams["axes.unicode_minus"] = False
+    except Exception as font_config_error:
+        print(f"[{datetime.now()}] ⚠️ 配置matplotlib中文字体失败，将使用默认字体: {font_config_error}")
 
 # 全局禁用代理以解决连接问题（与测试脚本test_industry_name_em.py保持一致）
 # 首先移除所有代理环境变量（与测试脚本保持一致）
@@ -875,37 +909,158 @@ def _build_history_payload(stock_code: str, months: int, allow_extended: bool = 
     }
 
 
-@app.route('/api/stock/history/<stock_code>', methods=['GET'])
-def get_history_data(stock_code):
+def _safe_to_datetime(value):
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value
+    try:
+        parsed = pd.to_datetime(value)
+        if isinstance(parsed, pd.Timestamp):
+            return parsed.to_pydatetime()
+        return parsed
+    except Exception:
+        return None
+
+
+def _format_date_str(value):
+    dt_value = _safe_to_datetime(value)
+    if dt_value is None:
+        return None
+    return dt_value.strftime("%Y-%m-%d")
+
+
+def _generate_price_chart(df: pd.DataFrame):
     """
-    获取股票历史交易数据（从AKShare获取）
-    
-    Args:
-        stock_code: 股票代码，如 000001, 600000, 300474
-        months: 查询月数（默认3个月）
-    
-    Returns:
-        JSON格式的历史交易数据
+    生成股价走势图并标注关键数据，返回Base64编码的PNG图像和关键信息。
     """
     try:
-        months = int(request.args.get('months', 3))
-        print(f"[{datetime.now()}] 请求股票历史数据: {stock_code}, 月数: {months}")
+        if not MATPLOTLIB_AVAILABLE or plt is None or mdates is None or MaxNLocator is None:
+            return None, None
 
-        result = _build_history_payload(stock_code, months)
+        if df is None or df.empty or len(df) < 2:
+            return None, None
 
-        print(f"[{datetime.now()}] ✅ 成功获取 {result['totalRecords']} 条历史数据: {stock_code} (使用方法: {result['method']})")
-        return jsonify({'success': True, 'data': result})
-        
-    except Exception as e:
-        error_msg = str(e)
-        error_trace = traceback.format_exc()
-        print(f"[{datetime.now()}] ❌ 获取历史数据失败: {error_msg}")
-        print(error_trace)
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'trace': error_trace
-        }), 500
+        plot_df = df.copy()
+        plot_df['tradeDate'] = pd.to_datetime(plot_df['tradeDate'])
+        plot_df = plot_df.dropna(subset=['tradeDate', 'close'])
+
+        if plot_df.empty:
+            return None, None
+
+        fig, ax = plt.subplots(figsize=(10, 4.5))
+
+        # 绘制收盘价
+        ax.plot(plot_df['tradeDate'], plot_df['close'], label='收盘价', color='#1f77b4', linewidth=2)
+
+        # 绘制移动平均线
+        ma_colors = {
+            'MA5': '#ff7f0e',
+            'MA10': '#2ca02c',
+            'MA20': '#9467bd',
+            'MA60': '#8c564b'
+        }
+        for ma_key, color in ma_colors.items():
+            if ma_key in plot_df.columns and plot_df[ma_key].notna().any():
+                ax.plot(plot_df['tradeDate'], plot_df[ma_key], label=ma_key, linewidth=1.5, alpha=0.85, color=color)
+
+        # 关键点
+        highlights = {}
+
+        def _add_point(row, label, color, offset):
+            trade_dt = _safe_to_datetime(row['tradeDate'])
+            price = float(row.get('close') if label == '当前价' else row.get('high') if '高' in label else row.get('low'))
+            if trade_dt is None or price is None:
+                return
+            ax.scatter(trade_dt, price, color=color, s=55, zorder=5)
+            annotation = f"{label} {price:.2f}"
+            ax.annotate(
+                annotation,
+                xy=(trade_dt, price),
+                xytext=offset,
+                textcoords='offset points',
+                fontsize=9,
+                fontweight='bold',
+                color=color,
+                arrowprops=dict(arrowstyle="->", color=color, lw=1.1, alpha=0.8),
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, lw=0.8, alpha=0.8)
+            )
+
+        # 最高价
+        if 'high' in plot_df.columns and plot_df['high'].notna().any():
+            high_idx = plot_df['high'].idxmax()
+            high_row = plot_df.loc[high_idx]
+            _add_point(high_row, '最高价', '#d62728', (10, 25))
+            highlights['highest'] = {
+                'date': _format_date_str(high_row['tradeDate']),
+                'price': float(high_row['high'])
+            }
+
+        # 最低价
+        if 'low' in plot_df.columns and plot_df['low'].notna().any():
+            low_idx = plot_df['low'].idxmin()
+            low_row = plot_df.loc[low_idx]
+            _add_point(low_row, '最低价', '#17becf', (10, -35))
+            highlights['lowest'] = {
+                'date': _format_date_str(low_row['tradeDate']),
+                'price': float(low_row['low'])
+            }
+
+        # 当前价（最新收盘价）
+        latest_row = plot_df.iloc[-1]
+        _add_point(latest_row, '当前价', '#2ca02c', (-80, -25))
+        highlights['latest'] = {
+            'date': _format_date_str(latest_row['tradeDate']),
+            'price': float(latest_row['close'])
+        }
+
+        # 记录移动平均线值
+        ma_values = {}
+        for ma_key in ['MA5', 'MA10', 'MA20', 'MA60']:
+            if ma_key in plot_df.columns:
+                ma_val = plot_df[ma_key].iloc[-1]
+                if pd.notna(ma_val):
+                    ma_values[ma_key] = float(ma_val)
+        if ma_values:
+            highlights['movingAverages'] = ma_values
+
+        # 图形美化
+        ax.set_title('股价走势（含主要均线）', fontsize=12, fontweight='bold')
+        ax.set_xlabel('日期')
+        ax.set_ylabel('价格（元）')
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+        fig.autofmt_xdate()
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune='both'))
+        ax.grid(True, linestyle='--', alpha=0.3)
+        ax.legend(loc='upper left', ncol=2, fontsize=9)
+        ax.set_xlim(plot_df['tradeDate'].iloc[0], plot_df['tradeDate'].iloc[-1])
+
+        # 收益区间
+        start_price = float(plot_df['close'].iloc[0])
+        end_price = float(plot_df['close'].iloc[-1])
+        change_pct = (end_price - start_price) / start_price * 100 if start_price != 0 else 0
+        highlights['period'] = {
+            'startDate': _format_date_str(plot_df['tradeDate'].iloc[0]),
+            'endDate': _format_date_str(plot_df['tradeDate'].iloc[-1]),
+            'startPrice': start_price,
+            'endPrice': end_price,
+            'changePercent': round(change_pct, 2)
+        }
+
+        buf = io.BytesIO()
+        fig.tight_layout()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        buf.close()
+
+        return img_base64, highlights
+    except Exception as chart_error:
+        print(f"[{datetime.now()}] ⚠️ 生成股价走势图失败: {chart_error}")
+        return None, None
+
 
 @app.route('/api/stock/analyze/<stock_code>', methods=['GET'])
 def analyze_stock_data(stock_code):
@@ -1132,9 +1287,21 @@ def analyze_stock_data(stock_code):
             'momentum': 'strong' if abs(price_change_pct) > 10 else 'moderate',
             'volatilityTrend': 'high' if volatility > 5 else 'low'
         }
+
+        chart_image, chart_highlights = _generate_price_chart(
+            df[['tradeDate', 'close', 'high', 'low', 'MA5', 'MA10', 'MA20', 'MA60']].copy()
+        )
+        if chart_image:
+            analysis_result['chart'] = {
+                'imageBase64': chart_image,
+                'contentType': 'image/png',
+                'highlights': chart_highlights
+            }
         
         # 7. 生成洞察
         insights = []
+        if chart_image:
+            insights.append("已生成股价走势图，标注最高、最低与当前价等关键点位供参考。")
         
         # 价格趋势洞察
         price_trend = analysis_result['trends'].get('priceTrend', 'unknown')
@@ -2012,7 +2179,6 @@ if __name__ == '__main__':
     print("  GET  /api/stock/fundamental/<stock_code> - 获取单个股票基本面")
     print("  GET  /api/stock/industry/<stock_code> - 获取股票行业详情")
     print("  GET  /api/stock/hot-rank - 获取个股人气榜最新排名")
-    print("  GET  /api/stock/history/<stock_code>?months=3 - 获取历史交易数据（AKShare）")
     print("  GET  /api/stock/analyze/<stock_code>?months=3 - 大数据分析（技术指标+趋势）")
     print("  POST /api/stock/batch - 批量获取基本面")
     print("=" * 50)

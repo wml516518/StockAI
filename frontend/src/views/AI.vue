@@ -35,6 +35,15 @@
               <span v-if="stockInfo" class="stock-info">（{{ stockInfo.name }}，当前价：{{ stockInfo.currentPrice?.toFixed(2) || 'N/A' }}）</span>
             </div>
           </div>
+          <div v-if="chartImageSrc" class="chart-section">
+            <h5>技术面图表</h5>
+            <img :src="chartImageSrc" alt="股价走势图" class="chart-image" />
+            <ul v-if="chartHighlights.length" class="chart-highlights">
+              <li v-for="item in chartHighlights" :key="item.label">
+                <strong>{{ item.label }}：</strong>{{ item.value }}
+              </li>
+            </ul>
+          </div>
           <div class="analysis-content">{{ result }}</div>
         </div>
       </div>
@@ -43,7 +52,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onActivated, watch } from 'vue'
+import { ref, onMounted, onActivated, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../services/api'
 import { stockService } from '../services/stockService'
@@ -59,6 +68,83 @@ const stockInfo = ref(null)
 const isCached = ref(false)
 const hasAnalyzed = ref(false) // 标记是否已经分析过（防止重复调用）
 const lastAnalyzedStockCode = ref('') // 记录上次分析的股票代码
+const technicalChart = ref(null)
+
+const chartImageSrc = computed(() => {
+  if (!technicalChart.value?.imageBase64) {
+    return ''
+  }
+  const contentType = technicalChart.value.contentType || 'image/png'
+  return `data:${contentType};base64,${technicalChart.value.imageBase64}`
+})
+
+const formatNumber = (value, digits = 2) => {
+  const num = Number(value)
+  if (!isFinite(num)) {
+    return 'N/A'
+  }
+  return num.toFixed(digits)
+}
+
+const formatPercent = (value, digits = 2) => {
+  const formatted = formatNumber(value, digits)
+  return formatted === 'N/A' ? 'N/A' : `${formatted}%`
+}
+
+const chartHighlights = computed(() => {
+  const highlights = technicalChart.value?.highlights
+  if (!highlights || typeof highlights !== 'object') {
+    return []
+  }
+
+  const items = []
+
+  if (highlights.highest) {
+    const { price, date } = highlights.highest
+    items.push({
+      label: '最高价',
+      value: `${formatNumber(price)}（${date || '未知日期'}）`
+    })
+  }
+
+  if (highlights.lowest) {
+    const { price, date } = highlights.lowest
+    items.push({
+      label: '最低价',
+      value: `${formatNumber(price)}（${date || '未知日期'}）`
+    })
+  }
+
+  if (highlights.latest) {
+    const { price, date } = highlights.latest
+    items.push({
+      label: '当前价',
+      value: `${formatNumber(price)}（${date || '未知日期'}）`
+    })
+  }
+
+  if (highlights.movingAverages && typeof highlights.movingAverages === 'object') {
+    const maTexts = Object.entries(highlights.movingAverages)
+      .map(([key, value]) => `${key}: ${formatNumber(value)}`)
+      .join(' / ')
+    if (maTexts) {
+      items.push({
+        label: '均线（最新）',
+        value: maTexts
+      })
+    }
+  }
+
+  if (highlights.period) {
+    const { startDate, endDate, startPrice, endPrice, changePercent } = highlights.period
+    items.push({
+      label: '区间表现',
+      value: `${startDate || ''} → ${endDate || ''}，${formatNumber(startPrice)} → ${formatNumber(endPrice)}（${formatPercent(changePercent)}）`
+    })
+  }
+
+  return items
+})
 
 // 监听路由参数变化，当股票代码变化时自动触发分析
 watch(() => route.query.stockCode, (newStockCode, oldStockCode) => {
@@ -73,6 +159,7 @@ watch(() => route.query.stockCode, (newStockCode, oldStockCode) => {
     analysisTime.value = ''
     stockInfo.value = null
     isCached.value = false
+    technicalChart.value = null
     
     // 自动触发分析（会先检查缓存）
     if (!analyzing.value) {
@@ -232,6 +319,7 @@ const handleAnalyze = async (forceRefresh = false) => {
   analysisTime.value = ''
   stockInfo.value = null
   isCached.value = false
+  technicalChart.value = null
   
   try {
     // 先获取股票最新数据，用于获取分析日期
@@ -319,6 +407,8 @@ const handleAnalyze = async (forceRefresh = false) => {
       } else if (response.timestamp) {
         analysisTime.value = response.timestamp
       }
+
+      technicalChart.value = response.technicalChart || null
       
       console.log('AI分析结果已设置，长度:', result.value?.length || 0, '是否缓存:', isCached.value, '分析时间:', analysisTime.value)
       
@@ -328,8 +418,10 @@ const handleAnalyze = async (forceRefresh = false) => {
     } else if (typeof response === 'string') {
       // 如果后端直接返回字符串（向后兼容）
       result.value = response
+      technicalChart.value = null
     } else {
       result.value = '分析完成，但响应格式异常'
+      technicalChart.value = null
     }
   } catch (error) {
     console.error('AI分析失败:', error)
@@ -384,6 +476,7 @@ const handleAnalyze = async (forceRefresh = false) => {
     } else {
       result.value = '分析失败: ' + (error.message || '未知错误')
     }
+    technicalChart.value = null
   } finally {
     analyzing.value = false
     // 如果失败，重置分析状态，允许重试
@@ -488,6 +581,50 @@ const handleAnalyze = async (forceRefresh = false) => {
   line-height: 1.6;
   color: #333;
   word-break: break-word;
+}
+
+.chart-section {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid #d8e2ff;
+  border-radius: 6px;
+  background: #f4f7ff;
+}
+
+.chart-section h5 {
+  margin-bottom: 12px;
+  color: #1f3c88;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.chart-image {
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #e1e6f8;
+  border-radius: 4px;
+  padding: 8px;
+  box-shadow: 0 2px 6px rgba(31, 60, 136, 0.08);
+  margin-bottom: 12px;
+}
+
+.chart-highlights {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.chart-highlights li {
+  font-size: 14px;
+  color: #2f3b52;
+  margin-bottom: 6px;
+}
+
+.chart-highlights li strong {
+  color: #1f3c88;
+  font-weight: 600;
 }
 
 .btn-secondary {
