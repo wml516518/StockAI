@@ -62,9 +62,14 @@
     <!-- 分类管理 -->
     <div class="card">
       <div class="card-header">
-        <h3 style="margin: 0;">分类管理</h3>
-        <div class="category-summary" v-if="categories.length">
-          当前分类数：<span>{{ categories.length }}</span>
+        <div class="header-title">
+          <h3>分类管理</h3>
+          <div class="category-summary" v-if="categories.length">
+            当前分类数：<span>{{ categories.length }}</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-small" @click="openBatchModal">批量AI分析</button>
         </div>
       </div>
       <div v-if="categories.length === 0" class="loading">暂无分类，请先创建分类</div>
@@ -109,6 +114,141 @@
         </div>
       </div>
     </div>
+
+      <!-- 批量AI分析对话框 -->
+      <div v-if="batchModalVisible" class="modal" @click.self="closeBatchModal">
+        <div class="modal-content batch-modal">
+          <div class="modal-header">
+            <h3>批量AI分析</h3>
+            <span class="close" @click="closeBatchModal">&times;</span>
+          </div>
+          <div class="modal-body">
+            <form class="batch-form" @submit.prevent="handleBatchAnalysis">
+              <div class="form-group">
+                <label>来源方式</label>
+                <select v-model="batchForm.sourceType">
+                  <option value="category">按分类（自动选择分类的股票）</option>
+                  <option value="manual">手动输入股票代码</option>
+                </select>
+              </div>
+
+              <div v-if="batchForm.sourceType === 'category'" class="form-group">
+                <label>选择来源分类</label>
+                <select v-model="batchForm.sourceCategoryId">
+                  <option value="">选择分类...</option>
+                  <option
+                    v-for="cat in categories"
+                    :key="cat.id || cat.Id"
+                    :value="cat.id || cat.Id"
+                  >
+                    {{ cat.name || cat.Name }}
+                  </option>
+                </select>
+              </div>
+
+              <div v-else class="form-group">
+                <label>股票代码（用逗号、空格或换行分隔）</label>
+                <textarea
+                  v-model="batchForm.stockCodes"
+                  placeholder="例如：600519,000651,300750"
+                ></textarea>
+              </div>
+
+              <div class="form-group">
+                <label>目标分类（留空则自动加入「关注」分类）</label>
+                <select v-model="batchForm.targetCategoryId">
+                  <option value="">自动创建/使用「关注」分类</option>
+                  <option
+                    v-for="cat in categories"
+                    :key="`target-${cat.id || cat.Id}`"
+                    :value="cat.id || cat.Id"
+                  >
+                    {{ cat.name || cat.Name }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="batch-form-row">
+                <div class="form-group">
+                  <label>分析数量（最多50只）</label>
+                  <input type="number" v-model.number="batchForm.limit" min="1" max="50">
+                </div>
+                <div class="form-group">
+                  <label>分析类型</label>
+                  <select v-model="batchForm.analysisType">
+                    <option v-for="item in analysisTypeOptions" :key="item.value" :value="item.value">
+                      {{ item.label }}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group checkbox">
+                <label>
+                  <input type="checkbox" v-model="batchForm.forceRefresh">
+                  忽略缓存并重新分析
+                </label>
+              </div>
+
+              <div v-if="batchError" class="error-text">{{ batchError }}</div>
+
+              <div class="modal-footer">
+                <button type="submit" class="btn" :disabled="batchLoading">
+                  {{ batchLoading ? '分析中...' : '开始分析' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  @click="closeBatchModal"
+                  :disabled="batchLoading"
+                >
+                  取消
+                </button>
+              </div>
+            </form>
+
+            <div v-if="batchResults && batchResults.items && batchResults.items.length" class="batch-results">
+              <h4>分析结果</h4>
+              <table>
+                <thead>
+                  <tr>
+                    <th>股票代码</th>
+                    <th>股票名称</th>
+                    <th>评级</th>
+                    <th>操作建议</th>
+                    <th>自选状态</th>
+                    <th>分析状态</th>
+                    <th>备注</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in batchResults.items" :key="`${item.stockCode}-${item.analysisTime || ''}`">
+                    <td>{{ item.stockCode }}</td>
+                    <td>{{ item.stockName || '-' }}</td>
+                    <td>{{ item.rating || '-' }}</td>
+                    <td>{{ item.actionSuggestion || '-' }}</td>
+                    <td>
+                      <span v-if="item.addedToWatchlist" class="status-success">已加入</span>
+                      <span v-else-if="item.alreadyInWatchlist" class="status-neutral">已存在</span>
+                      <span v-else class="status-muted">未加入</span>
+                    </td>
+                    <td>
+                      <span v-if="item.analysisSucceeded" class="status-success">
+                        成功 {{ item.cached ? '(缓存)' : '' }}
+                      </span>
+                      <span v-else class="status-failed">失败</span>
+                    </td>
+                    <td>{{ item.message || '' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="batch-target-tip">
+                已加入分类：{{ batchResults.targetCategoryName }}（ID: {{ batchResults.targetCategoryId }}）
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- 自选股列表 -->
       <div class="card">
@@ -359,6 +499,117 @@ const autoRefreshEnabled = computed({
 const refreshInterval = computed(() => watchlistStore.refreshInterval)
 const stocksByCategory = computed(() => watchlistStore.stocksByCategory)
 const stockInsightsMap = computed(() => watchlistStore.stockInsights || {})
+
+const analysisTypeOptions = [
+  { value: 'comprehensive', label: '综合分析' },
+  { value: 'fundamental', label: '基本面分析' },
+  { value: 'news', label: '新闻舆论分析' },
+  { value: 'technical', label: '技术面分析' }
+]
+
+const batchModalVisible = ref(false)
+const batchForm = ref({
+  sourceType: 'category',
+  stockCodes: '',
+  sourceCategoryId: '',
+  targetCategoryId: '',
+  limit: 10,
+  analysisType: 'comprehensive',
+  forceRefresh: false
+})
+const batchResults = ref(null)
+const batchLoading = ref(false)
+const batchError = ref('')
+
+const resetBatchForm = () => {
+  const firstCategory = categories.value?.[0]
+  const defaultCategoryId = firstCategory ? (firstCategory.id || firstCategory.Id || '') : ''
+  batchForm.value = {
+    sourceType: categories.value.length ? 'category' : 'manual',
+    stockCodes: '',
+    sourceCategoryId: defaultCategoryId ? String(defaultCategoryId) : '',
+    targetCategoryId: '',
+    limit: 10,
+    analysisType: 'comprehensive',
+    forceRefresh: false
+  }
+  batchResults.value = null
+  batchError.value = ''
+}
+
+const openBatchModal = () => {
+  resetBatchForm()
+  batchModalVisible.value = true
+}
+
+const closeBatchModal = () => {
+  if (batchLoading.value) return
+  batchModalVisible.value = false
+}
+
+const handleBatchAnalysis = async () => {
+  batchError.value = ''
+  const payload = {
+    analysisType: batchForm.value.analysisType,
+    limit: Math.min(Math.max(Number(batchForm.value.limit) || 10, 1), 50),
+    forceRefresh: batchForm.value.forceRefresh
+  }
+
+  if (batchForm.value.sourceType === 'manual') {
+    const codes = (batchForm.value.stockCodes || '')
+      .split(/[\s,，,;；]+/)
+      .map(code => code.trim().toUpperCase())
+      .filter(code => code.length > 0)
+
+    if (codes.length === 0) {
+      batchError.value = '请输入至少一个股票代码'
+      return
+    }
+
+    payload.stockCodes = codes
+  } else {
+    const categoryId = Number(batchForm.value.sourceCategoryId)
+    if (!categoryId) {
+      batchError.value = '请选择来源分类'
+      return
+    }
+    payload.watchlistCategoryId = categoryId
+  }
+
+  if (batchForm.value.targetCategoryId) {
+    payload.targetCategoryId = Number(batchForm.value.targetCategoryId)
+  }
+
+  try {
+    batchLoading.value = true
+    const response = await watchlistStore.batchAnalyzeStocks(payload)
+    batchResults.value = response
+    batchError.value = ''
+  } catch (error) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : error?.message || error?.error || '批量分析失败，请稍后重试'
+    batchError.value = message
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+watch(categories, (newCategories) => {
+  if (!batchModalVisible.value) {
+    return
+  }
+
+  if (batchForm.value.sourceType === 'category') {
+    const exists = newCategories?.some(cat => (cat.id || cat.Id || '').toString() === batchForm.value.sourceCategoryId)
+    if (!exists) {
+      const firstCategory = newCategories?.[0]
+      const defaultCategoryId = firstCategory ? (firstCategory.id || firstCategory.Id || '') : ''
+      batchForm.value.sourceCategoryId = defaultCategoryId ? String(defaultCategoryId) : ''
+    }
+  }
+})
 
 const categoryGroupRefs = ref({})
 const highlightedCategoryKey = ref(null)
@@ -1037,6 +1288,29 @@ const getStockLow = (stock) => {
   padding: 30px;
 }
 
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.header-title h3 {
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .stock-cards {
   margin-top: 20px;
 }
@@ -1620,6 +1894,106 @@ const getStockLow = (stock) => {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+}
+
+.batch-modal {
+  max-width: 760px;
+  width: 92%;
+}
+
+.batch-form .form-group {
+  margin-bottom: 16px;
+}
+
+.batch-form select,
+.batch-form input[type="number"],
+.batch-form textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.batch-form textarea {
+  min-height: 120px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.batch-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.batch-form-row .form-group {
+  flex: 1 1 200px;
+  margin-bottom: 0;
+}
+
+.batch-form .checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.error-text {
+  color: #d32f2f;
+  font-size: 0.9em;
+  margin-bottom: 12px;
+}
+
+.batch-results {
+  margin-top: 20px;
+}
+
+.batch-results table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+}
+
+.batch-results th,
+.batch-results td {
+  padding: 8px 10px;
+  border: 1px solid #e0e0e0;
+  text-align: left;
+}
+
+.batch-results th {
+  background: #f4f6ff;
+  color: #324155;
+  font-weight: 600;
+}
+
+.status-success {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.status-failed {
+  color: #c62828;
+  font-weight: 600;
+}
+
+.status-neutral {
+  color: #1f3c88;
+  font-weight: 600;
+}
+
+.status-muted {
+  color: #6b7280;
+}
+
+.batch-target-tip {
+  margin-top: 12px;
+  font-size: 0.9em;
+  color: #5f6c7b;
 }
 
 @media (max-width: 768px) {

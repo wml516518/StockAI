@@ -142,12 +142,46 @@
               第 <strong>{{ currentPage }}</strong> / <strong>{{ totalPages }}</strong> 页，每页 <strong>{{ pageSize }}</strong> 条
             </span>
           </div>
+
+          <div class="bulk-actions">
+            <label class="bulk-checkbox">
+              <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll">
+              全选
+            </label>
+            <span class="bulk-summary">已选 {{ selectedCount }} / {{ results.length }}</span>
+            <select v-model="bulkCategoryId" class="bulk-select">
+              <option value="">选择目标分类</option>
+              <option
+                v-for="cat in watchlistCategories"
+                :key="cat.id || cat.Id"
+                :value="cat.id || cat.Id"
+              >
+                {{ cat.name || cat.Name }}
+              </option>
+            </select>
+            <button
+              class="btn btn-small"
+              @click="handleBulkAddToWatchlist"
+              :disabled="selectedCount === 0 || bulkAdding || !bulkCategoryId"
+            >
+              {{ bulkAdding ? '加入中...' : '批量加入自选' }}
+            </button>
+            <span class="bulk-message" v-if="bulkMessage">{{ bulkMessage }}</span>
+          </div>
           
           <!-- 结果表格 -->
           <div class="results-table">
             <table>
               <thead>
                 <tr>
+                  <th style="width: 48px;">
+                    <input
+                      type="checkbox"
+                      :checked="isAllSelected"
+                      @change="toggleSelectAll"
+                      aria-label="全选"
+                    >
+                  </th>
                   <th>股票代码</th>
                   <th>股票名称</th>
                   <th>当前价</th>
@@ -160,6 +194,14 @@
               </thead>
               <tbody>
                 <tr v-for="stock in results" :key="stock.code">
+                  <td>
+                    <input
+                      type="checkbox"
+                      :checked="isSelected(stock.code)"
+                      @change="event => toggleSelectStock(event, stock.code)"
+                      aria-label="选择股票"
+                    >
+                  </td>
                   <td>{{ stock.code }}</td>
                   <td>{{ stock.name || '-' }}</td>
                   <td>{{ formatPrice(stock.currentPrice) }}</td>
@@ -251,9 +293,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onActivated } from 'vue'
+import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import api from '../services/api'
 import { screenTemplateService } from '../services/screenTemplateService'
+import { useWatchlistStore } from '../stores/watchlist'
 
 const loading = ref(false)
 const results = ref([])
@@ -298,12 +341,30 @@ const templateForm = ref({
   isDefault: false
 })
 
+const selectedStockCodes = ref([])
+const bulkCategoryId = ref('')
+const bulkAdding = ref(false)
+const bulkMessage = ref('')
+
+const watchlistStore = useWatchlistStore()
+const watchlistCategories = computed(() => watchlistStore.categories || [])
+
+const selectedCount = computed(() => selectedStockCodes.value.length)
+const isAllSelected = computed(() => {
+  if (!results.value.length) return false
+  return selectedStockCodes.value.length === results.value.length
+})
+
 onMounted(async () => {
   await loadTemplates()
+  await watchlistStore.fetchCategories()
+  initBulkCategory()
 })
 
 onActivated(async () => {
   await loadTemplates()
+  await watchlistStore.fetchCategories()
+  initBulkCategory()
 })
 
 const loadTemplates = async () => {
@@ -592,6 +653,97 @@ const getPriceClass = (value) => {
   if (!value) return ''
   return value > 0 ? 'price-up' : value < 0 ? 'price-down' : ''
 }
+
+const toggleSelectAll = (event) => {
+  const checked = event.target.checked
+  if (!checked) {
+    selectedStockCodes.value = []
+    return
+  }
+  selectedStockCodes.value = results.value.map(stock => stock.code)
+}
+
+const toggleSelectStock = (event, stockCode) => {
+  const checked = event.target.checked
+  if (checked) {
+    if (!selectedStockCodes.value.includes(stockCode)) {
+      selectedStockCodes.value = [...selectedStockCodes.value, stockCode]
+    }
+  } else {
+    selectedStockCodes.value = selectedStockCodes.value.filter(code => code !== stockCode)
+  }
+}
+
+const isSelected = (stockCode) => selectedStockCodes.value.includes(stockCode)
+
+const initBulkCategory = () => {
+  if (watchlistCategories.value.length === 0) {
+    bulkCategoryId.value = ''
+    return
+  }
+  const existing = watchlistCategories.value.find(cat => (cat.id || cat.Id || '').toString() === bulkCategoryId.value)
+  if (!existing) {
+    const first = watchlistCategories.value[0]
+    bulkCategoryId.value = first ? String(first.id || first.Id || '') : ''
+  }
+}
+
+const handleBulkAddToWatchlist = async () => {
+  if (selectedStockCodes.value.length === 0) {
+    alert('请先勾选需要加入自选的股票')
+    return
+  }
+  if (!bulkCategoryId.value) {
+    alert('请选择目标分类')
+    return
+  }
+
+  const categoryId = Number(bulkCategoryId.value)
+  bulkAdding.value = true
+  bulkMessage.value = ''
+
+  let successCount = 0
+  const failureMessages = []
+
+  for (const code of selectedStockCodes.value) {
+    try {
+      await watchlistStore.addStock(code, categoryId)
+      successCount++
+    } catch (error) {
+      const message =
+        error?.response?.data ||
+        error?.message ||
+        '加入自选失败'
+      failureMessages.push(`${code}: ${message}`)
+    }
+  }
+
+  if (successCount > 0) {
+    await watchlistStore.fetchWatchlist()
+  }
+
+  const summary = []
+  summary.push(`成功加入 ${successCount} 只股票`)
+  if (failureMessages.length) {
+    summary.push(`失败 ${failureMessages.length} 只`)
+  }
+  bulkMessage.value = summary.join('，')
+
+  if (failureMessages.length) {
+    console.warn('批量加入自选失败详情:', failureMessages)
+  }
+
+  bulkAdding.value = false
+}
+
+watch(results, () => {
+  selectedStockCodes.value = []
+  bulkMessage.value = ''
+})
+
+watch(watchlistCategories, () => {
+  initBulkCategory()
+})
 </script>
 
 <style scoped>
@@ -634,6 +786,11 @@ table {
   border-collapse: collapse;
 }
 
+table th:first-child,
+table td:first-child {
+  text-align: center;
+}
+
 table th,
 table td {
   padding: 12px;
@@ -657,6 +814,44 @@ table tr:hover {
 
 .price-down {
   color: #4caf50;
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #f4f6ff;
+  border: 1px solid #d8defd;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.bulk-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.bulk-summary {
+  color: #374151;
+  font-size: 0.9em;
+}
+
+.bulk-select {
+  min-width: 160px;
+  padding: 6px 10px;
+  border: 1px solid #d0d7ff;
+  border-radius: 4px;
+  font-size: 0.9em;
+  background: #fff;
+}
+
+.bulk-message {
+  font-size: 0.9em;
+  color: #2563eb;
 }
 
 .modal {
@@ -823,6 +1018,11 @@ table tr:hover {
     padding: 15px;
   }
   
+  .bulk-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .form-grid {
     grid-template-columns: 1fr;
   }

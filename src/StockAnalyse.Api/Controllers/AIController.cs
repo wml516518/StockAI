@@ -20,6 +20,7 @@ public class AIController : ControllerBase
     private readonly ILogger<AIController> _logger;
     private readonly HttpClient _httpClient;
     private readonly IMemoryCache _cache;
+    private readonly IWatchlistService _watchlistService;
 
     private sealed class IndustryInfoResult
     {
@@ -29,15 +30,150 @@ public class AIController : ControllerBase
         public List<string> Keywords { get; set; } = new();
     }
 
-    public AIController(IAIService aiService, IStockDataService stockDataService, INewsService newsService, ILogger<AIController> logger, IHttpClientFactory httpClientFactory, IMemoryCache cache)
+    public AIController(
+        IAIService aiService,
+        IStockDataService stockDataService,
+        INewsService newsService,
+        IWatchlistService watchlistService,
+        ILogger<AIController> logger,
+        IHttpClientFactory httpClientFactory,
+        IMemoryCache cache)
     {
         _aiService = aiService;
         _stockDataService = stockDataService;
         _newsService = newsService;
+        _watchlistService = watchlistService;
         _logger = logger;
         _httpClient = httpClientFactory.CreateClient();
         _httpClient.Timeout = TimeSpan.FromSeconds(60);
         _cache = cache;
+    }
+
+    /// <summary>
+    /// 批量分析股票并自动加入关注分类
+    /// </summary>
+    [HttpPost("analyze/batch")]
+    public async Task<ActionResult<BatchAnalyzeResponse>> AnalyzeStockBatch([FromBody] BatchAnalyzeRequest request)
+    {
+        if (request == null)
+        {
+            return BadRequest(new { message = "请求参数不能为空" });
+        }
+
+        var analysisType = string.IsNullOrWhiteSpace(request.AnalysisType)
+            ? "comprehensive"
+            : request.AnalysisType!.Trim().ToLowerInvariant();
+
+        var stockCodes = new List<string>();
+
+        if (request.StockCodes != null && request.StockCodes.Count > 0)
+        {
+            stockCodes.AddRange(request.StockCodes
+                .Where(code => !string.IsNullOrWhiteSpace(code))
+                .Select(code => NormalizeStockCode(code)));
+        }
+        else if (request.WatchlistCategoryId.HasValue)
+        {
+            var sourceStocks = await _watchlistService.GetWatchlistByCategoryAsync(request.WatchlistCategoryId.Value);
+            stockCodes.AddRange(sourceStocks
+                .Where(s => !string.IsNullOrWhiteSpace(s.StockCode))
+                .Select(s => NormalizeStockCode(s.StockCode)));
+        }
+
+        stockCodes = stockCodes
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (stockCodes.Count == 0)
+        {
+            return BadRequest(new { message = "未提供有效的股票代码列表" });
+        }
+
+        var limit = request.Limit.HasValue && request.Limit.Value > 0
+            ? Math.Min(request.Limit.Value, 50)
+            : 10;
+
+        stockCodes = stockCodes.Take(limit).ToList();
+
+        WatchlistCategory targetCategory;
+        try
+        {
+            targetCategory = await EnsureTargetCategoryAsync(request.TargetCategoryId, request.TargetCategoryName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "确保目标分类失败");
+            return BadRequest(new { message = $"目标分类无效: {ex.Message}" });
+        }
+
+        var response = new BatchAnalyzeResponse
+        {
+            TargetCategoryId = targetCategory.Id,
+            TargetCategoryName = targetCategory.Name
+        };
+
+        foreach (var code in stockCodes)
+        {
+            var item = new BatchAnalyzeItem
+            {
+                StockCode = code
+            };
+
+            try
+            {
+                var stock = await _stockDataService.GetRealTimeQuoteAsync(code);
+                item.StockName = stock?.Name ?? string.Empty;
+
+                var analysisActionResult = await AnalyzeStock(code, new AnalyzeRequest
+                {
+                    AnalysisType = analysisType,
+                    ForceRefresh = request.ForceRefresh
+                });
+
+                var (analysisSucceeded, rating, suggestion, cached, analysisTime, errorMessage) =
+                    ExtractAnalysisSummary(analysisActionResult);
+
+                item.AnalysisSucceeded = analysisSucceeded;
+                item.Rating = rating;
+                item.ActionSuggestion = suggestion;
+                item.Cached = cached;
+                item.AnalysisTime = analysisTime;
+
+                if (!analysisSucceeded)
+                {
+                    item.Message = errorMessage ?? "AI分析失败";
+                    response.Items.Add(item);
+                    continue;
+                }
+
+                try
+                {
+                    await _watchlistService.AddToWatchlistAsync(code, targetCategory.Id);
+                    item.AddedToWatchlist = true;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    item.AlreadyInWatchlist = true;
+                    item.Message = ex.Message;
+                    _logger.LogInformation("批量分析添加自选提示: {Message}", ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    item.Message = $"添加自选股失败: {ex.Message}";
+                    _logger.LogWarning(ex, "批量分析中添加自选股失败: {Code}", code);
+                }
+            }
+            catch (Exception ex)
+            {
+                item.Message = $"处理失败: {ex.Message}";
+                _logger.LogWarning(ex, "批量分析处理股票失败: {Code}", code);
+            }
+
+            response.Items.Add(item);
+        }
+
+        return Ok(response);
     }
 
     /// <summary>
@@ -1948,6 +2084,82 @@ public class AIController : ControllerBase
         return result;
     }
 
+    private static string NormalizeStockCode(string? stockCode)
+    {
+        return string.IsNullOrWhiteSpace(stockCode)
+            ? string.Empty
+            : stockCode.Trim().ToUpperInvariant();
+    }
+
+    private (bool success, string? rating, string? suggestion, bool cached, string? analysisTime, string? errorMessage) ExtractAnalysisSummary(ActionResult<string> actionResult)
+    {
+        if (actionResult.Result is ObjectResult objectResult)
+        {
+            var statusCode = objectResult.StatusCode ?? 200;
+            if (statusCode >= 400)
+            {
+                var error = objectResult.Value?.ToString() ?? $"HTTP {statusCode}";
+                return (false, null, null, false, null, error);
+            }
+
+            if (objectResult.Value != null)
+            {
+                JObject payload = objectResult.Value is JObject jObject
+                    ? jObject
+                    : JObject.FromObject(objectResult.Value);
+
+                var successFlag = payload["success"]?.Value<bool?>() ?? true;
+                var rating = payload["rating"]?.ToString();
+                var suggestion = payload["actionSuggestion"]?.ToString();
+                var cached = payload["cached"]?.Value<bool?>() ?? false;
+                var analysisTime = payload["analysisTime"]?.ToString() ?? payload["timestamp"]?.ToString();
+                var message = payload["message"]?.ToString();
+
+                return (successFlag, rating, suggestion, cached, analysisTime, successFlag ? null : message);
+            }
+
+            return (true, null, null, false, null, null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(actionResult.Value))
+        {
+            return (true, null, null, false, null, null);
+        }
+
+        return (false, null, null, false, null, "AI分析返回空结果");
+    }
+
+    private async Task<WatchlistCategory> EnsureTargetCategoryAsync(int? targetCategoryId, string? targetCategoryName)
+    {
+        var categories = await _watchlistService.GetCategoriesAsync();
+
+        if (targetCategoryId.HasValue)
+        {
+            var category = categories.FirstOrDefault(c => c.Id == targetCategoryId.Value);
+            if (category == null)
+            {
+                throw new InvalidOperationException($"未找到ID为 {targetCategoryId.Value} 的自选股分类");
+            }
+            return category;
+        }
+
+        var desiredName = string.IsNullOrWhiteSpace(targetCategoryName)
+            ? "关注"
+            : targetCategoryName.Trim();
+
+        var existing = categories.FirstOrDefault(c =>
+            string.Equals(c.Name, desiredName, StringComparison.OrdinalIgnoreCase));
+
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var color = "#f97316";
+        var description = "批量AI分析自动创建的关注分类";
+        return await _watchlistService.CreateCategoryAsync(desiredName, description, color);
+    }
+
 }
 
 public class ChatRequest
@@ -1979,5 +2191,37 @@ public class CachedAnalysisResult
     public string? TechnicalChartHighlights { get; set; }
     public string? Rating { get; set; }
     public string? ActionSuggestion { get; set; }
+}
+
+public class BatchAnalyzeRequest
+{
+    public List<string>? StockCodes { get; set; }
+    public int? WatchlistCategoryId { get; set; }
+    public int? TargetCategoryId { get; set; }
+    public string? TargetCategoryName { get; set; }
+    public int? Limit { get; set; }
+    public string? AnalysisType { get; set; }
+    public bool ForceRefresh { get; set; } = false;
+}
+
+public class BatchAnalyzeResponse
+{
+    public List<BatchAnalyzeItem> Items { get; set; } = new();
+    public int TargetCategoryId { get; set; }
+    public string TargetCategoryName { get; set; } = string.Empty;
+}
+
+public class BatchAnalyzeItem
+{
+    public string StockCode { get; set; } = string.Empty;
+    public string StockName { get; set; } = string.Empty;
+    public string? Rating { get; set; }
+    public string? ActionSuggestion { get; set; }
+    public bool AnalysisSucceeded { get; set; }
+    public bool Cached { get; set; }
+    public string? AnalysisTime { get; set; }
+    public bool AddedToWatchlist { get; set; }
+    public bool AlreadyInWatchlist { get; set; }
+    public string? Message { get; set; }
 }
 

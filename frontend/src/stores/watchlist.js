@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { watchlistService } from '../services/watchlistService'
 import { stockService } from '../services/stockService'
 import { isTradingTime } from '../utils/tradingTime'
+import api from '../services/api'
 
 export const useWatchlistStore = defineStore('watchlist', () => {
   const INSIGHTS_STORAGE_KEY = 'ai_stock_insights'
@@ -472,6 +473,58 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     }
   }
 
+  async function batchAnalyzeStocks(options = {}) {
+    const payload = {}
+
+    if (Array.isArray(options.stockCodes) && options.stockCodes.length > 0) {
+      payload.stockCodes = options.stockCodes
+    }
+
+    if (options.watchlistCategoryId) {
+      payload.watchlistCategoryId = options.watchlistCategoryId
+    }
+
+    if (options.targetCategoryId) {
+      payload.targetCategoryId = options.targetCategoryId
+    }
+
+    if (options.targetCategoryName) {
+      payload.targetCategoryName = options.targetCategoryName
+    }
+
+    if (options.limit) {
+      payload.limit = options.limit
+    }
+
+    if (options.analysisType) {
+      payload.analysisType = options.analysisType
+    }
+
+    if (options.forceRefresh) {
+      payload.forceRefresh = options.forceRefresh
+    }
+
+    try {
+      const response = await api.post('/ai/analyze/batch', payload)
+
+      if (response?.items?.length) {
+        response.items.forEach(item => {
+          if (item?.stockCode && item.analysisSucceeded) {
+            setStockRecommendation(item.stockCode, item.rating, item.actionSuggestion)
+          }
+        })
+      }
+
+      await fetchWatchlist()
+      await fetchCategories()
+
+      return response
+    } catch (error) {
+      console.error('批量AI分析失败:', error)
+      throw (error?.response?.data ?? error)
+    }
+  }
+
   return {
     stocks,
     categories,
@@ -490,7 +543,8 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     updateCategory,
     updateSuggestedPrice,
     refreshPrices,
-    setStockRecommendation
+    setStockRecommendation,
+    batchAnalyzeStocks
   }
 })
 
