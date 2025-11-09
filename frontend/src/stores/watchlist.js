@@ -5,12 +5,62 @@ import { stockService } from '../services/stockService'
 import { isTradingTime } from '../utils/tradingTime'
 
 export const useWatchlistStore = defineStore('watchlist', () => {
+  const INSIGHTS_STORAGE_KEY = 'ai_stock_insights'
+  const INSIGHTS_TTL_MS = 2 * 24 * 60 * 60 * 1000 // 2 days
+
+  const readStoredInsights = () => {
+    if (typeof window === 'undefined' || !window?.localStorage) {
+      return {}
+    }
+    try {
+      const raw = window.localStorage.getItem(INSIGHTS_STORAGE_KEY)
+      if (!raw) {
+        return {}
+      }
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') {
+        return {}
+      }
+      const now = Date.now()
+      const valid = {}
+      Object.entries(parsed).forEach(([code, insight]) => {
+        if (!insight || typeof insight !== 'object') {
+          return
+        }
+        const updatedAtMs = insight.updatedAt ? new Date(insight.updatedAt).getTime() : NaN
+        if (Number.isNaN(updatedAtMs) || now - updatedAtMs > INSIGHTS_TTL_MS) {
+          return
+        }
+        valid[code] = {
+          rating: insight.rating ?? null,
+          actionSuggestion: insight.actionSuggestion ?? null,
+          updatedAt: new Date(updatedAtMs).toISOString()
+        }
+      })
+      return valid
+    } catch (error) {
+      console.warn('[watchlist] 读取AI分析缓存失败:', error)
+      return {}
+    }
+  }
+
+  const persistInsights = (insights) => {
+    if (typeof window === 'undefined' || !window?.localStorage) {
+      return
+    }
+    try {
+      window.localStorage.setItem(INSIGHTS_STORAGE_KEY, JSON.stringify(insights))
+    } catch (error) {
+      console.warn('[watchlist] 写入AI分析缓存失败:', error)
+    }
+  }
+
   const stocks = ref([])
   const categories = ref([])
   const loading = ref(false)
   const autoRefreshEnabled = ref(true)
   const refreshInterval = ref(3)
-  const stockInsights = ref({})
+  const stockInsights = ref(readStoredInsights())
 
   const normalizeStockCode = (code) => {
     if (!code) return ''
@@ -252,13 +302,16 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     const normalizedSuggestion = actionSuggestion ? actionSuggestion.trim() : null
 
     if (normalizedRating || normalizedSuggestion) {
-      stockInsights.value[code] = {
+      const updatedInsight = {
         rating: normalizedRating,
         actionSuggestion: normalizedSuggestion,
         updatedAt: new Date().toISOString()
       }
+      stockInsights.value[code] = updatedInsight
+      persistInsights(stockInsights.value)
     } else {
       delete stockInsights.value[code]
+      persistInsights(stockInsights.value)
     }
 
     const target = stocks.value.find(

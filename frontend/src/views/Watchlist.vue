@@ -73,6 +73,9 @@
           v-for="category in categories"
           :key="category.id || category.Id"
           class="category-item"
+          :class="{ 'category-item--clickable': canNavigateToCategory(category) }"
+          :title="canNavigateToCategory(category) ? '查看该分类下的股票' : '该分类暂无股票'"
+          @click="handleCategoryClick(category)"
         >
           <div class="category-info">
             <span
@@ -82,7 +85,10 @@
             <div class="category-text">
               <div class="category-name-line">
                 <span class="category-name">{{ category.name || category.Name }}</span>
-                <span class="category-count">股票数：{{ categoryCounts[category.id || category.Id] || 0 }}</span>
+                <span class="category-stocks-preview" v-if="getCategoryStockNames(category).length">
+                  {{ getCategoryStockNames(category).join('、') }}
+                </span>
+                <span class="category-count">股票数：{{ getCategoryCount(category) }}</span>
               </div>
               <div
                 class="category-description"
@@ -94,7 +100,7 @@
           </div>
           <button
             class="btn btn-small btn-danger"
-            @click="handleDeleteCategory(category)"
+            @click.stop="handleDeleteCategory(category)"
             :disabled="deletingCategoryId === (category.id || category.Id)"
             title="删除分类"
           >
@@ -122,7 +128,13 @@
         <div v-if="loading" class="loading">加载中...</div>
         <div v-else-if="stocks.length === 0" class="loading">暂无自选股</div>
         <div v-else class="stock-cards">
-          <div v-for="(categoryStocks, categoryName) in stocksByCategory" :key="categoryName" class="category-group">
+          <div
+            v-for="(categoryStocks, categoryName) in stocksByCategory"
+            :key="categoryName"
+            class="category-group"
+            :class="{ 'category-group--highlight': isGroupHighlighted(categoryStocks, categoryName) }"
+            :ref="el => registerCategoryGroup(getCategoryGroupKeysFromStocks(categoryStocks, categoryName), el)"
+          >
             <h4 class="category-title" :style="{ color: getCategoryColor(categoryName) }">
               {{ categoryName }}
             </h4>
@@ -326,7 +338,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, onActivated, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, onActivated, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { useAiAnalysisStore } from '../stores/aiAnalysis'
@@ -348,6 +360,28 @@ const refreshInterval = computed(() => watchlistStore.refreshInterval)
 const stocksByCategory = computed(() => watchlistStore.stocksByCategory)
 const stockInsightsMap = computed(() => watchlistStore.stockInsights || {})
 
+const categoryGroupRefs = ref({})
+const highlightedCategoryKey = ref(null)
+let highlightTimer = null
+const UNCATEGORIZED_KEY = 'uncategorized'
+
+const getCategoryName = (category) => {
+  return category?.name || category?.Name || '未分类'
+}
+
+const getRawCategoryId = (category) => {
+  const id = category?.id ?? category?.Id
+  return id === undefined || id === null ? null : id
+}
+
+const buildIdKey = (id) => {
+  return id === null ? null : `id:${id}`
+}
+
+const buildNameKey = (name) => {
+  return `name:${name ? name.toString() : UNCATEGORIZED_KEY}`
+}
+
 const normalizeStockCode = (code) => {
   if (!code) return ''
   return code.toString().trim().toUpperCase()
@@ -367,6 +401,153 @@ const categoryCounts = computed(() => {
   })
   return counts
 })
+
+const getCategoryCount = (category) => {
+  const id = getRawCategoryId(category)
+  if (id === null) {
+    return 0
+  }
+  return categoryCounts.value[id] ?? categoryCounts.value[String(id)] ?? 0
+}
+
+const canNavigateToCategory = (category) => {
+  return getCategoryCount(category) > 0
+}
+
+const getCategoryStockNames = (category) => {
+  const id = getRawCategoryId(category)
+  const targetName = getCategoryName(category)
+  const names = []
+
+  // Iterate stocks by matching category id or, if id is null, by matching category name fallback.
+  stocks.value.forEach(stock => {
+    const stockCategoryId =
+      stock.watchlistCategoryId ??
+      stock.category?.id ??
+      stock.Category?.id ??
+      null
+
+    const stockCategoryName =
+      stock.category?.name ??
+      stock.category?.Name ??
+      stock.Category?.name ??
+      stock.Category?.Name ??
+      '未分类'
+
+    const isSameCategory =
+      (id !== null && stockCategoryId === id) ||
+      (id === null && stockCategoryId === null && stockCategoryName === targetName)
+
+    if (isSameCategory) {
+      const stockName =
+        stock.stock?.name ||
+        stock.stock?.Name ||
+        stock.stockName ||
+        stock.stockCode ||
+        ''
+      if (stockName) {
+        names.push(stockName)
+      }
+    }
+  })
+
+  const maxNames = 6
+  if (names.length > maxNames) {
+    return [...names.slice(0, maxNames), '...']
+  }
+  return names
+}
+
+const extractCategoryIdFromStocks = (categoryStocks) => {
+  if (!Array.isArray(categoryStocks)) {
+    return null
+  }
+  for (const stock of categoryStocks) {
+    const candidate =
+      stock?.watchlistCategoryId ??
+      stock?.category?.id ??
+      stock?.Category?.id
+    if (candidate !== undefined && candidate !== null) {
+      return candidate
+    }
+  }
+  return null
+}
+
+const getCategoryGroupKeysFromStocks = (categoryStocks, categoryName) => {
+  const keys = []
+  const categoryId = extractCategoryIdFromStocks(categoryStocks)
+  const normalizedName = categoryName || '未分类'
+  const idKey = buildIdKey(categoryId)
+  if (idKey) {
+    keys.push(idKey)
+  }
+  keys.push(buildNameKey(normalizedName))
+  return Array.from(new Set(keys.filter(Boolean)))
+}
+
+const registerCategoryGroup = (keys, el) => {
+  const keyList = Array.isArray(keys) ? keys : [keys]
+  keyList.forEach((key) => {
+    if (!key) {
+      return
+    }
+    if (el) {
+      categoryGroupRefs.value[key] = el
+    } else {
+      delete categoryGroupRefs.value[key]
+    }
+  })
+}
+
+const findCategoryGroupElement = (category) => {
+  const possibleKeys = []
+  const id = getRawCategoryId(category)
+  if (id !== null) {
+    possibleKeys.push(buildIdKey(id))
+  }
+  possibleKeys.push(buildNameKey(getCategoryName(category)))
+  for (const key of possibleKeys) {
+    if (!key) continue
+    const el = categoryGroupRefs.value[key]
+    if (el) {
+      return el
+    }
+  }
+  return null
+}
+
+const getPrimaryGroupKeyForCategory = (category) => {
+  const id = getRawCategoryId(category)
+  if (id !== null) {
+    return buildIdKey(id)
+  }
+  return buildNameKey(getCategoryName(category))
+}
+
+const handleCategoryClick = async (category) => {
+  if (!canNavigateToCategory(category)) {
+    return
+  }
+  await nextTick()
+  const targetElement = findCategoryGroupElement(category)
+  if (targetElement?.scrollIntoView) {
+    targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    const key = getPrimaryGroupKeyForCategory(category)
+    highlightedCategoryKey.value = key
+    if (highlightTimer) {
+      clearTimeout(highlightTimer)
+    }
+    highlightTimer = setTimeout(() => {
+      highlightedCategoryKey.value = null
+    }, 1600)
+  }
+}
+
+const isGroupHighlighted = (categoryStocks, categoryName) => {
+  const keys = getCategoryGroupKeysFromStocks(categoryStocks, categoryName)
+  return keys.some((key) => key && key === highlightedCategoryKey.value)
+}
 
 const getStockRating = (stock) => {
   if (!stock) {
@@ -482,6 +663,10 @@ onActivated(() => {
 
 onUnmounted(() => {
   stopAutoRefresh()
+  if (highlightTimer) {
+    clearTimeout(highlightTimer)
+    highlightTimer = null
+  }
 })
 
 // 加载设置
@@ -858,6 +1043,7 @@ const getStockLow = (stock) => {
 
 .category-group {
   margin-bottom: 30px;
+  scroll-margin-top: 80px;
 }
 
 .category-title {
@@ -887,6 +1073,15 @@ const getStockLow = (stock) => {
 .stock-card:hover {
   box-shadow: 0 4px 10px rgba(0,0,0,0.15);
   transform: translateY(-2px);
+}
+
+.category-group--highlight .category-title {
+  color: #1890ff;
+}
+
+.category-group--highlight .stock-card {
+  border-color: rgba(24, 144, 255, 0.45);
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.15);
 }
 
 .stock-header {
@@ -973,6 +1168,10 @@ const getStockLow = (stock) => {
   transform: translateY(-2px);
 }
 
+.category-item--clickable {
+  cursor: pointer;
+}
+
 .category-info {
   display: flex;
   align-items: flex-start;
@@ -998,11 +1197,22 @@ const getStockLow = (stock) => {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .category-name {
   font-weight: 600;
   color: #1f2933;
+}
+
+.category-stocks-preview {
+  flex: 1 1 100%;
+  font-size: 0.85em;
+  color: #3f4a5a;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .category-count {

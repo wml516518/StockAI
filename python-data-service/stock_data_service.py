@@ -772,7 +772,23 @@ def _fetch_history_dataframe_with_fallback(stock_code: str, months: int, allow_e
         adjust_label = adjust_value if adjust_value else '无复权'
         print(f"[{datetime.now()}] 尝试{source}: {symbol}, 月数: {months_span}, 复权: {adjust_label}")
 
-    # 优先尝试 stock_zh_a_hist，涵盖前复权和后复权
+    # 优先尝试 stock_zh_a_daily（一次性获取全量日线数据，再按时间过滤）
+    try:
+        print(f"[{datetime.now()}] 尝试 stock_zh_a_daily: {symbol}")
+        df_candidate = ak.stock_zh_a_daily(symbol=symbol)
+        if df_candidate is not None and not df_candidate.empty:
+            df_filtered, _ = _filter_dataframe_by_date_range(df_candidate, target_start_date, end_date)
+            if df_filtered is not None and not df_filtered.empty:
+                return df_filtered, "stock_zh_a_daily", target_start_date, end_date
+            else:
+                print(f"[{datetime.now()}] stock_zh_a_daily 返回数据，但过滤后为空")
+        else:
+            print(f"[{datetime.now()}] stock_zh_a_daily 返回空数据")
+    except Exception as exc:
+        print(f"[{datetime.now()}] ⚠️ stock_zh_a_daily 调用失败: {str(exc)}")
+        print(traceback.format_exc()[:500])
+
+    # 如果日线接口不可用或无数据，回退到 stock_zh_a_hist，涵盖前复权和后复权
     for months_span in months_candidates:
         attempt_start = end_date - timedelta(days=months_span * 30)
         for adjust in adjust_options:
@@ -797,20 +813,6 @@ def _fetch_history_dataframe_with_fallback(stock_code: str, months: int, allow_e
             except Exception as exc:
                 print(f"[{datetime.now()}] ⚠️ stock_zh_a_hist 调用失败: {str(exc)}")
                 print(traceback.format_exc()[:500])
-
-    # 尝试日级别数据
-    try:
-        print(f"[{datetime.now()}] 尝试 stock_zh_a_daily: {symbol}")
-        df_candidate = ak.stock_zh_a_daily(symbol=symbol)
-        if df_candidate is not None and not df_candidate.empty:
-            df_filtered, _ = _filter_dataframe_by_date_range(df_candidate, target_start_date, end_date)
-            if df_filtered is not None and not df_filtered.empty:
-                return df_filtered, "stock_zh_a_daily", target_start_date, end_date
-            else:
-                print(f"[{datetime.now()}] stock_zh_a_daily 过滤后为空")
-    except Exception as exc:
-        print(f"[{datetime.now()}] ⚠️ stock_zh_a_daily 调用失败: {str(exc)}")
-        print(traceback.format_exc()[:500])
 
     # 尝试腾讯历史数据接口
     months_for_tx = months_candidates if months_candidates else [months]

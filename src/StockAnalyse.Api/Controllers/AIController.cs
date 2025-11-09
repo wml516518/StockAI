@@ -383,10 +383,11 @@ public class AIController : ControllerBase
                                         
                                         if (records != null && records.Count > 0)
                                         {
-                                            tradeDataText += $"\n**分时成交数据**（共{count}条，显示最近{Math.Min(records.Count, 20)}条）：\n";
+                                            var sampleSize = Math.Min(records.Count, 200);
+                                            tradeDataText += $"\n**分时成交数据**（共{count}条，显示最近{sampleSize}条）：\n";
                                             
-                                            // 只显示最近20条
-                                            var recentRecords = records.TakeLast(20).ToList();
+                                            // 只显示最近 sampleSize 条
+                                            var recentRecords = records.TakeLast(sampleSize).ToList();
                                             
                                             foreach (var record in recentRecords)
                                             {
@@ -1201,7 +1202,8 @@ public class AIController : ControllerBase
             // 使用MemoryCacheEntryOptions设置缓存（不设置过期时间，永久缓存）
             var cacheOptions = new MemoryCacheEntryOptions
             {
-                Priority = CacheItemPriority.NeverRemove // 设置为永不移除
+                Priority = CacheItemPriority.NeverRemove,
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(2)
             };
             _cache.Set(cacheKey, cachedResult, cacheOptions);
             
@@ -1258,7 +1260,8 @@ public class AIController : ControllerBase
                 
                 var cacheOptions = new MemoryCacheEntryOptions
                 {
-                    Priority = CacheItemPriority.NeverRemove
+                    Priority = CacheItemPriority.NeverRemove,
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(2)
                 };
                 _cache.Set(cacheKey, cachedResult, cacheOptions);
                 
