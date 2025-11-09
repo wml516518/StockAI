@@ -582,7 +582,121 @@ const handleBatchAnalysis = async () => {
 
   try {
     batchLoading.value = true
-    const response = await watchlistStore.batchAnalyzeStocks(payload)
+    const preCreatedSessions = []
+
+    const determineDisplayName = (code) => {
+      if (!code) return ''
+      const stockInWatchlist = watchlistStore.stocks.find(
+        s => normalizeStockCode(s.stockCode) === normalizeStockCode(code)
+      )
+      if (stockInWatchlist) {
+        const name =
+          stockInWatchlist.stock?.name ||
+          stockInWatchlist.stock?.Name ||
+          stockInWatchlist.stockName ||
+          stockInWatchlist.stock?.nickname ||
+          ''
+        if (name) {
+          return name
+        }
+      }
+      const stockInResults = batchResults.value?.items?.find(
+        item => normalizeStockCode(item.stockCode) === normalizeStockCode(code)
+      )
+      if (stockInResults?.stockName) {
+        return stockInResults.stockName
+      }
+      return code
+    }
+
+    const prepareSession = (code) => {
+      if (!code) return
+      const session = aiAnalysisStore.upsertSession(code, batchForm.value.analysisType, '')
+      if (session) {
+        session.analyzing = true
+        session.analysisType = batchForm.value.analysisType || session.analysisType || 'comprehensive'
+        session.result = ''
+        session.analysisTime = ''
+        session.analysisDate = ''
+        session.isCached = false
+        session.hasAnalyzed = false
+        session.lastAnalyzedStockCode = code
+        session.rating = null
+        session.actionSuggestion = null
+        session.technicalChart = null
+        const displayName = determineDisplayName(code)
+        session.displayName = displayName
+        session.stockInfo = {
+          ...(session.stockInfo || {}),
+          name: displayName || session.stockInfo?.name || ''
+        }
+        preCreatedSessions.push(session)
+      }
+    }
+
+    if (payload.stockCodes && Array.isArray(payload.stockCodes)) {
+      payload.stockCodes.forEach(code => {
+        prepareSession(code)
+      })
+    } else if (payload.watchlistCategoryId) {
+      const categoryId = Number(payload.watchlistCategoryId)
+      const categoryStocks = watchlistStore.stocks.filter(stock => {
+        const stockCategoryId =
+          stock.watchlistCategoryId ??
+          stock.category?.id ??
+          stock.Category?.id ??
+          null
+        return stockCategoryId === categoryId
+      })
+      categoryStocks.forEach(stock => {
+        prepareSession(stock.stockCode)
+      })
+    }
+
+    batchModalVisible.value = false
+    await nextTick()
+    if (preCreatedSessions.length) {
+      aiAnalysisStore.setActiveSession(preCreatedSessions[0].id)
+    }
+    router.push({ path: '/ai' })
+
+    const handleProgressUpdate = (item) => {
+      const session = aiAnalysisStore.findSessionByStockCode
+        ? aiAnalysisStore.findSessionByStockCode(item.stockCode)
+        : aiAnalysisStore.upsertSession(item.stockCode, batchForm.value.analysisType, item.stockName)
+
+      if (!session) {
+        return
+      }
+
+      session.analyzing = false
+      session.analysisType = batchForm.value.analysisType || session.analysisType || 'comprehensive'
+      session.analysisTime = item.analysisTime || session.analysisTime || ''
+      session.analysisDate = item.analysisTime || session.analysisDate || ''
+      session.isCached = item.cached ?? session.isCached
+      session.lastAnalyzedStockCode = item.stockCode
+      session.rating = item.rating ?? session.rating
+      session.actionSuggestion = item.actionSuggestion ?? session.actionSuggestion
+      session.technicalChart = item.technicalChart || null
+      session.displayName = item.stockName || session.displayName || item.stockCode
+      session.stockInfo = {
+        ...(session.stockInfo || {}),
+        name: item.stockName || session.stockInfo?.name || item.stockCode
+      }
+
+      if (item.analysisSucceeded) {
+        session.hasAnalyzed = true
+        session.result = item.analysis || session.result || ''
+      } else {
+        session.hasAnalyzed = false
+        session.result = item.message || session.result || 'AI分析失败'
+      }
+    }
+
+    const response = await watchlistStore.batchAnalyzeStocks({
+      ...payload,
+      onProgress: handleProgressUpdate
+    })
     batchResults.value = response
     batchError.value = ''
   } catch (error) {
@@ -591,6 +705,7 @@ const handleBatchAnalysis = async () => {
         ? error
         : error?.message || error?.error || '批量分析失败，请稍后重试'
     batchError.value = message
+    alert(message)
   } finally {
     batchLoading.value = false
   }

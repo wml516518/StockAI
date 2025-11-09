@@ -474,54 +474,193 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   }
 
   async function batchAnalyzeStocks(options = {}) {
-    const payload = {}
+    const normalizeCode = (code) => normalizeStockCode(code || '')
+    const analysisType = options.analysisType || 'comprehensive'
+    const forceRefresh = !!options.forceRefresh
+    const limit = Math.min(Math.max(Number(options.limit) || 10, 1), 50)
+    const concurrency = Math.min(Math.max(Number(options.concurrency) || 3, 1), 10)
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null
+
+    let collectedCodes = []
 
     if (Array.isArray(options.stockCodes) && options.stockCodes.length > 0) {
-      payload.stockCodes = options.stockCodes
-    }
-
-    if (options.watchlistCategoryId) {
-      payload.watchlistCategoryId = options.watchlistCategoryId
-    }
-
-    if (options.targetCategoryId) {
-      payload.targetCategoryId = options.targetCategoryId
-    }
-
-    if (options.targetCategoryName) {
-      payload.targetCategoryName = options.targetCategoryName
-    }
-
-    if (options.limit) {
-      payload.limit = options.limit
-    }
-
-    if (options.analysisType) {
-      payload.analysisType = options.analysisType
-    }
-
-    if (options.forceRefresh) {
-      payload.forceRefresh = options.forceRefresh
-    }
-
-    try {
-      const response = await api.post('/ai/analyze/batch', payload)
-
-      if (response?.items?.length) {
-        response.items.forEach(item => {
-          if (item?.stockCode && item.analysisSucceeded) {
-            setStockRecommendation(item.stockCode, item.rating, item.actionSuggestion)
-          }
+      collectedCodes = options.stockCodes
+    } else if (options.watchlistCategoryId) {
+      const categoryId = Number(options.watchlistCategoryId)
+      collectedCodes = stocks.value
+        .filter(stock => {
+          const stockCategoryId =
+            stock.watchlistCategoryId ??
+            stock.category?.id ??
+            stock.Category?.id ??
+            null
+          return stockCategoryId === categoryId
         })
+        .map(stock => stock.stockCode)
+    }
+
+    const uniqueCodes = Array.from(
+      new Set(
+        collectedCodes
+          .map(code => normalizeCode(code))
+          .filter(code => !!code)
+      )
+    )
+
+    if (uniqueCodes.length === 0) {
+      throw new Error('未找到需要分析的股票代码')
+    }
+
+    const limitedCodes = uniqueCodes.slice(0, limit)
+
+    const ensureTargetCategory = async () => {
+      let targetId = options.targetCategoryId ? Number(options.targetCategoryId) : null
+      let targetName = ''
+
+      if (targetId) {
+        const exists = categories.value.find(cat => (cat.id || cat.Id) === targetId)
+        if (exists) {
+          targetName = exists.name || exists.Name || ''
+          return { targetId, targetName }
+        }
       }
 
-      await fetchWatchlist()
+      const existing = categories.value.find(cat =>
+        (cat.name || cat.Name || '').trim() === '关注'
+      )
+
+      if (existing) {
+        targetId = existing.id || existing.Id
+        targetName = existing.name || existing.Name || '关注'
+        return { targetId, targetName }
+      }
+
+      await createCategory('关注', '批量AI分析自动创建', '#f97316')
       await fetchCategories()
 
-      return response
+      const createdCategory = categories.value.find(cat =>
+        (cat.name || cat.Name || '').trim() === '关注'
+      )
+
+      targetId = createdCategory?.id || createdCategory?.Id
+      targetName = createdCategory?.name || createdCategory?.Name || '关注'
+
+      return { targetId, targetName }
+    }
+
+    const { targetId, targetName } = await ensureTargetCategory()
+
+    const items = limitedCodes.map(code => ({
+      stockCode: code,
+      stockName: '',
+      rating: null,
+      actionSuggestion: null,
+      analysisSucceeded: false,
+      cached: false,
+      analysisTime: null,
+      addedToWatchlist: false,
+      alreadyInWatchlist: false,
+      message: null,
+      analysis: null,
+      technicalChart: null
+    }))
+
+    const determineDisplayName = (code) => {
+      const stock = stocks.value.find(s => normalizeCode(s.stockCode) === code)
+      if (stock) {
+        return (
+          stock.stock?.name ||
+          stock.stock?.Name ||
+          stock.stockName ||
+          stock.stock?.nickname ||
+          ''
+        )
+      }
+      return ''
+    }
+
+    let currentIndex = 0
+
+    const processStock = async (index) => {
+      const item = items[index]
+      const code = item.stockCode
+      const displayName = determineDisplayName(code)
+      if (displayName) {
+        item.stockName = displayName
+      }
+
+      try {
+        try {
+          const added = await addStock(code, targetId)
+          if (added) {
+            item.addedToWatchlist = true
+          }
+        } catch (error) {
+          const message = error?.response?.data || error?.message || ''
+          if (typeof message === 'string' && message.includes('已存在')) {
+            item.alreadyInWatchlist = true
+          } else {
+            item.message = message || '加入自选股失败'
+          }
+        }
+
+      const response = await api.post(`/ai/analyze/${code}`, {
+        analysisType,
+        forceRefresh
+      }, {
+        timeout: 600000
+      })
+
+      item.analysisSucceeded = true
+      item.cached = response?.cached ?? false
+      item.analysisTime = response?.analysisTime || response?.timestamp || null
+      item.analysis = response?.analysis || response?.result || ''
+      item.rating = response?.rating || null
+      item.actionSuggestion = response?.actionSuggestion || null
+      item.technicalChart = response?.technicalChart || null
+      item.stockName = response?.stockInfo?.name || item.stockName || code
+
+      setStockRecommendation(code, item.rating, item.actionSuggestion)
     } catch (error) {
-      console.error('批量AI分析失败:', error)
-      throw (error?.response?.data ?? error)
+        console.error('AI分析失败:', code, error)
+        item.analysisSucceeded = false
+        item.message =
+          error?.response?.data?.message ||
+          error?.response?.data?.error ||
+          error?.message ||
+          'AI分析失败'
+    } finally {
+      if (onProgress) {
+        try {
+          onProgress(item, index, items)
+        } catch (callbackError) {
+          console.warn('批量AI分析进度回调失败:', callbackError)
+        }
+      }
+      }
+    }
+
+    const worker = async () => {
+      while (true) {
+        const index = currentIndex++
+        if (index >= items.length) {
+          break
+        }
+        await processStock(index)
+      }
+    }
+
+    const workerCount = Math.min(concurrency, items.length)
+    const workers = Array.from({ length: workerCount }, () => worker())
+    await Promise.all(workers)
+
+    await fetchWatchlist()
+    await fetchCategories()
+
+    return {
+      items,
+      targetCategoryId: targetId,
+      targetCategoryName: targetName
     }
   }
 

@@ -131,7 +131,7 @@ public class AIController : ControllerBase
                     ForceRefresh = request.ForceRefresh
                 });
 
-                var (analysisSucceeded, rating, suggestion, cached, analysisTime, errorMessage) =
+                var (analysisSucceeded, rating, suggestion, cached, analysisTime, errorMessage, analysisContent, technicalChartToken) =
                     ExtractAnalysisSummary(analysisActionResult);
 
                 item.AnalysisSucceeded = analysisSucceeded;
@@ -139,6 +139,8 @@ public class AIController : ControllerBase
                 item.ActionSuggestion = suggestion;
                 item.Cached = cached;
                 item.AnalysisTime = analysisTime;
+                item.Analysis = analysisContent;
+                item.TechnicalChart = technicalChartToken?.ToObject<object>();
 
                 if (!analysisSucceeded)
                 {
@@ -1282,7 +1284,7 @@ public class AIController : ControllerBase
             {
                 var recommendationPrompt = BuildRecommendationSummaryPrompt(stockCode, finalResult);
                 var recommendationResponse = await _aiService.ExecutePromptAsync(
-                    "分析结果评级与操作建议",
+                    null,
                     recommendationPrompt,
                     placeholders,
                     request?.ModelId
@@ -2091,15 +2093,18 @@ public class AIController : ControllerBase
             : stockCode.Trim().ToUpperInvariant();
     }
 
-    private (bool success, string? rating, string? suggestion, bool cached, string? analysisTime, string? errorMessage) ExtractAnalysisSummary(ActionResult<string> actionResult)
+    private (bool success, string? rating, string? suggestion, bool cached, string? analysisTime, string? errorMessage, string? analysis, JToken? technicalChart) ExtractAnalysisSummary(ActionResult<string> actionResult)
     {
+        string? analysis = null;
+        JToken? technicalChart = null;
+
         if (actionResult.Result is ObjectResult objectResult)
         {
             var statusCode = objectResult.StatusCode ?? 200;
             if (statusCode >= 400)
             {
                 var error = objectResult.Value?.ToString() ?? $"HTTP {statusCode}";
-                return (false, null, null, false, null, error);
+                return (false, null, null, false, null, error, null, null);
             }
 
             if (objectResult.Value != null)
@@ -2114,19 +2119,22 @@ public class AIController : ControllerBase
                 var cached = payload["cached"]?.Value<bool?>() ?? false;
                 var analysisTime = payload["analysisTime"]?.ToString() ?? payload["timestamp"]?.ToString();
                 var message = payload["message"]?.ToString();
+                analysis = payload["analysis"]?.ToString() ?? payload["result"]?.ToString();
+                technicalChart = payload["technicalChart"];
 
-                return (successFlag, rating, suggestion, cached, analysisTime, successFlag ? null : message);
+                return (successFlag, rating, suggestion, cached, analysisTime, successFlag ? null : message, analysis, technicalChart);
             }
 
-            return (true, null, null, false, null, null);
+            return (true, null, null, false, null, null, analysis, technicalChart);
         }
 
         if (!string.IsNullOrWhiteSpace(actionResult.Value))
         {
-            return (true, null, null, false, null, null);
+            analysis = actionResult.Value;
+            return (true, null, null, false, null, null, analysis, technicalChart);
         }
 
-        return (false, null, null, false, null, "AI分析返回空结果");
+        return (false, null, null, false, null, "AI分析返回空结果", analysis, technicalChart);
     }
 
     private async Task<WatchlistCategory> EnsureTargetCategoryAsync(int? targetCategoryId, string? targetCategoryName)
@@ -2223,5 +2231,7 @@ public class BatchAnalyzeItem
     public bool AddedToWatchlist { get; set; }
     public bool AlreadyInWatchlist { get; set; }
     public string? Message { get; set; }
+    public string? Analysis { get; set; }
+    public object? TechnicalChart { get; set; }
 }
 
