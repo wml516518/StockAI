@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.IO;
 using System.Linq;
 using Microsoft.EntityFrameworkCore;
+using StockAnalyse.Api.Services.Abstractions;
 
 namespace StockAnalyse.Api.Controllers;
 
@@ -168,7 +169,12 @@ public class NewsController : ControllerBase
 请提供专业、客观的分析意见，避免过于绝对的判断。";
 
             // 调用AI接口进行分析
-            var analysis = await _aiService.ChatAsync(prompt);
+            var analysisMessages = new List<AiChatMessage>
+            {
+                AiChatMessage.Create("user", prompt)
+            };
+
+            var analysis = await _aiService.ChatAsync(analysisMessages);
 
             // 记录分析日志
             _logger.LogInformation("批量新闻分析完成，分析了{Count}条新闻", newsList.Count);

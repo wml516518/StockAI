@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Newtonsoft.Json.Linq;
+using StockAnalyse.Api.Services.Abstractions;
 
 namespace StockAnalyse.Api.Controllers;
 
@@ -1478,10 +1479,74 @@ public class AIController : ControllerBase
     /// 聊天
     /// </summary>
     [HttpPost("chat")]
-    public async Task<ActionResult<string>> Chat([FromBody] ChatRequest request)
+    public async Task<ActionResult<ChatResponse>> Chat([FromBody] ChatRequest request)
     {
-        var result = await _aiService.ChatAsync(request.Message, request.Context);
-        return Ok(result);
+        if (request == null)
+        {
+            return BadRequest(new { message = "请求不能为空", error = "EMPTY_REQUEST" });
+        }
+
+        var maxHistory = request.MaxHistory > 0 ? Math.Clamp(request.MaxHistory, 3, 10) : 5;
+        var maxMessageCount = maxHistory * 2;
+
+        var normalizedMessages = (request.Messages ?? new List<ChatMessageDto>())
+            .Select(m => AiChatMessage.Create(m.Role, m.Content))
+            .Where(m => !string.IsNullOrWhiteSpace(m.Content))
+            .ToList();
+
+        if (!normalizedMessages.Any())
+        {
+            return BadRequest(new { message = "请提供至少一条有效的聊天消息", error = "EMPTY_MESSAGES" });
+        }
+
+        if (normalizedMessages.Count > maxMessageCount)
+        {
+            normalizedMessages = normalizedMessages.Skip(normalizedMessages.Count - maxMessageCount).ToList();
+        }
+
+        var contextBuilder = new StringBuilder();
+
+        if (request.IncludeAnalysisContext && !string.IsNullOrWhiteSpace(request.AnalysisSummary))
+        {
+            var stockCode = string.IsNullOrWhiteSpace(request.StockCode)
+                ? "该股票"
+                : request.StockCode.Trim().ToUpperInvariant();
+
+            var analysisLabel = GetAnalysisTypeLabel(request.AnalysisType, request.AnalysisTypeLabel);
+
+            contextBuilder.AppendLine($"以下是股票 {stockCode} 的{analysisLabel}结果摘要，请结合这些信息回答用户的提问：");
+            contextBuilder.AppendLine(request.AnalysisSummary.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Context))
+        {
+            if (contextBuilder.Length > 0)
+            {
+                contextBuilder.AppendLine();
+            }
+            contextBuilder.AppendLine(request.Context.Trim());
+        }
+
+        var context = contextBuilder.Length > 0 ? contextBuilder.ToString() : null;
+
+        try
+        {
+            var reply = await _aiService.ChatAsync(normalizedMessages, context, request.ModelId, maxHistory);
+            return Ok(new ChatResponse
+            {
+                Success = true,
+                Reply = reply ?? string.Empty
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AI聊天失败: {StockCode}", request.StockCode ?? "未知股票");
+            return StatusCode(500, new ChatResponse
+            {
+                Success = false,
+                Reply = $"AI聊天失败: {ex.Message}"
+            });
+        }
     }
 
     /// <summary>
@@ -1492,6 +1557,22 @@ public class AIController : ControllerBase
     {
         var result = await _aiService.GetStockRecommendationAsync(stockCode);
         return Ok(result);
+    }
+
+    private string GetAnalysisTypeLabel(string? analysisType, string? providedLabel)
+    {
+        if (!string.IsNullOrWhiteSpace(providedLabel))
+        {
+            return providedLabel.Trim();
+        }
+
+        return analysisType?.ToLowerInvariant() switch
+        {
+            "fundamental" => "基本面分析",
+            "news" => "新闻舆论分析",
+            "technical" => "技术面分析",
+            _ => "综合分析"
+        };
     }
 
     private string BuildRecommendationSummaryPrompt(string stockCode, string analysisContent)
@@ -2178,8 +2259,27 @@ public class AIController : ControllerBase
 
 public class ChatRequest
 {
-    public string Message { get; set; } = string.Empty;
+    public string? StockCode { get; set; }
+    public string? AnalysisType { get; set; }
+    public string? AnalysisTypeLabel { get; set; }
+    public string? AnalysisSummary { get; set; }
+    public bool IncludeAnalysisContext { get; set; } = true;
+    public List<ChatMessageDto> Messages { get; set; } = new();
     public string? Context { get; set; }
+    public int MaxHistory { get; set; } = 5;
+    public int? ModelId { get; set; }
+}
+
+public class ChatMessageDto
+{
+    public string Role { get; set; } = "user";
+    public string Content { get; set; } = string.Empty;
+}
+
+public class ChatResponse
+{
+    public bool Success { get; set; }
+    public string Reply { get; set; } = string.Empty;
 }
 
 public class AnalyzeRequest

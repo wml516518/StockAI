@@ -64,12 +64,17 @@
 
           <div v-if="currentSession.result" class="result-card">
             <div class="result-header">
-              <h4>分析结果</h4>
-              <div v-if="currentSession.analysisDate" class="analysis-date">
-                <span v-if="currentSession.isCached" class="cache-badge">📦 缓存数据</span>
-                📅 分析时间：{{ currentSession.analysisTime || currentSession.analysisDate }}
-                <span v-if="currentSession.stockInfo" class="stock-info">（{{ currentSession.stockInfo.name }}，当前价：{{ formatNumber(currentSession.stockInfo?.currentPrice) }}）</span>
+              <div class="result-header-info">
+                <h4>分析结果</h4>
+                <div v-if="currentSession.analysisDate" class="analysis-date">
+                  <span v-if="currentSession.isCached" class="cache-badge">📦 缓存数据</span>
+                  📅 分析时间：{{ currentSession.analysisTime || currentSession.analysisDate }}
+                  <span v-if="currentSession.stockInfo" class="stock-info">（{{ currentSession.stockInfo.name }}，当前价：{{ formatNumber(currentSession.stockInfo?.currentPrice) }}）</span>
+                </div>
               </div>
+              <button type="button" class="btn btn-chat" @click="toggleChat">
+                {{ currentSession.chatVisible ? '⬇ 收起对话' : '💬 和AI继续对话' }}
+              </button>
             </div>
 
             <div v-if="chartImageSrc" class="chart-section">
@@ -83,6 +88,76 @@
             </div>
 
             <div class="analysis-content">{{ currentSession.result }}</div>
+
+            <div
+              v-if="currentSession.chatVisible"
+              class="chat-panel"
+              ref="chatPanel"
+            >
+              <div class="chat-panel-header">
+                <div class="chat-panel-title">AI 对话</div>
+                <div class="chat-panel-actions">
+                  <button
+                    type="button"
+                    class="chat-panel-action"
+                    @click="clearChatHistory"
+                    :disabled="currentSession.chatLoading || !currentSession.chatMessages.length"
+                    title="清空当前对话"
+                  >
+                    🗑
+                  </button>
+                  <button
+                    type="button"
+                    class="chat-panel-action"
+                    @click="closeChat"
+                    title="收起聊天"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+
+              <div class="chat-status" v-if="currentSession.chatLoading">AI 正在思考，请稍等...</div>
+              <div
+                class="chat-status"
+                v-else-if="!currentSession.chatMessages.length"
+              >
+                与AI继续对话，系统会保留最近 {{ MAX_CHAT_ROUNDS }} 轮记录。
+              </div>
+
+              <div class="chat-messages" ref="chatMessagesContainer">
+                <div
+                  v-for="(message, index) in currentSession.chatMessages"
+                  :key="index"
+                  :class="['chat-message', message.role]"
+                >
+                  <div class="chat-message-role">
+                    {{ message.role === 'user' ? '我' : 'AI' }}
+                  </div>
+                  <div class="chat-bubble">
+                    {{ message.content }}
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="currentSession.chatError" class="chat-error">
+                {{ currentSession.chatError }}
+              </div>
+
+              <form class="chat-input-row" @submit.prevent="handleSendChatMessage">
+                <textarea
+                  ref="chatTextarea"
+                  v-model="currentSession.chatInput"
+                  class="chat-textarea"
+                  :placeholder="currentSession.chatLoading ? 'AI 正在回复...' : '向AI提问，按Enter发送，Shift+Enter换行'"
+                  :disabled="currentSession.chatLoading"
+                  @keydown="handleChatTextareaKeydown"
+                ></textarea>
+                <div class="chat-actions">
+                  <button type="submit" class="btn" :disabled="!canSendChat">发送</button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       </div>
@@ -91,7 +166,7 @@
 </template>
 
 <script setup>
-import { onMounted, onActivated, watch, computed } from 'vue'
+import { onMounted, onActivated, watch, computed, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import api from '../services/api'
@@ -104,6 +179,19 @@ const aiAnalysisStore = useAiAnalysisStore()
 const watchlistStore = useWatchlistStore()
 const { sessions, activeSessionId, currentSession } = storeToRefs(aiAnalysisStore)
 const { analysisTypeLabels } = aiAnalysisStore
+
+const MAX_CHAT_ROUNDS = 5
+const chatMessagesContainer = ref(null)
+const chatPanel = ref(null)
+const chatTextarea = ref(null)
+
+const canSendChat = computed(() => {
+  const session = currentSession.value
+  if (!session) {
+    return false
+  }
+  return Boolean(session.chatInput && session.chatInput.trim() && !session.chatLoading)
+})
 
 const chartImageSrc = computed(() => {
   const chart = currentSession.value?.technicalChart
@@ -477,6 +565,180 @@ const handleRefreshAnalysis = () => {
   handleAnalyzeCurrent(true)
 }
 
+const scrollChatToBottom = () => {
+  if (chatMessagesContainer.value) {
+    chatMessagesContainer.value.scrollTop = chatMessagesContainer.value.scrollHeight
+  }
+}
+
+const toggleChat = () => {
+  if (!currentSession.value) return
+  currentSession.value.chatVisible = !currentSession.value.chatVisible
+  if (currentSession.value.chatVisible) {
+    nextTick(() => {
+      if (chatPanel.value?.scrollIntoView) {
+        chatPanel.value.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      }
+      scrollChatToBottom()
+      chatTextarea.value?.focus()
+    })
+  }
+}
+
+const closeChat = () => {
+  if (!currentSession.value) return
+  currentSession.value.chatVisible = false
+}
+
+const clearChatHistory = () => {
+  if (!currentSession.value) return
+  currentSession.value.chatMessages = []
+  currentSession.value.chatError = ''
+  currentSession.value.chatInput = ''
+}
+
+const handleChatTextareaKeydown = (event) => {
+  if (
+    event.key === 'Enter' &&
+    !event.shiftKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey
+  ) {
+    event.preventDefault()
+    handleSendChatMessage()
+  }
+}
+
+const handleSendChatMessage = async () => {
+  const session = currentSession.value
+  if (!session || session.chatLoading) {
+    return
+  }
+
+  const content = session.chatInput?.trim()
+  if (!content) {
+    return
+  }
+
+  if (!Array.isArray(session.chatMessages)) {
+    session.chatMessages = []
+  }
+
+  const isFirstTurn = session.chatMessages.length === 0
+
+  const userMessage = {
+    role: 'user',
+    content
+  }
+
+  session.chatMessages.push(userMessage)
+  if (session.chatMessages.length > MAX_CHAT_ROUNDS * 2) {
+    session.chatMessages.splice(0, session.chatMessages.length - MAX_CHAT_ROUNDS * 2)
+  }
+
+  const payloadMessages = session.chatMessages.map(msg => ({
+    role: msg.role,
+    content: msg.content
+  }))
+
+  session.chatInput = ''
+  session.chatLoading = true
+  session.chatError = ''
+
+  try {
+    const payload = {
+      stockCode: session.stockCode,
+      analysisType: session.analysisType,
+      analysisTypeLabel: analysisTypeLabels[session.analysisType] || analysisTypeLabels.comprehensive,
+      analysisSummary: isFirstTurn ? session.result : undefined,
+      includeAnalysisContext: isFirstTurn,
+      messages: payloadMessages,
+      maxHistory: MAX_CHAT_ROUNDS
+    }
+
+    const response = await api.post('/ai/chat', payload, { timeout: 120000 })
+
+    let replyText = ''
+    if (response && typeof response === 'object') {
+      replyText = response.reply || response.message || ''
+    } else if (typeof response === 'string') {
+      replyText = response
+    }
+
+    if (!replyText) {
+      replyText = 'AI没有返回有效回复，请稍后再试。'
+    }
+
+    session.chatMessages.push({
+      role: 'assistant',
+      content: replyText
+    })
+    if (session.chatMessages.length > MAX_CHAT_ROUNDS * 2) {
+      session.chatMessages.splice(0, session.chatMessages.length - MAX_CHAT_ROUNDS * 2)
+    }
+
+    await nextTick()
+    scrollChatToBottom()
+  } catch (error) {
+    console.error('AI聊天失败:', error)
+
+    const lastIndex = session.chatMessages.length - 1
+    if (
+      lastIndex >= 0 &&
+      session.chatMessages[lastIndex].role === 'user' &&
+      session.chatMessages[lastIndex].content === userMessage.content
+    ) {
+      session.chatMessages.splice(lastIndex, 1)
+    }
+
+    const errorData = error.response?.data
+    let message = ''
+    if (errorData) {
+      if (typeof errorData === 'string') {
+        message = errorData
+      } else if (typeof errorData === 'object') {
+        message = errorData.reply || errorData.message || errorData.error || ''
+      }
+    }
+    if (!message && error.message) {
+      message = error.message
+    }
+    session.chatInput = content
+    session.chatError = message || '聊天失败，请稍后重试。'
+  } finally {
+    session.chatLoading = false
+  }
+}
+
+watch(
+  () => currentSession.value?.chatMessages?.length,
+  async () => {
+    if (!currentSession.value?.chatVisible) {
+      return
+    }
+    await nextTick()
+    if (chatPanel.value?.scrollIntoView) {
+      chatPanel.value.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
+    scrollChatToBottom()
+  }
+)
+
+watch(
+  () => currentSession.value?.chatVisible,
+  async (visible) => {
+    if (visible) {
+      await nextTick()
+      if (chatPanel.value?.scrollIntoView) {
+        chatPanel.value.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      }
+      scrollChatToBottom()
+      chatTextarea.value?.focus()
+    }
+  }
+)
+
 const upsertSessionFromRoute = () => {
   const stockCode = route.query.stockCode
   const analysisType = route.query.analysisType
@@ -592,14 +854,24 @@ onActivated(() => {
 }
 
 .result-card h4 {
-  margin-bottom: 15px;
+  margin: 0;
   color: #667eea;
 }
 
 .result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 15px;
   padding-bottom: 15px;
   border-bottom: 1px solid #e0e0e0;
+}
+
+.result-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .analysis-date {
@@ -614,11 +886,173 @@ onActivated(() => {
   font-weight: 500;
 }
 
+.btn-chat {
+  background: #f1f4ff;
+  color: #4650dd;
+  border: 1px solid #cdd5ff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-chat:hover {
+  background: #e2e7ff;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.25);
+}
+
+.btn-chat:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .analysis-content {
   white-space: pre-wrap;
   line-height: 1.6;
   color: #333;
   word-break: break-word;
+}
+
+.chat-panel {
+  margin-top: 20px;
+  border: 1px solid #dce1ff;
+  border-radius: 10px;
+  background: #fafbff;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-panel-title {
+  font-weight: 600;
+  color: #1f3c88;
+}
+
+.chat-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-panel-action {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: #7c88b5;
+  line-height: 1;
+  padding: 2px;
+}
+
+.chat-panel-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-panel-action:hover:not(:disabled) {
+  color: #1f3c88;
+}
+
+.chat-status {
+  font-size: 13px;
+  color: #6c757d;
+}
+
+.chat-messages {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-message.user {
+  align-items: flex-end;
+}
+
+.chat-message.assistant {
+  align-items: flex-start;
+}
+
+.chat-message-role {
+  font-size: 12px;
+  color: #7c88b5;
+}
+
+.chat-message.user .chat-message-role {
+  color: #4650dd;
+}
+
+.chat-bubble {
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff;
+  color: #2f3b52;
+  box-shadow: 0 2px 8px rgba(31, 60, 136, 0.08);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.chat-message.user .chat-bubble {
+  background: #667eea;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
+}
+
+.chat-error {
+  color: #dc3545;
+  font-size: 13px;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.chat-textarea {
+  flex: 1;
+  min-height: 90px;
+  padding: 10px;
+  border: 1px solid #ccd4ff;
+  border-radius: 8px;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.chat-textarea:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.15);
+}
+
+.chat-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-actions .btn {
+  white-space: nowrap;
+  padding: 10px 18px;
 }
 
 .chart-section {
@@ -788,6 +1222,24 @@ onActivated(() => {
   .add-session-tab {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .chat-panel {
+    padding: 12px;
+  }
+
+  .chat-messages {
+    max-height: 220px;
+  }
+
+  .chat-input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-actions {
+    flex-direction: row;
+    justify-content: flex-end;
   }
 }
 </style>

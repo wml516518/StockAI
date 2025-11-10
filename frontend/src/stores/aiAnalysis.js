@@ -23,7 +23,12 @@ const createSession = (stockCode = '', analysisType = DEFAULT_ANALYSIS_TYPE, sto
   lastAnalyzedStockCode: '',
   technicalChart: null,
   rating: null,
-  actionSuggestion: null
+  actionSuggestion: null,
+  chatMessages: [],
+  chatVisible: false,
+  chatInput: '',
+  chatLoading: false,
+  chatError: ''
 })
 
 export const useAiAnalysisStore = defineStore('aiAnalysis', () => {
@@ -80,13 +85,18 @@ export const useAiAnalysisStore = defineStore('aiAnalysis', () => {
     session.hasAnalyzed = false
     session.lastAnalyzedStockCode = ''
     session.technicalChart = null
-  session.rating = null
-  session.actionSuggestion = null
+    session.rating = null
+    session.actionSuggestion = null
+    session.chatMessages = []
+    session.chatVisible = false
+    session.chatInput = ''
+    session.chatLoading = false
+    session.chatError = ''
   }
 
-const addSession = (stockCode = '', analysisType = DEFAULT_ANALYSIS_TYPE, stockName = '') => {
+  const addSession = (stockCode = '', analysisType = DEFAULT_ANALYSIS_TYPE, stockName = '') => {
     const normalizedCode = stockCode ? normalizeStockCode(stockCode) : ''
-  const session = createSession(normalizedCode, analysisType, stockName)
+    const session = createSession(normalizedCode, analysisType, stockName)
     sessions.value.push(session)
     activeSessionId.value = session.id
     return session
@@ -125,7 +135,7 @@ const addSession = (stockCode = '', analysisType = DEFAULT_ANALYSIS_TYPE, stockN
     }
   }
 
-const upsertSession = (stockCode, analysisType = DEFAULT_ANALYSIS_TYPE, stockName = '') => {
+  const upsertSession = (stockCode, analysisType = DEFAULT_ANALYSIS_TYPE, stockName = '') => {
     const normalizedCode = normalizeStockCode(stockCode)
 
     if (!normalizedCode) {
@@ -133,9 +143,9 @@ const upsertSession = (stockCode, analysisType = DEFAULT_ANALYSIS_TYPE, stockNam
       return currentSession.value
     }
 
-  let session = findSessionByStockCode(normalizedCode)
+    let session = findSessionByStockCode(normalizedCode)
     if (!session) {
-    session = addSession(normalizedCode, analysisType, stockName)
+      session = addSession(normalizedCode, analysisType, stockName)
     } else {
       session.stockCode = normalizedCode
       if (analysisType && analysisType !== session.analysisType) {

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using StockAnalyse.Api.Services.Abstractions;
 
 namespace StockAnalyse.Api.Services.Interfaces;
 
@@ -17,7 +18,7 @@ public interface IAIService
     /// <summary>
     /// 问询大模型
     /// </summary>
-    Task<string> ChatAsync(string message, string? context = null);
+    Task<string> ChatAsync(IEnumerable<AiChatMessage> messages, string? context = null, int? modelId = null, int maxHistory = 5);
     
     /// <summary>
     /// 获取股票建议
