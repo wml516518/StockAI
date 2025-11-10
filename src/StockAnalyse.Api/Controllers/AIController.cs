@@ -151,8 +151,26 @@ public class AIController : ControllerBase
 
                 try
                 {
-                    await _watchlistService.AddToWatchlistAsync(code, targetCategory.Id);
-                    item.AddedToWatchlist = true;
+                    var moveResult = await _watchlistService.MoveStockToCategoryAsync(code, targetCategory.Id);
+
+                    if (moveResult.Found)
+                    {
+                        if (moveResult.MovedToTarget)
+                        {
+                            item.AddedToWatchlist = true;
+                            item.Message = "已从原分类移动到目标分类";
+                        }
+                        else
+                        {
+                            item.AlreadyInWatchlist = true;
+                            item.Message = "已在目标分类，已移除其他分类";
+                        }
+                    }
+                    else
+                    {
+                        await _watchlistService.AddToWatchlistAsync(code, targetCategory.Id);
+                        item.AddedToWatchlist = true;
+                    }
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -194,21 +212,24 @@ public class AIController : ControllerBase
         // 清理股票代码
         stockCode = stockCode.Trim().ToUpper();
         
-        _logger.LogInformation("开始分析股票: {StockCode}", stockCode);
-        
         // 获取分析类型（默认为comprehensive）
         var analysisType = (request?.AnalysisType ?? "comprehensive").ToLowerInvariant();
         
         // 构建缓存键（包含股票代码和分析类型）
         var cacheKey = $"ai_analysis_{stockCode}_{analysisType}";
+        var forceRefresh = request?.ForceRefresh ?? false;
         
         // 如果不需要强制刷新，先检查缓存
-        if (!(request?.ForceRefresh ?? false))
+        if (!forceRefresh)
         {
             if (_cache.TryGetValue(cacheKey, out CachedAnalysisResult? cachedResult) && cachedResult != null)
             {
-                _logger.LogInformation("使用缓存的AI分析结果: {StockCode} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
-                    stockCode, analysisType, cachedResult.AnalysisTime);
+                var cachedName = string.IsNullOrWhiteSpace(cachedResult.StockName)
+                    ? stockCode
+                    : cachedResult.StockName;
+
+                _logger.LogInformation("使用缓存的AI分析结果: {StockName} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
+                    cachedName, analysisType, cachedResult.AnalysisTime);
                 JToken? cachedHighlights = null;
                 if (!string.IsNullOrWhiteSpace(cachedResult.TechnicalChartHighlights))
                 {
@@ -243,12 +264,112 @@ public class AIController : ControllerBase
                 });
             }
         }
-        else
-        {
-            _logger.LogInformation("强制刷新，跳过缓存: {StockCode} (分析类型: {AnalysisType})", stockCode, analysisType);
-        }
         
+        Stock? initialQuote = null;
         try
+        {
+            initialQuote = await _stockDataService.GetRealTimeQuoteAsync(stockCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "预获取股票名称失败，将使用股票代码");
+        }
+
+        var displayName = initialQuote?.Name;
+        using var scope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["StockCode"] = stockCode,
+            ["StockName"] = displayName ?? stockCode
+        });
+
+        var stockNameForLog = displayName ?? stockCode;
+
+        if (forceRefresh)
+        {
+            _logger.LogInformation("强制刷新，跳过缓存: {StockName} (分析类型: {AnalysisType})", stockNameForLog, analysisType);
+        }
+
+        _logger.LogInformation("开始分析股票: {StockName}", stockNameForLog);
+
+        try
+        {
+            return await ExecuteStockAnalysisCore(stockCode, stockNameForLog, initialQuote, request, analysisType, cacheKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "分析股票 {StockName} 失败，尝试使用原始上下文进行降级分析", stockNameForLog);
+            
+            try
+            {
+                var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, request?.Context, request?.ModelId);
+                
+                // 确保返回正确的响应格式
+                if (string.IsNullOrEmpty(result))
+                {
+                    _logger.LogWarning("🤖 [AIController] ⚠️ 降级分析结果为空");
+                    return Ok(new { 
+                        success = false, 
+                        analysis = "AI分析失败，请检查AI服务配置。",
+                        error = ex.Message
+                    });
+                }
+                
+                // 保存到缓存（永久缓存）
+                var analysisTime = DateTime.Now;
+                var cachedResult = new CachedAnalysisResult
+                {
+                    Analysis = result,
+                    AnalysisTime = analysisTime,
+                    StockCode = stockCode,
+                    StockName = stockNameForLog,
+                    AnalysisType = analysisType,
+                    TechnicalChartImageBase64 = null,
+                    TechnicalChartContentType = "image/png",
+                    TechnicalChartHighlights = null,
+                    Rating = null,
+                    ActionSuggestion = null
+                };
+                
+                var cacheOptions = new MemoryCacheEntryOptions
+                {
+                    Priority = CacheItemPriority.NeverRemove,
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(2)
+                };
+                _cache.Set(cacheKey, cachedResult, cacheOptions);
+                
+                _logger.LogInformation("降级分析结果已缓存: {StockName} (分析类型: {AnalysisType})", stockNameForLog, analysisType);
+                
+                return Ok(new { 
+                    success = true, 
+                    analysis = result,
+                    length = result.Length,
+                    timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    cached = false,
+                    analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    rating = (string?)null,
+                    actionSuggestion = (string?)null,
+                    technicalChart = (object?)null
+                });
+            }
+            catch (Exception ex2)
+            {
+                _logger.LogError(ex2, "🤖 [AIController] ❌ {StockName} 降级分析也失败", stockNameForLog);
+                return Ok(new { 
+                    success = false, 
+                    analysis = $"AI分析失败: {ex.Message}",
+                    error = ex2.Message
+                });
+            }
+        }
+    }
+
+    private async Task<ActionResult<string>> ExecuteStockAnalysisCore(
+        string stockCode,
+        string stockNameForLog,
+        Stock? initialQuote,
+        AnalyzeRequest? request,
+        string analysisType,
+        string cacheKey)
         {
             string fundamentalSection = string.Empty;
             string technicalSection = string.Empty;
@@ -376,16 +497,18 @@ public class AIController : ControllerBase
             
             _logger.LogInformation("步骤2.1: 正在获取实时行情...");
             
-            var stock = await _stockDataService.GetRealTimeQuoteAsync(stockCode);
+        var stock = initialQuote ?? await _stockDataService.GetRealTimeQuoteAsync(stockCode);
+        var effectiveStockName = stock?.Name ?? stockNameForLog;
+        stockNameForLog = effectiveStockName;
             
             if (stock != null)
             {
                 _logger.LogInformation("成功获取实时行情 - 股票: {StockName}, 价格: {Price}, 涨跌幅: {ChangePercent}%", 
-                    stock.Name, stock.CurrentPrice, stock.ChangePercent);
+                effectiveStockName, stock.CurrentPrice, stock.ChangePercent);
             }
             else
             {
-                _logger.LogWarning("未能获取实时行情");
+            _logger.LogWarning("未能获取实时行情 - 股票: {StockName}", stockNameForLog);
             }
             
             // 步骤2.4: 获取近3个月的历史交易数据
@@ -1086,17 +1209,8 @@ public class AIController : ControllerBase
             // 获取新闻舆论信息
             try
             {
-                var stockNewsList = await _newsService.GetNewsByStockAsync(stockCode) ?? new List<FinancialNews>();
-                _logger.LogInformation("获取到与股票 {StockCode} 直接相关的新闻 {Count} 条", stockCode, stockNewsList.Count);
-
-                bool usedGeneralNewsFallback = false;
-
-                if (stockNewsList.Count == 0)
-                {
-                    _logger.LogInformation("未找到与股票直接相关的新闻，获取最新财经新闻作为参考");
-                    stockNewsList = await _newsService.GetLatestNewsAsync(10) ?? new List<FinancialNews>();
-                    usedGeneralNewsFallback = stockNewsList.Count > 0;
-                }
+                var stockNewsList = await _newsService.GetNewsByStockAsync(stockCode) ?? new List<FinancialNews>();                                             
+            _logger.LogInformation("获取到与股票 {StockName} 直接相关的新闻 {Count} 条", stockNameForLog, stockNewsList.Count);                                
 
                 if (stockNewsList.Count > 0)
                 {
@@ -1104,13 +1218,9 @@ public class AIController : ControllerBase
                     builder.AppendLine("【新闻舆论信息】");
 
                     builder.AppendLine("与股票直接相关的新闻：");
-                    if (usedGeneralNewsFallback)
-                    {
-                        builder.AppendLine("（未检索到该股票的直接新闻，以下为最新财经要闻供参考）");
-                    }
                     AppendNewsItems(builder, stockNewsList.OrderByDescending(n => n.PublishTime).Take(6));
 
-                    builder.AppendLine("\n请结合上述新闻，分析市场情绪、重大事件及潜在影响。");
+                    builder.AppendLine("\n请结合上述新闻，分析市场情绪、重大事件及潜在影响。");                                                                
                     newsSection = builder.ToString().Trim();
                 }
                 else
@@ -1120,7 +1230,7 @@ public class AIController : ControllerBase
 
                 if (!string.IsNullOrEmpty(newsSection))
                 {
-                    enhancedContext = string.IsNullOrEmpty(enhancedContext)
+                    enhancedContext = string.IsNullOrEmpty(enhancedContext)    
                         ? newsSection
                         : $"{enhancedContext}{newsSection}";
                 }
@@ -1269,13 +1379,13 @@ public class AIController : ControllerBase
             }
 
             var responseSizeKB = (finalResult.Length * 2) / 1024.0;
-            _logger.LogDebug("响应大小估算: {SizeKB:F2} KB", responseSizeKB);
-            _logger.LogInformation("🤖 [AIController] 📊 响应大小估算: {SizeKB:F2} KB", responseSizeKB);
+        _logger.LogDebug("[{StockName}] 响应大小估算: {SizeKB:F2} KB", stockNameForLog, responseSizeKB);
+        _logger.LogInformation("🤖 [AIController] 📊 [{StockName}] 响应大小估算: {SizeKB:F2} KB", stockNameForLog, responseSizeKB);
             
             // 如果响应太大，给出警告
             if (responseSizeKB > 500)
             {
-                _logger.LogWarning("🤖 [AIController] ⚠️ 响应较大 ({SizeKB:F2} KB)，可能影响传输", responseSizeKB);
+            _logger.LogWarning("🤖 [AIController] ⚠️ [{StockName}] 响应较大 ({SizeKB:F2} KB)，可能影响传输", stockNameForLog, responseSizeKB);
             }
 
             string? rating = null;
@@ -1329,6 +1439,7 @@ public class AIController : ControllerBase
                 Analysis = finalResult,
                 AnalysisTime = analysisTime,
                 StockCode = stockCode,
+            StockName = stockNameForLog,
                 AnalysisType = analysisType,
                 TechnicalChartImageBase64 = technicalChartImageBase64,
                 TechnicalChartContentType = technicalChartContentType,
@@ -1345,8 +1456,8 @@ public class AIController : ControllerBase
             };
             _cache.Set(cacheKey, cachedResult, cacheOptions);
             
-            _logger.LogInformation("AI分析结果已缓存: {StockCode} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
-                stockCode, analysisType, analysisTime);
+        _logger.LogInformation("AI分析结果已缓存: {StockName} (分析类型: {AnalysisType}, 分析时间: {AnalysisTime})", 
+            stockNameForLog, analysisType, analysisTime);
             
             // 返回JSON格式，包含分析结果
             return Ok(new { 
@@ -1361,72 +1472,6 @@ public class AIController : ControllerBase
                 actionSuggestion,
                 technicalChart = technicalChartResponse
             });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "分析股票 {StockCode} 失败，尝试使用原始上下文进行降级分析", stockCode);
-            
-            try
-            {
-                var result = await _aiService.AnalyzeStockAsync(stockCode, request?.PromptId, request?.Context, request?.ModelId);
-                
-                // 确保返回正确的响应格式
-                if (string.IsNullOrEmpty(result))
-                {
-                    _logger.LogWarning("🤖 [AIController] ⚠️ 降级分析结果为空");
-                    return Ok(new { 
-                        success = false, 
-                        analysis = "AI分析失败，请检查AI服务配置。",
-                        error = ex.Message
-                    });
-                }
-                
-                // 保存到缓存（永久缓存）
-                var analysisTime = DateTime.Now;
-                var cachedResult = new CachedAnalysisResult
-                {
-                    Analysis = result,
-                    AnalysisTime = analysisTime,
-                    StockCode = stockCode,
-                    AnalysisType = analysisType,
-                    TechnicalChartImageBase64 = null,
-                    TechnicalChartContentType = "image/png",
-                    TechnicalChartHighlights = null,
-                    Rating = null,
-                    ActionSuggestion = null
-                };
-                
-                var cacheOptions = new MemoryCacheEntryOptions
-                {
-                    Priority = CacheItemPriority.NeverRemove,
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(2)
-                };
-                _cache.Set(cacheKey, cachedResult, cacheOptions);
-                
-                _logger.LogInformation("降级分析结果已缓存: {StockCode} (分析类型: {AnalysisType})", stockCode, analysisType);
-                
-                return Ok(new { 
-                    success = true, 
-                    analysis = result,
-                    length = result.Length,
-                    timestamp = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                    cached = false,
-                    analysisTime = analysisTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                    rating = (string?)null,
-                    actionSuggestion = (string?)null,
-                    technicalChart = (object?)null
-                });
-            }
-            catch (Exception ex2)
-            {
-                _logger.LogError(ex2, "🤖 [AIController] ❌ 降级分析也失败");
-                return Ok(new { 
-                    success = false, 
-                    analysis = $"AI分析失败: {ex.Message}",
-                    error = ex2.Message
-                });
-            }
-        }
     }
 
     /// <summary>
@@ -1536,47 +1581,8 @@ public class AIController : ControllerBase
             }
         }
 
-        var collected = new List<FinancialNews>();
-
-        foreach (var keyword in keywords)
-        {
-            if (string.IsNullOrWhiteSpace(keyword) || keyword.Length < 2)
-            {
-                continue;
-            }
-
-            try
-            {
-                var searchResults = await _newsService.SearchNewsAsync(keyword);
-                if (searchResults == null || searchResults.Count == 0)
-                {
-                    continue;
-                }
-
-                foreach (var newsItem in searchResults.OrderByDescending(n => n.PublishTime))
-                {
-                    var key = !string.IsNullOrWhiteSpace(newsItem.Url) ? newsItem.Url : newsItem.Title;
-                    if (string.IsNullOrWhiteSpace(key) || seenKeys.Contains(key))
-                    {
-                        continue;
-                    }
-
-                    collected.Add(newsItem);
-                    seenKeys.Add(key);
-
-                    if (collected.Count >= maxCount)
-                    {
-                        return collected;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "搜索行业新闻时发生异常: {Keyword}", keyword);
-            }
-        }
-
-        return collected;
+        _logger.LogDebug("行业新闻搜索功能已停用，仅保留按股票代码获取新闻。");
+        return new List<FinancialNews>();
     }
     
     /// <summary>
@@ -2193,6 +2199,7 @@ public class CachedAnalysisResult
     public string Analysis { get; set; } = string.Empty;
     public DateTime AnalysisTime { get; set; }
     public string StockCode { get; set; } = string.Empty;
+    public string StockName { get; set; } = string.Empty;
     public string AnalysisType { get; set; } = "comprehensive";
     public string? TechnicalChartImageBase64 { get; set; }
     public string? TechnicalChartContentType { get; set; }

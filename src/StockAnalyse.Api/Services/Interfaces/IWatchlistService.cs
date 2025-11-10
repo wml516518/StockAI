@@ -60,6 +60,11 @@ public interface IWatchlistService
     Task<WatchlistStock> UpdateCategoryAsync(int id, int categoryId);
     
     /// <summary>
+    /// 确保股票仅归属目标分类，返回处理结果
+    /// </summary>
+    Task<WatchlistMoveResult> MoveStockToCategoryAsync(string stockCode, int targetCategoryId);
+    
+    /// <summary>
     /// 更新自选股建议价格
     /// </summary>
     Task<WatchlistStock> UpdateSuggestedPriceAsync(int id, decimal? suggestedBuyPrice, decimal? suggestedSellPrice);
@@ -69,4 +74,6 @@ public interface IWatchlistService
     /// </summary>
     Task<WatchlistStock> ResetAlertFlagsAsync(int id, decimal currentPrice);
 }
+
+public record WatchlistMoveResult(bool Found, bool AlreadyInTarget, bool MovedToTarget);
 

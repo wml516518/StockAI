@@ -452,6 +452,85 @@ public class WatchlistService : IWatchlistService
         return item;
     }
 
+    public async Task<WatchlistMoveResult> MoveStockToCategoryAsync(string stockCode, int targetCategoryId)
+    {
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return new WatchlistMoveResult(false, false, false);
+        }
+
+        var existingItems = await _context.WatchlistStocks
+            .Where(w => w.StockCode == stockCode)
+            .OrderBy(w => w.AddTime)
+            .ToListAsync();
+
+        if (existingItems.Count == 0)
+        {
+            return new WatchlistMoveResult(false, false, false);
+        }
+
+        var targetItem = existingItems.FirstOrDefault(w => w.WatchlistCategoryId == targetCategoryId);
+        var itemToKeep = targetItem ?? existingItems.First();
+        var originalCategoryId = itemToKeep.WatchlistCategoryId;
+
+        var movedToTarget = false;
+
+        if (targetItem == null || itemToKeep.WatchlistCategoryId != targetCategoryId)
+        {
+            itemToKeep.WatchlistCategoryId = targetCategoryId;
+            itemToKeep.LastUpdate = DateTime.Now;
+            await _context.SaveChangesAsync();
+            movedToTarget = targetItem == null || originalCategoryId != targetCategoryId;
+
+            _logger.LogInformation(
+                "已将股票 {StockCode} 从分类 {OriginalCategory} 移动到目标分类 {TargetCategory}",
+                stockCode,
+                originalCategoryId,
+                targetCategoryId);
+        }
+
+        var idsToRemove = existingItems
+            .Where(w => w.Id != itemToKeep.Id)
+            .Select(w => w.Id)
+            .ToList();
+
+        if (idsToRemove.Count > 0)
+        {
+            await _context.WatchlistStocks
+                .Where(w => idsToRemove.Contains(w.Id))
+                .ExecuteDeleteAsync();
+
+            foreach (var removedId in idsToRemove)
+            {
+                _logger.LogInformation(
+                    "移除股票 {StockCode} 在其它分类中的自选记录，记录ID: {WatchlistId}",
+                    stockCode,
+                    removedId);
+            }
+        }
+
+        try
+        {
+            await CalculateProfitLossAsync(itemToKeep.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "更新股票 {StockCode} 盈亏信息时发生异常", stockCode);
+        }
+
+        // 分离已删除的跟踪实体，避免后续操作冲突
+        foreach (var removed in existingItems.Where(w => w.Id != itemToKeep.Id))
+        {
+            var entry = _context.Entry(removed);
+            if (entry != null && entry.State != EntityState.Detached)
+            {
+                entry.State = EntityState.Detached;
+            }
+        }
+
+        return new WatchlistMoveResult(true, targetItem != null, movedToTarget);
+    }
+
     public async Task<WatchlistStock> UpdateSuggestedPriceAsync(int id, decimal? suggestedBuyPrice, decimal? suggestedSellPrice)
     {
         var item = await _context.WatchlistStocks
