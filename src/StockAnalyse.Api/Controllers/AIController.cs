@@ -389,7 +389,7 @@ public class AIController : ControllerBase
             string? dataSource = null;
             try
             {
-                fundamentalInfo = await _stockDataService.GetFundamentalInfoAsync(stockCode);
+                fundamentalInfo = await _stockDataService.GetFundamentalInfoAsync(stockCode, request?.ForceRefresh ?? false);
                 
                 // 根据获取到的数据判断数据源
                 // 如果Python服务成功，通常会有更完整的财务数据
@@ -1209,7 +1209,7 @@ public class AIController : ControllerBase
             // 获取新闻舆论信息
             try
             {
-                var stockNewsList = await _newsService.GetNewsByStockAsync(stockCode) ?? new List<FinancialNews>();                                             
+                var stockNewsList = await _newsService.GetNewsByStockAsync(stockCode, request?.ForceRefresh ?? false) ?? new List<FinancialNews>();                                             
             _logger.LogInformation("获取到与股票 {StockName} 直接相关的新闻 {Count} 条", stockNameForLog, stockNewsList.Count);                                
 
                 if (stockNewsList.Count > 0)

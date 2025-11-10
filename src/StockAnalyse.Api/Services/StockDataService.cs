@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
@@ -11,12 +12,17 @@ public class StockDataService : IStockDataService
     private readonly StockDbContext _context;
     private readonly ILogger<StockDataService> _logger;
     private readonly HttpClient _httpClient;
+    private readonly IStockDataCacheService _cacheService;
 
-    public StockDataService(StockDbContext context, ILogger<StockDataService> logger, HttpClient httpClient)
+    private const string FundamentalCacheType = "fundamental";
+    private static readonly TimeSpan FundamentalCacheDuration = TimeSpan.FromHours(12);
+
+    public StockDataService(StockDbContext context, ILogger<StockDataService> logger, HttpClient httpClient, IStockDataCacheService cacheService)
     {
         _context = context;
         _logger = logger;
         _httpClient = httpClient;
+        _cacheService = cacheService;
         _httpClient.Timeout = TimeSpan.FromSeconds(10);
     }
 
@@ -1002,7 +1008,7 @@ public class StockDataService : IStockDataService
     /// <summary>
     /// 获取股票基本面信息（使用多个备用接口）
     /// </summary>
-    public async Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode)
+    private async Task<StockFundamentalInfo?> FetchFundamentalInfoFromSourcesAsync(string stockCode)
     {
         _logger.LogInformation("开始获取股票 {StockCode} 的基本面信息", stockCode);
         
@@ -1068,6 +1074,87 @@ public class StockDataService : IStockDataService
         }
         
         return null;
+    }
+
+    public async Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode, bool forceRefresh = false)
+    {
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return null;
+        }
+
+        stockCode = stockCode.Trim().ToUpperInvariant();
+
+        if (!forceRefresh)
+        {
+            var cached = await _cacheService.TryGetAsync<StockFundamentalInfo>(stockCode, FundamentalCacheType);
+            if (cached != null)
+            {
+                _logger.LogInformation("使用数据库缓存的基本面信息: {StockCode}", stockCode);
+                return cached;
+            }
+        }
+        else
+        {
+            _logger.LogInformation("强制刷新股票 {StockCode} 的基本面缓存", stockCode);
+        }
+
+        StockFundamentalInfo? freshResult = null;
+        try
+        {
+            freshResult = await FetchFundamentalInfoFromSourcesAsync(stockCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "获取股票 {StockCode} 基本面信息时发生异常，将尝试使用缓存", stockCode);
+        }
+
+        if (freshResult != null)
+        {
+            await CacheFundamentalAsync(stockCode, freshResult, isFallback: false);
+            return freshResult;
+        }
+
+        var stale = await _cacheService.TryGetAsync<StockFundamentalInfo>(stockCode, FundamentalCacheType, allowExpired: true);
+        if (stale != null)
+        {
+            _logger.LogWarning("使用过期的基本面缓存数据: {StockCode}", stockCode);
+            await CacheFundamentalAsync(stockCode, stale, isFallback: true, ttlOverride: TimeSpan.FromMinutes(5));
+            return stale;
+        }
+
+        return null;
+    }
+
+    private async Task CacheFundamentalAsync(string stockCode, StockFundamentalInfo info, bool isFallback, TimeSpan? ttlOverride = null)
+    {
+        var ttl = ttlOverride ?? FundamentalCacheDuration;
+        var metadataPayload = new
+        {
+            cachedAtUtc = DateTime.UtcNow,
+            reportDate = info.ReportDate,
+            hasDetailedFinancialData = info.TotalRevenue.HasValue || info.NetProfit.HasValue,
+            isFallback
+        };
+
+        string? metadata = null;
+        try
+        {
+            metadata = JsonSerializer.Serialize(metadataPayload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "序列化基本面缓存元数据失败，将忽略元数据: {StockCode}", stockCode);
+        }
+
+        try
+        {
+            await _cacheService.CacheAsync(stockCode, FundamentalCacheType, info, ttl, isFallback, metadata);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "写入基本面缓存失败: {StockCode}", stockCode);
+        }
     }
     
     /// <summary>

@@ -1,3 +1,5 @@
+using System.Linq;
+using System.Threading;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 using System.Text.Json;
@@ -8,15 +10,70 @@ public class NewsService : INewsService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<NewsService> _logger;
+    private readonly IStockDataCacheService _cacheService;
 
-    public NewsService(HttpClient httpClient, ILogger<NewsService> logger)
+    private const string NewsCacheType = "news";
+    private static readonly TimeSpan NewsCacheDuration = TimeSpan.FromMinutes(30);
+
+    public NewsService(HttpClient httpClient, ILogger<NewsService> logger, IStockDataCacheService cacheService)
     {
         _httpClient = httpClient;
         _httpClient.Timeout = TimeSpan.FromSeconds(30);
         _logger = logger;
+        _cacheService = cacheService;
     }
 
-    public async Task<List<FinancialNews>> GetNewsByStockAsync(string stockCode)
+    public async Task<List<FinancialNews>> GetNewsByStockAsync(string stockCode, bool forceRefresh = false, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return new List<FinancialNews>();
+        }
+
+        stockCode = stockCode.Trim().ToUpperInvariant();
+
+        if (!forceRefresh)
+        {
+            var cached = await _cacheService.TryGetAsync<List<FinancialNews>>(stockCode, NewsCacheType, allowExpired: false, cancellationToken);
+            if (cached != null && cached.Count > 0)
+            {
+                _logger.LogInformation("使用数据库缓存的新闻数据: 股票 {StockCode}, 条数 {Count}", stockCode, cached.Count);
+                return cached;
+            }
+        }
+        else
+        {
+            _logger.LogInformation("强制刷新股票 {StockCode} 的新闻缓存", stockCode);
+        }
+
+        List<FinancialNews> freshNews = new();
+        try
+        {
+            freshNews = await FetchNewsFromSourcesAsync(stockCode, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "获取股票 {StockCode} 新闻时发生异常，将尝试使用缓存", stockCode);
+        }
+
+        if (freshNews.Count > 0)
+        {
+            await CacheNewsAsync(stockCode, freshNews, isFallback: false, cancellationToken: cancellationToken);
+            return freshNews;
+        }
+
+        var staleNews = await _cacheService.TryGetAsync<List<FinancialNews>>(stockCode, NewsCacheType, allowExpired: true, cancellationToken);
+        if (staleNews != null && staleNews.Count > 0)
+        {
+            _logger.LogWarning("使用过期的新闻缓存数据: 股票 {StockCode}, 条数 {Count}", stockCode, staleNews.Count);
+            await CacheNewsAsync(stockCode, staleNews, isFallback: true, ttlOverride: TimeSpan.FromMinutes(10), cancellationToken: cancellationToken);
+            return staleNews;
+        }
+
+        return freshNews;
+    }
+
+    private async Task<List<FinancialNews>> FetchNewsFromSourcesAsync(string stockCode, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(stockCode))
         {
@@ -40,18 +97,20 @@ public class NewsService : INewsService
             }
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            var response = await _httpClient.SendAsync(request, cts.Token);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+            var response = await _httpClient.SendAsync(request, linkedCts.Token);
 
             if (!response.IsSuccessStatusCode)
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
+                var errorContent = await response.Content.ReadAsStringAsync(linkedCts.Token);
                 _logger.LogWarning("Python服务获取个股新闻失败: 状态码={StatusCode}, 错误={Error}", response.StatusCode, errorContent);
                 return new List<FinancialNews>();
             }
 
-            await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cts.Token);
+            await using var stream = await response.Content.ReadAsStreamAsync(linkedCts.Token);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: linkedCts.Token);
 
             var root = document.RootElement;
             if (!root.TryGetProperty("success", out var successElement) || !successElement.GetBoolean())
@@ -138,6 +197,43 @@ public class NewsService : INewsService
         {
             _logger.LogError(ex, "从Python服务获取个股新闻失败: {StockCode}", stockCode);
             return new List<FinancialNews>();
+        }
+    }
+
+    private async Task CacheNewsAsync(string stockCode, List<FinancialNews> news, bool isFallback, TimeSpan? ttlOverride = null, CancellationToken cancellationToken = default)
+    {
+        if (news.Count == 0)
+        {
+            return;
+        }
+
+        var ttl = ttlOverride ?? NewsCacheDuration;
+        var metadataObj = new
+        {
+            cachedAtUtc = DateTime.UtcNow,
+            count = news.Count,
+            earliestPublishTime = news.Min(n => n.PublishTime),
+            latestPublishTime = news.Max(n => n.PublishTime),
+            isFallback
+        };
+
+        string? metadata = null;
+        try
+        {
+            metadata = JsonSerializer.Serialize(metadataObj);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "序列化新闻缓存元数据失败，将忽略元数据: {StockCode}", stockCode);
+        }
+
+        try
+        {
+            await _cacheService.CacheAsync(stockCode, NewsCacheType, news, ttl, isFallback, metadata, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "写入新闻缓存失败: {StockCode}", stockCode);
         }
     }
 }

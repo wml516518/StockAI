@@ -85,6 +85,7 @@ builder.Services.AddScoped<IStockDataService, StockDataService>();
 builder.Services.AddScoped<IWatchlistService, WatchlistService>();
 builder.Services.AddScoped<IScreenService, ScreenService>();
 builder.Services.AddScoped<INewsService, NewsService>();
+builder.Services.AddScoped<IStockDataCacheService, StockDataCacheService>();
 builder.Services.AddScoped<IAIService, AIService>();
 builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
 builder.Services.AddSingleton<AIPromptConfigService>();

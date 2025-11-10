@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Threading;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -35,9 +36,9 @@ public class NewsController : ControllerBase
     /// 获取指定股票的新闻
     /// </summary>
     [HttpGet("stock/{stockCode}")]
-    public async Task<ActionResult<List<FinancialNews>>> GetByStock(string stockCode)
+    public async Task<ActionResult<List<FinancialNews>>> GetByStock(string stockCode, [FromQuery] bool forceRefresh = false, CancellationToken cancellationToken = default)
     {
-        var news = await _newsService.GetNewsByStockAsync(stockCode);
+        var news = await _newsService.GetNewsByStockAsync(stockCode, forceRefresh, cancellationToken);
         return Ok(news);
     }
 

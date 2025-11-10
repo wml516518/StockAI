@@ -24,6 +24,7 @@ public class StockDbContext : DbContext
     public DbSet<TradingSignal> TradingSignals { get; set; }
     public DbSet<SimulatedTrade> SimulatedTrades { get; set; }
     public DbSet<BacktestResult> BacktestResults { get; set; }
+    public DbSet<StockDataCache> StockDataCaches { get; set; }
     
     // 策略优化相关表
     public DbSet<StrategyOptimizationResult> StrategyOptimizationResults { get; set; }
@@ -87,6 +88,10 @@ public class StockDbContext : DbContext
 
         modelBuilder.Entity<BacktestResult>()
             .HasIndex(br => new { br.StrategyId, br.StartDate, br.EndDate });
+
+        modelBuilder.Entity<StockDataCache>()
+            .HasIndex(c => new { c.StockCode, c.DataType })
+            .IsUnique();
     }
 }
 

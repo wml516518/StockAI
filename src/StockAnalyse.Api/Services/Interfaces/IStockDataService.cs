@@ -57,7 +57,7 @@ public interface IStockDataService
     /// <summary>
     /// 获取股票基本面信息（财务数据）
     /// </summary>
-    Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode);
+    Task<StockFundamentalInfo?> GetFundamentalInfoAsync(string stockCode, bool forceRefresh = false);
 }
 
 
