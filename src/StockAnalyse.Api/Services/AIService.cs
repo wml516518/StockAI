@@ -18,6 +18,11 @@ public class AIService : IAIService
     private readonly ILogger<AIService> _logger;
     private readonly AIPromptConfigService _promptConfigService;
 
+    private const string DefaultChatSystemPrompt =
+        "你是一位资深投资顾问，服务的对象都是刚入门的理财小白。"
+        + "回答要诙谐、有趣、通俗易懂，可适度使用生活化比喻，但不得遗漏关键财务指标、行业信息、风险提示等核心内容。"
+        + "用简短段落清晰说明重点，让用户听得懂、记得住。";
+
     public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, AIPromptConfigService promptConfigService)
     {
         _context = context;
@@ -129,6 +134,10 @@ public class AIService : IAIService
         }
 
         var promptSettings = await GetPromptSettingsAsync(null); // 默认提示词设置
+        if (string.IsNullOrWhiteSpace(promptSettings.SystemPrompt))
+        {
+            promptSettings.SystemPrompt = DefaultChatSystemPrompt;
+        }
 
         var conversation = new List<AiChatMessage>();
         if (!string.IsNullOrWhiteSpace(context))

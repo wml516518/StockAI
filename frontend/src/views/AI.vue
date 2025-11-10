@@ -1151,12 +1151,12 @@ onActivated(() => {
 }
 
 .chat-messages {
-  max-height: 280px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding-right: 4px;
+  max-height: 500px;
+  overflow-y: auto;
 }
 
 .chat-message {
