@@ -62,7 +62,11 @@
             <p>AI正在分析中，请稍候...</p>
           </div>
 
-          <div v-if="currentSession.result" class="result-card">
+          <div
+            v-if="currentSession.result"
+            class="result-card"
+            ref="analysisCardRef"
+          >
             <div class="result-header">
               <div class="result-header-info">
                 <h4>分析结果</h4>
@@ -72,9 +76,14 @@
                   <span v-if="currentSession.stockInfo" class="stock-info">（{{ currentSession.stockInfo.name }}，当前价：{{ formatNumber(currentSession.stockInfo?.currentPrice) }}）</span>
                 </div>
               </div>
-              <button type="button" class="btn btn-chat" @click="toggleChat">
-                {{ currentSession.chatVisible ? '⬇ 收起对话' : '💬 和AI继续对话' }}
-              </button>
+              <div class="result-action-group">
+                <button type="button" class="btn btn-export" @click="handleExportPdf">
+                  📄 一键导出
+                </button>
+                <button type="button" class="btn btn-chat" @click="toggleChat">
+                  {{ currentSession.chatVisible ? '⬇ 收起对话' : '💬 和AI继续对话' }}
+                </button>
+              </div>
             </div>
 
             <div v-if="chartImageSrc" class="chart-section">
@@ -184,6 +193,9 @@ const MAX_CHAT_ROUNDS = 5
 const chatMessagesContainer = ref(null)
 const chatPanel = ref(null)
 const chatTextarea = ref(null)
+const analysisCardRef = ref(null)
+let jsPdfLoaderPromise = null
+let html2CanvasLoaderPromise = null
 
 const canSendChat = computed(() => {
   const session = currentSession.value
@@ -192,6 +204,62 @@ const canSendChat = computed(() => {
   }
   return Boolean(session.chatInput && session.chatInput.trim() && !session.chatLoading)
 })
+
+const getJsPdf = async () => {
+  if (typeof window === 'undefined') return null
+  if (window.jspdf?.jsPDF) {
+    return window.jspdf.jsPDF
+  }
+  if (!jsPdfLoaderPromise) {
+    jsPdfLoaderPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'
+      script.async = true
+      script.onload = () => {
+        if (window.jspdf?.jsPDF) {
+          resolve(window.jspdf.jsPDF)
+        } else {
+          jsPdfLoaderPromise = null
+          reject(new Error('未能加载 jsPDF 模块'))
+        }
+      }
+      script.onerror = () => {
+        jsPdfLoaderPromise = null
+        reject(new Error('下载 jsPDF 失败'))
+      }
+      document.body.appendChild(script)
+    })
+  }
+  return jsPdfLoaderPromise
+}
+
+const getHtml2Canvas = async () => {
+  if (typeof window === 'undefined') return null
+  if (window.html2canvas) {
+    return window.html2canvas
+  }
+  if (!html2CanvasLoaderPromise) {
+    html2CanvasLoaderPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js'
+      script.async = true
+      script.onload = () => {
+        if (window.html2canvas) {
+          resolve(window.html2canvas)
+        } else {
+          html2CanvasLoaderPromise = null
+          reject(new Error('未能加载 html2canvas 模块'))
+        }
+      }
+      script.onerror = () => {
+        html2CanvasLoaderPromise = null
+        reject(new Error('下载 html2canvas 失败'))
+      }
+      document.body.appendChild(script)
+    })
+  }
+  return html2CanvasLoaderPromise
+}
 
 const chartImageSrc = computed(() => {
   const chart = currentSession.value?.technicalChart
@@ -597,6 +665,92 @@ const clearChatHistory = () => {
   currentSession.value.chatInput = ''
 }
 
+const sanitizeFileName = (name) => {
+  if (!name) return 'AI分析报告'
+  return name.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || 'AI分析报告'
+}
+
+const handleExportPdf = async () => {
+  const session = currentSession.value
+  if (!session || !session.result) {
+    alert('暂无可导出的分析内容，请先完成AI分析。')
+    return
+  }
+
+  let previousDisplay = null
+  let analysisElement = null
+  try {
+    const [jsPDF, html2canvas] = await Promise.all([getJsPdf(), getHtml2Canvas()])
+    if (!jsPDF || !html2canvas) {
+      alert('PDF 导出模块加载失败，请检查网络后重试。')
+      return
+    }
+
+    analysisElement = analysisCardRef.value
+    if (!analysisElement) {
+      alert('未找到可导出的内容区域，请刷新后重试。')
+      return
+    }
+
+    await nextTick()
+
+    const scale = Math.max(window.devicePixelRatio || 1, 2)
+
+    const actionGroup = analysisElement.querySelector('.result-action-group')
+    if (actionGroup) {
+      previousDisplay = actionGroup.style.display
+      actionGroup.style.display = 'none'
+    }
+
+    const canvas = await html2canvas(analysisElement, {
+      scale,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      scrollY: -window.scrollY
+    })
+
+    const imageData = canvas.toDataURL('image/png', 1.0)
+    const doc = new jsPDF({
+      unit: 'pt',
+      format: 'a4'
+    })
+
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+
+    const imgWidth = pageWidth
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+    let heightLeft = imgHeight
+    let position = 0
+
+    const stockName = session.stockInfo?.name || session.displayName || session.stockCode || 'AI分析'
+    const fileName = `${sanitizeFileName(stockName)}.pdf`
+
+    doc.addImage(imageData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST')
+    heightLeft -= pageHeight
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight
+      doc.addPage()
+      doc.addImage(imageData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST')
+      heightLeft -= pageHeight
+    }
+
+    doc.save(fileName)
+  } catch (error) {
+    console.error('导出PDF失败:', error)
+    alert('导出PDF失败，请稍后再试。')
+  } finally {
+    if (analysisElement) {
+      const actionGroup = analysisElement.querySelector('.result-action-group')
+      if (actionGroup) {
+        actionGroup.style.display = previousDisplay ?? ''
+      }
+    }
+  }
+}
+
 const handleChatTextareaKeydown = (event) => {
   if (
     event.key === 'Enter' &&
@@ -874,6 +1028,13 @@ onActivated(() => {
   gap: 8px;
 }
 
+.result-action-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .analysis-date {
   font-size: 0.9em;
   color: #666;
@@ -903,6 +1064,28 @@ onActivated(() => {
 }
 
 .btn-chat:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-export {
+  background: #e8f8f0;
+  color: #21865d;
+  border: 1px solid #9ee0c4;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-export:hover {
+  background: #d4f0e3;
+  box-shadow: 0 2px 8px rgba(33, 134, 93, 0.2);
+}
+
+.btn-export:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   box-shadow: none;
@@ -1240,6 +1423,11 @@ onActivated(() => {
   .chat-actions {
     flex-direction: row;
     justify-content: flex-end;
+  }
+
+  .result-action-group {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 </style>
