@@ -1506,6 +1506,26 @@ public class AIController : ControllerBase
 
         var contextBuilder = new StringBuilder();
 
+        // 如果提供了股票代码，总是获取实时股票数据（无论是否是第一次对话）
+        if (!string.IsNullOrWhiteSpace(request.StockCode) && (request.ForceRealTimeData || request.IncludeAnalysisContext))
+        {
+            try
+            {
+                _logger.LogInformation("开始获取股票 {StockCode} 的实时数据上下文", request.StockCode);
+                var realTimeData = await _aiService.GetStockRealTimeDataContextAsync(request.StockCode);
+                if (!string.IsNullOrWhiteSpace(realTimeData))
+                {
+                    contextBuilder.AppendLine("=== 实时股票数据 ===");
+                    contextBuilder.AppendLine(realTimeData);
+                    contextBuilder.AppendLine();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "获取股票 {StockCode} 实时数据失败，但继续聊天", request.StockCode);
+            }
+        }
+
         if (request.IncludeAnalysisContext && !string.IsNullOrWhiteSpace(request.AnalysisSummary))
         {
             var stockCode = string.IsNullOrWhiteSpace(request.StockCode)
@@ -1514,14 +1534,17 @@ public class AIController : ControllerBase
 
             var analysisLabel = GetAnalysisTypeLabel(request.AnalysisType, request.AnalysisTypeLabel);
 
-            contextBuilder.AppendLine($"以下是股票 {stockCode} 的{analysisLabel}结果摘要，请结合这些信息回答用户的提问：");
+            contextBuilder.AppendLine($"=== 历史分析结果 ===");
+            contextBuilder.AppendLine($"以下是股票 {stockCode} 的{analysisLabel}结果摘要，请结合实时数据和这些历史分析回答用户的提问：");
             contextBuilder.AppendLine(request.AnalysisSummary.Trim());
+            contextBuilder.AppendLine();
         }
 
         if (!string.IsNullOrWhiteSpace(request.Context))
         {
             if (contextBuilder.Length > 0)
             {
+                contextBuilder.Append("请结合上述实时数据和历史分析回答：");
                 contextBuilder.AppendLine();
             }
             contextBuilder.AppendLine(request.Context.Trim());
@@ -2268,6 +2291,7 @@ public class ChatRequest
     public string? Context { get; set; }
     public int MaxHistory { get; set; } = 5;
     public int? ModelId { get; set; }
+    public bool ForceRealTimeData { get; set; } = false; // 强制获取实时数据
 }
 
 public class ChatMessageDto

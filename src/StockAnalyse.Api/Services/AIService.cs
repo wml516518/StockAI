@@ -8,6 +8,7 @@ using StockAnalyse.Api.Services.Abstractions;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 
 namespace StockAnalyse.Api.Services;
 
@@ -17,18 +18,22 @@ public class AIService : IAIService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<AIService> _logger;
     private readonly AIPromptConfigService _promptConfigService;
+    private readonly IStockDataService _stockDataService;
+    private readonly INewsService _newsService;
 
     private const string DefaultChatSystemPrompt =
         "你是一位资深投资顾问，服务的对象都是刚入门的理财小白。"
-        + "回答要诙谐、有趣、通俗易懂，可适度使用生活化比喻，但不得遗漏关键财务指标、行业信息、风险提示等核心内容。"
+        + "回答要诙谐、有趣、通俗易懂，可适度使用生活化比喻，但不得遗漏关键财务指标、行业信息、风险提示等核心内容,且确保数据的实时性和准确性。"
         + "用简短段落清晰说明重点，让用户听得懂、记得住。";
 
-    public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, AIPromptConfigService promptConfigService)
+    public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, AIPromptConfigService promptConfigService, IStockDataService stockDataService, INewsService newsService)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _promptConfigService = promptConfigService;
+        _stockDataService = stockDataService;
+        _newsService = newsService;
     }
     
     private HttpClient GetHttpClient()
@@ -505,6 +510,125 @@ public class AIService : IAIService
     {
         var analysis = await AnalyzeStockAsync(stockCode, null, "请给出买入、持有或卖出的建议，并说明理由。");
         return analysis;
+    }
+
+    /// <summary>
+    /// 获取股票的实时数据上下文，用于AI聊天
+    /// </summary>
+    public async Task<string> GetStockRealTimeDataContextAsync(string stockCode)
+    {
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return string.Empty;
+        }
+
+        stockCode = stockCode.Trim().ToUpperInvariant();
+        var contextBuilder = new StringBuilder();
+
+        try
+        {
+            // 1. 获取实时股价数据
+            var stockQuote = await _stockDataService.GetWatchlistRealTimeQuoteAsync(stockCode);
+            if (stockQuote != null)
+            {
+                contextBuilder.AppendLine($"📈 实时股价信息 ({DateTime.Now:yyyy-MM-dd HH:mm:ss}):");
+                contextBuilder.AppendLine($"   股票代码: {stockQuote.Code}");
+                contextBuilder.AppendLine($"   股票名称: {stockQuote.Name ?? "未知"}");
+                contextBuilder.AppendLine($"   当前价格: ¥{stockQuote.CurrentPrice:F2}");
+                contextBuilder.AppendLine($"   涨跌幅: {(stockQuote.ChangePercent >= 0 ? "+" : "")}{stockQuote.ChangePercent:F2}%");
+                contextBuilder.AppendLine($"   涨跌额: ¥{stockQuote.ChangeAmount:F2}");
+                if (stockQuote.HighPrice > 0)
+                    contextBuilder.AppendLine($"   今日最高: ¥{stockQuote.HighPrice:F2}");
+                if (stockQuote.LowPrice > 0)
+                    contextBuilder.AppendLine($"   今日最低: ¥{stockQuote.LowPrice:F2}");
+                if (stockQuote.Volume > 0)
+                    contextBuilder.AppendLine($"   成交量: {stockQuote.Volume:N0} 手");
+                if (stockQuote.Turnover > 0)
+                    contextBuilder.AppendLine($"   成交额: ¥{stockQuote.Turnover:N0}");
+                contextBuilder.AppendLine();
+            }
+
+            // 2. 获取最新新闻数据（最近3条）
+            var newsList = await _newsService.GetNewsByStockAsync(stockCode);
+            if (newsList != null && newsList.Any())
+            {
+                contextBuilder.AppendLine("📰 最新相关新闻 (最近3条):");
+                var recentNews = newsList.OrderByDescending(n => n.PublishTime).Take(3);
+                foreach (var news in recentNews)
+                {
+                    contextBuilder.AppendLine($"   • [{news.PublishTime:MM-dd HH:mm}] {news.Title}");
+                    if (!string.IsNullOrWhiteSpace(news.Summary))
+                    {
+                        var summary = news.Summary.Length > 100 ? news.Summary[..100] + "..." : news.Summary;
+                        contextBuilder.AppendLine($"     摘要: {summary}");
+                    }
+                }
+                contextBuilder.AppendLine();
+            }
+
+            // 3. 获取基本面数据（如果有的话）
+            var fundamentalData = await GetFundamentalDataAsync(stockCode);
+            if (!string.IsNullOrWhiteSpace(fundamentalData))
+            {
+                contextBuilder.AppendLine("📊 基本面数据:");
+                contextBuilder.AppendLine(fundamentalData);
+                contextBuilder.AppendLine();
+            }
+
+            // 4. 获取技术指标（如果有的话）
+            var technicalData = await GetTechnicalDataAsync(stockCode);
+            if (!string.IsNullOrWhiteSpace(technicalData))
+            {
+                contextBuilder.AppendLine("📉 技术指标:");
+                contextBuilder.AppendLine(technicalData);
+                contextBuilder.AppendLine();
+            }
+
+            var result = contextBuilder.ToString().Trim();
+            _logger.LogInformation("成功获取股票 {StockCode} 的实时数据上下文，长度: {Length}", stockCode, result.Length);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取股票 {StockCode} 实时数据上下文失败", stockCode);
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// 获取基本面数据
+    /// </summary>
+    private async Task<string> GetFundamentalDataAsync(string stockCode)
+    {
+        try
+        {
+            // 这里可以扩展获取财务数据、行业数据等
+            // 目前先返回空字符串，未来可以从数据库或API获取
+            return string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "获取股票 {StockCode} 基本面数据失败", stockCode);
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// 获取技术指标数据
+    /// </summary>
+    private async Task<string> GetTechnicalDataAsync(string stockCode)
+    {
+        try
+        {
+            // 这里可以扩展获取技术指标如MACD、RSI、KDJ等
+            // 目前先返回空字符串，未来可以从数据库或计算获取
+            return string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "获取股票 {StockCode} 技术指标数据失败", stockCode);
+            return string.Empty;
+        }
     }
 
     private async Task<AIModelConfig?> GetActiveAIConfigAsync()

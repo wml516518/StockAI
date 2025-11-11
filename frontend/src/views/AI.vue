@@ -808,7 +808,9 @@ const handleSendChatMessage = async () => {
       analysisSummary: isFirstTurn ? session.result : undefined,
       includeAnalysisContext: isFirstTurn,
       messages: payloadMessages,
-      maxHistory: MAX_CHAT_ROUNDS
+      maxHistory: MAX_CHAT_ROUNDS,
+      // 总是获取实时数据，即使不是第一次对话
+      forceRealTimeData: true
     }
 
     const response = await api.post('/ai/chat', payload, { timeout: 120000 })

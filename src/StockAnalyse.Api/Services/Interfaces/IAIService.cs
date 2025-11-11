@@ -24,6 +24,11 @@ public interface IAIService
     /// 获取股票建议
     /// </summary>
     Task<string> GetStockRecommendationAsync(string stockCode);
+
+    /// <summary>
+    /// 获取股票的实时数据上下文，用于AI聊天
+    /// </summary>
+    Task<string> GetStockRealTimeDataContextAsync(string stockCode);
 }
 
 

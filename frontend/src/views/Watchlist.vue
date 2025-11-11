@@ -479,7 +479,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, onActivated, computed, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { useAiAnalysisStore } from '../stores/aiAnalysis'
 import api from '../services/api'
@@ -1017,7 +1017,13 @@ onMounted(async () => {
   })
 })
 
-// 组件激活时恢复自动刷新（用于路由切换回来时，keep-alive 会触发此钩子）
+// 组件离开时保存滚动位置
+onBeforeRouteLeave(() => {
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop
+  localStorage.setItem('watchlist-scroll-position', scrollTop.toString())
+})
+
+// 组件激活时恢复自动刷新和滚动位置（用于路由切换回来时，keep-alive 会触发此钩子）
 onActivated(() => {
   // 重新加载设置，确保使用最新的刷新间隔
   loadSettings()
@@ -1025,6 +1031,17 @@ onActivated(() => {
   updateTradingStatus()
   // 只恢复自动刷新，不重新获取数据
   startAutoRefresh()
+
+  // 恢复滚动位置
+  nextTick(() => {
+    const savedScrollTop = localStorage.getItem('watchlist-scroll-position')
+    if (savedScrollTop) {
+      window.scrollTo({
+        top: parseInt(savedScrollTop, 10),
+        behavior: 'instant'
+      })
+    }
+  })
 })
 
 onUnmounted(() => {
