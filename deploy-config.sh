@@ -6,6 +6,9 @@
 # GitHub仓库地址 - 请替换为你的实际仓库地址
 GITHUB_REPO="https://gitclone.com/github.com/wml516518/StockAI.git"
 
+# Git分支 - 指定要克隆的分支
+GIT_BRANCH="master"
+
 # 域名配置 - 如果没有域名，可以设置为服务器IP
 DOMAIN_NAME="8.148.30.195"
 

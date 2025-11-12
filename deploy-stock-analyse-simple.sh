@@ -97,7 +97,9 @@ echo ""
 
 # 7. 从GitHub克隆代码
 echo "步骤7: 克隆代码..."
-git clone $GITHUB_REPO .
+echo "仓库: $GITHUB_REPO"
+echo "分支: $GIT_BRANCH"
+git clone -b $GIT_BRANCH $GITHUB_REPO .
 echo "✓ 代码克隆完成"
 echo ""
 
