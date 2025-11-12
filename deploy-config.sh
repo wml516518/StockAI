@@ -5,6 +5,8 @@
 
 # GitHub仓库地址 - 请替换为你的实际仓库地址
 GITHUB_REPO="https://gitclone.com/github.com/wml516518/StockAI.git"
+# Git 分支 - 默认 master
+GIT_BRANCH="master"
 
 # 域名配置 - 如果没有域名，可以设置为服务器IP
 DOMAIN_NAME="8.148.30.195"
@@ -42,8 +44,8 @@ PROJECT_ROOT="/opt/stock-analyse"
 # 后端发布目录
 BACKEND_PUBLISH_DIR="$PROJECT_ROOT/publish/backend"
 
-# 前端构建目录
-FRONTEND_DIST_DIR="$PROJECT_ROOT/frontend/dist"
+# 前端构建目录 (Vite outDir，默认为后端 wwwroot)
+FRONTEND_DIST_DIR="$PROJECT_ROOT/src/StockAnalyse.Api/wwwroot"
 
 # Python服务目录
 PYTHON_SERVICE_DIR="$PROJECT_ROOT/python-data-service"
