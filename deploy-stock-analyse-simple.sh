@@ -392,7 +392,7 @@ configure_nginx() {
         sudo tee "$nginx_conf" >/dev/null <<EOF
 server {
     listen 80;
-    server_name $DOMAIN_NAME www.$DOMAIN_NAME $SERVER_IP;
+    server_name $DOMAIN_NAME;
     return 301 https://\$host\$request_uri;
 }
 
