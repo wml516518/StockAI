@@ -414,6 +414,10 @@ server {
     location /api/ {
         proxy_pass http://127.0.0.1:$BACKEND_PORT;
         proxy_http_version 1.1;
+        proxy_connect_timeout 600s; 
+		proxy_send_timeout 600s;     
+		proxy_read_timeout 600s;     
+		send_timeout 600s; 
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection keep-alive;
         proxy_set_header Host \$host;
