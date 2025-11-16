@@ -33,6 +33,7 @@ try:
     import matplotlib.dates as mdates  # type: ignore
     from matplotlib.ticker import MaxNLocator  # type: ignore
     from matplotlib import font_manager  # type: ignore
+    from matplotlib.font_manager import FontProperties  # type: ignore
     MATPLOTLIB_AVAILABLE = True
 except Exception as matplotlib_import_error:
     matplotlib = None
@@ -43,8 +44,36 @@ except Exception as matplotlib_import_error:
     print(f"[{datetime.now()}] ⚠️ 未能导入matplotlib，图表生成功能不可用: {matplotlib_import_error}")
 else:
     try:
-        font_candidates = ["Microsoft YaHei", "SimHei", "STHeiti", "Heiti TC", "Arial Unicode MS"]
+        # 优先尝试使用指定的中文字体绝对路径（跨平台判断）
+        if sys.platform.startswith("win"):
+            font_path = r"C:\Windows\Fonts\simhei.ttf"
+        else:
+            font_path = "/usr/share/fonts/noto/NotoSansCJKsc-Regular.otf"
         selected_font = None
+
+        try:
+            if os.path.exists(font_path):
+                # 注册字体文件
+                font_manager.fontManager.addfont(font_path)  # type: ignore[attr-defined]
+                font_prop = FontProperties(fname=font_path)  # type: ignore[name-defined]
+                # 使用字体名称应用到全局
+                selected_font = font_prop.get_name()
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ 无法加载指定字体文件: {font_path}, 错误: {e}")
+
+        # 若未能通过绝对路径设置，则尝试常见中文字体名称
+        font_candidates = [name for name in [
+            selected_font,
+            "Noto Sans CJK SC",
+            "Noto Sans CJK",
+            "WenQuanYi Zen Hei",
+            "Microsoft YaHei",
+            "SimHei",
+            "STHeiti",
+            "Heiti TC",
+            "Arial Unicode MS",
+            "DejaVu Sans"
+        ] if name]
         for font_name in font_candidates:
             try:
                 font_manager.findfont(font_name, fallback_to_default=False)  # type: ignore[attr-defined]
