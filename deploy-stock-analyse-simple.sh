@@ -279,7 +279,7 @@ sync_repository() {
         
         # 更新远程引用
         run_as_service_user "cd '$PROJECT_ROOT' && git remote update origin --prune" 2>&1 || true
-        run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin --prune --all" 2>&1 || true
+        run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin --prune" 2>&1 || true
         
         # 如果是 gitclone.com 镜像，可能需要额外处理
         if [[ "$GITHUB_REPO" == *"gitclone.com"* ]]; then
@@ -364,51 +364,49 @@ sync_repository() {
         
         log_info "使用分支: $GIT_BRANCH"
         
-        # 获取更新
-        log_info "执行 git fetch..."
-        local fetch_output
-        fetch_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin '$GIT_BRANCH'" 2>&1)
-        local fetch_status=$?
+        # 强制同步到远程分支（忽略本地未提交的更改）
+        log_info "强制同步到远程分支 '$GIT_BRANCH'..."
         
-        if [[ $fetch_status -ne 0 ]]; then
-            log_info "⚠️  代码拉取失败，错误信息:"
-            echo "$fetch_output" | head -10 | sed 's/^/   /'
-            log_info "可能的原因:"
-            log_info "  1. 网络连接问题"
-            log_info "  2. 分支不存在或已删除"
-            log_info "  3. 权限不足"
-            log_info "提示: 将使用现有代码继续部署"
-            set -e
-            return 0
-        fi
+        # 1. 获取最新远程代码
+        log_info "获取远程更新..."
+        run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin '$GIT_BRANCH'" 2>&1 || {
+            log_info "⚠️  获取远程更新失败，继续尝试重置..."
+        }
         
-        # 切换分支
+        # 2. 切换到目标分支（如果不在该分支上）
         log_info "切换到分支 '$GIT_BRANCH'..."
-        local checkout_output
-        checkout_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git checkout '$GIT_BRANCH'" 2>&1)
-        local checkout_status=$?
+        run_as_service_user "cd '$PROJECT_ROOT' && git checkout '$GIT_BRANCH'" 2>&1 || {
+            log_info "⚠️  分支切换失败，继续尝试重置..."
+        }
         
-        if [[ $checkout_status -ne 0 ]]; then
-            log_info "⚠️  分支切换失败，错误信息:"
-            echo "$checkout_output" | head -10 | sed 's/^/   /'
-            log_info "提示: 将使用当前分支继续部署"
-        fi
+        # 3. 清理工作区（丢弃所有本地更改）
+        log_info "清理工作区（丢弃本地未提交的更改）..."
+        run_as_service_user "cd '$PROJECT_ROOT' && git clean -fd" 2>&1 || true
+        run_as_service_user "cd '$PROJECT_ROOT' && git reset --hard HEAD" 2>&1 || true
         
-        # 拉取更新
-        log_info "执行 git pull..."
-        local pull_output
-        pull_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git pull --ff-only origin '$GIT_BRANCH'" 2>&1)
-        local pull_status=$?
+        # 4. 强制重置到远程分支（确保与远程完全一致）
+        log_info "强制重置到远程分支 origin/'$GIT_BRANCH'..."
+        local reset_output
+        reset_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git reset --hard origin/'$GIT_BRANCH'" 2>&1) || true
+        local reset_status=$?
         
-        if [[ $pull_status -ne 0 ]]; then
-            log_info "⚠️  代码更新失败，错误信息:"
-            echo "$pull_output" | head -10 | sed 's/^/   /'
-            log_info "可能的原因:"
-            log_info "  1. 本地有未提交的更改"
-            log_info "  2. 需要合并冲突"
-            log_info "提示: 将使用现有代码继续部署"
-            set -e
-            return 0
+        if [[ $reset_status -eq 0 ]] && [[ -z "$(echo "$reset_output" | grep -i 'error\|fatal')" ]]; then
+            log_ok "代码已强制同步到远程分支 '$GIT_BRANCH'"
+            # 显示重置信息（如果有）
+            if [[ -n "$reset_output" ]]; then
+                echo "$reset_output" | grep -v "^$" | head -3 | sed 's/^/   /' || true
+            fi
+        else
+            # 即使有错误也尝试继续，因为 reset --hard 通常能成功
+            if echo "$reset_output" | grep -q "HEAD is now at"; then
+                log_ok "代码已强制同步到远程分支 '$GIT_BRANCH'"
+                echo "$reset_output" | grep "HEAD is now at" | sed 's/^/   /' || true
+            else
+                log_info "⚠️  重置过程中可能有警告，但继续部署..."
+                if [[ -n "$reset_output" ]]; then
+                    echo "$reset_output" | head -5 | sed 's/^/   /' || true
+                fi
+            fi
         fi
         
         log_ok "代码同步完成 (使用分支: $GIT_BRANCH)"
