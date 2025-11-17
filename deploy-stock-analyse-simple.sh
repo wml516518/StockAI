@@ -28,6 +28,24 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
+# 检查并修复 Windows 换行符问题（CRLF -> LF）
+# 优先使用 sed，因为它在 Linux 系统上几乎总是可用
+if command -v sed >/dev/null 2>&1; then
+    # 使用 sed 删除行尾的 \r 字符（更可靠的方法）
+    sed -i 's/\r$//' "$CONFIG_FILE" 2>/dev/null || {
+        # 如果 sed -i 失败（某些系统不支持），使用临时文件
+        sed 's/\r$//' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null && \
+        mv "$CONFIG_FILE.tmp" "$CONFIG_FILE" 2>/dev/null || true
+    }
+elif command -v dos2unix >/dev/null 2>&1; then
+    # 使用 dos2unix 工具转换（如果可用）
+    dos2unix "$CONFIG_FILE" 2>/dev/null || true
+elif command -v tr >/dev/null 2>&1; then
+    # 使用 tr 删除所有 \r 字符
+    tr -d '\r' < "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null && \
+    mv "$CONFIG_FILE.tmp" "$CONFIG_FILE" 2>/dev/null || true
+fi
+
 source "$CONFIG_FILE"
 
 SERVER_IP=${SERVER_IP:-$(curl -s ifconfig.me || echo "your-server-ip")}
@@ -204,24 +222,138 @@ sync_repository() {
     # 使用 set +e 临时禁用错误退出，允许代码同步失败时继续执行
     set +e
     
+    # 检查 Git 是否安装
+    if ! command -v git >/dev/null 2>&1; then
+        log_info "⚠️  Git 未安装，跳过代码同步步骤"
+        log_info "提示: 请先安装 Git: sudo apt-get install git 或 sudo yum install git"
+        set -e
+        return 0
+    fi
+    
+    # 检查仓库地址是否配置
+    if [[ -z "$GITHUB_REPO" ]]; then
+        log_info "⚠️  GITHUB_REPO 未配置，跳过代码同步步骤"
+        set -e
+        return 0
+    fi
+    
+    # 测试网络连接和仓库可访问性
+    log_info "检查仓库可访问性: $GITHUB_REPO"
+    local repo_check_output
+    repo_check_output=$(run_as_service_user "git ls-remote '$GITHUB_REPO' HEAD" 2>&1)
+    local repo_check_status=$?
+    
+    if [[ $repo_check_status -ne 0 ]]; then
+        log_info "⚠️  无法访问仓库，错误信息:"
+        echo "$repo_check_output" | head -5 | sed 's/^/   /'
+        log_info "可能的原因:"
+        log_info "  1. 网络连接问题"
+        log_info "  2. 仓库地址错误或不存在"
+        log_info "  3. 需要身份验证（SSH密钥或访问令牌）"
+        log_info "  4. 防火墙阻止了 Git 连接"
+        log_info "提示: 将使用现有代码继续部署（如果存在）"
+        set -e
+        return 0
+    fi
+    
     if [[ -d "$PROJECT_ROOT/.git" ]]; then
         log_info "检测到现有仓库，执行更新..."
-        if ! run_as_service_user "cd '$PROJECT_ROOT' && git remote set-url origin '$GITHUB_REPO'" 2>/dev/null; then
+        
+        # 检查当前仓库的远程地址
+        local current_remote
+        current_remote=$(run_as_service_user "cd '$PROJECT_ROOT' && git remote get-url origin 2>/dev/null" || echo "")
+        log_info "当前远程地址: ${current_remote:-未设置}"
+        
+        if ! run_as_service_user "cd '$PROJECT_ROOT' && git remote set-url origin '$GITHUB_REPO'" 2>&1; then
             log_info "⚠️  无法更新远程仓库地址，继续尝试..."
         fi
         
+        # 强制刷新远程引用，清除可能的缓存
+        log_info "刷新远程引用（清除缓存）..."
+        
+        # 清除 Git 引用缓存（如果存在）
+        if [[ -d "$PROJECT_ROOT/.git/refs/remotes/origin" ]]; then
+            log_info "清除本地远程引用缓存..."
+            run_as_service_user "cd '$PROJECT_ROOT' && rm -rf .git/refs/remotes/origin/*" 2>&1 || true
+        fi
+        
+        # 更新远程引用
+        run_as_service_user "cd '$PROJECT_ROOT' && git remote update origin --prune" 2>&1 || true
+        run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin --prune --all" 2>&1 || true
+        
+        # 如果是 gitclone.com 镜像，可能需要额外处理
+        if [[ "$GITHUB_REPO" == *"gitclone.com"* ]]; then
+            log_info "检测到 gitclone.com 镜像，清除可能的镜像缓存..."
+            # 清除可能的 DNS 缓存（如果系统支持）
+            if command -v flushdns >/dev/null 2>&1; then
+                sudo flushdns 2>/dev/null || true
+            fi
+        fi
+        
         # 尝试获取指定分支，如果失败则尝试检测默认分支
-        if ! run_as_service_user "cd '$PROJECT_ROOT' && git ls-remote --heads origin '$GIT_BRANCH'" >/dev/null 2>&1; then
-            log_info "分支 '$GIT_BRANCH' 不存在，尝试检测默认分支..."
+        log_info "检查分支 '$GIT_BRANCH' 是否存在..."
+        
+        # 先列出所有远程分支，用于诊断（使用 --no-cache 确保获取最新信息）
+        log_info "列出所有远程分支（强制刷新）..."
+        local all_branches_output
+        # 清除可能的 DNS 或 Git 缓存，强制重新连接
+        all_branches_output=$(run_as_service_user "cd '$PROJECT_ROOT' && GIT_TERMINAL_PROMPT=0 git ls-remote --heads origin" 2>&1)
+        local all_branches_status=$?
+        
+        if [[ $all_branches_status -eq 0 ]] && [[ -n "$all_branches_output" ]]; then
+            log_info "远程分支列表（原始输出）:"
+            echo "$all_branches_output" | head -20 | sed 's/^/   /'
+            log_info "远程分支列表（仅分支名）:"
+            echo "$all_branches_output" | sed 's|.*refs/heads/||' | sed 's/^/   /' | head -10
+        else
+            log_info "⚠️  无法列出远程分支，错误信息:"
+            echo "$all_branches_output" | head -10 | sed 's/^/   /'
+        fi
+        
+        # 检查指定分支是否存在（强制刷新）
+        log_info "检查分支 '$GIT_BRANCH' 是否存在（强制刷新远程引用）..."
+        local branch_check_output
+        branch_check_output=$(run_as_service_user "cd '$PROJECT_ROOT' && GIT_TERMINAL_PROMPT=0 git ls-remote --heads origin '$GIT_BRANCH'" 2>&1)
+        local branch_check_status=$?
+        
+        if [[ $branch_check_status -eq 0 ]] && [[ -n "$branch_check_output" ]]; then
+            log_ok "分支 '$GIT_BRANCH' 存在，使用该分支"
+            log_info "分支检查原始输出:"
+            echo "$branch_check_output" | sed 's/^/   /'
+        else
+            log_info "分支 '$GIT_BRANCH' 检查结果:"
+            if [[ $branch_check_status -ne 0 ]]; then
+                log_info "  命令执行失败 (退出码: $branch_check_status)"
+                echo "$branch_check_output" | head -10 | sed 's/^/   /'
+            else
+                log_info "  分支不存在或输出为空"
+                log_info "  原始输出: $branch_check_output"
+            fi
+            
+            log_info "尝试检测默认分支（强制刷新）..."
             local default_branch
-            default_branch=$(run_as_service_user "cd '$PROJECT_ROOT' && git ls-remote --symref origin HEAD | grep 'refs/heads/' | sed 's|.*refs/heads/||' | head -1" 2>/dev/null || echo "")
-            if [[ -n "$default_branch" ]]; then
+            # 使用更精确的方法提取分支名，避免包含 HEAD
+            local symref_output
+            symref_output=$(run_as_service_user "cd '$PROJECT_ROOT' && GIT_TERMINAL_PROMPT=0 git ls-remote --symref origin HEAD" 2>&1)
+            log_info "symref 输出: $symref_output"
+            
+            default_branch=$(echo "$symref_output" | grep 'refs/heads/' | sed -E 's|.*refs/heads/([^[:space:]]+).*|\1|' | head -1)
+            # 如果提取失败，尝试使用 awk
+            if [[ -z "$default_branch" ]] || [[ "$default_branch" == *"HEAD"* ]]; then
+                default_branch=$(echo "$symref_output" | awk '/refs\/heads\// {match($0, /refs\/heads\/([^[:space:]]+)/, arr); if (arr[1] != "") {print arr[1]; exit}}')
+            fi
+            # 清理分支名，移除末尾的 "HEAD" 和空格
+            default_branch=$(echo "$default_branch" | sed 's/[[:space:]]*HEAD[[:space:]]*$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | head -1)
+            
+            if [[ -n "$default_branch" ]] && [[ "$default_branch" != "HEAD" ]]; then
                 log_info "检测到默认分支: $default_branch，使用该分支"
                 GIT_BRANCH="$default_branch"
             else
-                # 尝试常见的分支名
+                log_info "无法从 symref 检测默认分支，尝试直接检查常见分支..."
+                # 尝试常见的分支名（强制刷新）
                 for branch in main master develop; do
-                    if run_as_service_user "cd '$PROJECT_ROOT' && git ls-remote --heads origin '$branch'" >/dev/null 2>&1; then
+                    branch_check_output=$(run_as_service_user "cd '$PROJECT_ROOT' && GIT_TERMINAL_PROMPT=0 git ls-remote --heads origin '$branch'" 2>&1)
+                    if [[ $? -eq 0 ]] && [[ -n "$branch_check_output" ]]; then
                         log_info "找到分支: $branch，使用该分支"
                         GIT_BRANCH="$branch"
                         break
@@ -230,20 +362,51 @@ sync_repository() {
             fi
         fi
         
-        if ! run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin '$GIT_BRANCH'" 2>/dev/null; then
-            log_info "⚠️  代码拉取失败，跳过代码同步步骤"
+        log_info "使用分支: $GIT_BRANCH"
+        
+        # 获取更新
+        log_info "执行 git fetch..."
+        local fetch_output
+        fetch_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git fetch origin '$GIT_BRANCH'" 2>&1)
+        local fetch_status=$?
+        
+        if [[ $fetch_status -ne 0 ]]; then
+            log_info "⚠️  代码拉取失败，错误信息:"
+            echo "$fetch_output" | head -10 | sed 's/^/   /'
+            log_info "可能的原因:"
+            log_info "  1. 网络连接问题"
+            log_info "  2. 分支不存在或已删除"
+            log_info "  3. 权限不足"
+            log_info "提示: 将使用现有代码继续部署"
             set -e
             return 0
         fi
         
-        if ! run_as_service_user "cd '$PROJECT_ROOT' && git checkout '$GIT_BRANCH'" 2>/dev/null; then
-            log_info "⚠️  分支切换失败，跳过代码同步步骤"
-            set -e
-            return 0
+        # 切换分支
+        log_info "切换到分支 '$GIT_BRANCH'..."
+        local checkout_output
+        checkout_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git checkout '$GIT_BRANCH'" 2>&1)
+        local checkout_status=$?
+        
+        if [[ $checkout_status -ne 0 ]]; then
+            log_info "⚠️  分支切换失败，错误信息:"
+            echo "$checkout_output" | head -10 | sed 's/^/   /'
+            log_info "提示: 将使用当前分支继续部署"
         fi
         
-        if ! run_as_service_user "cd '$PROJECT_ROOT' && git pull --ff-only origin '$GIT_BRANCH'" 2>/dev/null; then
-            log_info "⚠️  代码更新失败，跳过代码同步步骤"
+        # 拉取更新
+        log_info "执行 git pull..."
+        local pull_output
+        pull_output=$(run_as_service_user "cd '$PROJECT_ROOT' && git pull --ff-only origin '$GIT_BRANCH'" 2>&1)
+        local pull_status=$?
+        
+        if [[ $pull_status -ne 0 ]]; then
+            log_info "⚠️  代码更新失败，错误信息:"
+            echo "$pull_output" | head -10 | sed 's/^/   /'
+            log_info "可能的原因:"
+            log_info "  1. 本地有未提交的更改"
+            log_info "  2. 需要合并冲突"
+            log_info "提示: 将使用现有代码继续部署"
             set -e
             return 0
         fi
@@ -253,17 +416,68 @@ sync_repository() {
         log_info "首次克隆仓库..."
         
         # 先尝试克隆指定分支，如果失败则尝试检测默认分支
-        if ! run_as_service_user "git ls-remote --heads '$GITHUB_REPO' '$GIT_BRANCH'" >/dev/null 2>&1; then
-            log_info "分支 '$GIT_BRANCH' 不存在，尝试检测默认分支..."
+        log_info "检查分支 '$GIT_BRANCH' 是否存在..."
+        
+        # 先列出所有远程分支，用于诊断（强制刷新）
+        log_info "列出所有远程分支（强制刷新）..."
+        local all_branches_output
+        all_branches_output=$(run_as_service_user "GIT_TERMINAL_PROMPT=0 git ls-remote --heads '$GITHUB_REPO'" 2>&1)
+        local all_branches_status=$?
+        
+        if [[ $all_branches_status -eq 0 ]] && [[ -n "$all_branches_output" ]]; then
+            log_info "远程分支列表（原始输出）:"
+            echo "$all_branches_output" | head -20 | sed 's/^/   /'
+            log_info "远程分支列表（仅分支名）:"
+            echo "$all_branches_output" | sed 's|.*refs/heads/||' | sed 's/^/   /' | head -10
+        else
+            log_info "⚠️  无法列出远程分支，错误信息:"
+            echo "$all_branches_output" | head -10 | sed 's/^/   /'
+        fi
+        
+        # 检查指定分支是否存在（强制刷新）
+        log_info "检查分支 '$GIT_BRANCH' 是否存在（强制刷新远程引用）..."
+        local branch_check_output
+        branch_check_output=$(run_as_service_user "GIT_TERMINAL_PROMPT=0 git ls-remote --heads '$GITHUB_REPO' '$GIT_BRANCH'" 2>&1)
+        local branch_check_status=$?
+        
+        if [[ $branch_check_status -eq 0 ]] && [[ -n "$branch_check_output" ]]; then
+            log_ok "分支 '$GIT_BRANCH' 存在，使用该分支"
+            log_info "分支检查原始输出:"
+            echo "$branch_check_output" | sed 's/^/   /'
+        else
+            log_info "分支 '$GIT_BRANCH' 检查结果:"
+            if [[ $branch_check_status -ne 0 ]]; then
+                log_info "  命令执行失败 (退出码: $branch_check_status)"
+                echo "$branch_check_output" | head -10 | sed 's/^/   /'
+            else
+                log_info "  分支不存在或输出为空"
+                log_info "  原始输出: $branch_check_output"
+            fi
+            
+            log_info "尝试检测默认分支（强制刷新）..."
             local default_branch
-            default_branch=$(run_as_service_user "git ls-remote --symref '$GITHUB_REPO' HEAD | grep 'refs/heads/' | sed 's|.*refs/heads/||' | head -1" 2>/dev/null || echo "")
-            if [[ -n "$default_branch" ]]; then
+            # 使用更精确的方法提取分支名，避免包含 HEAD
+            local symref_output
+            symref_output=$(run_as_service_user "GIT_TERMINAL_PROMPT=0 git ls-remote --symref '$GITHUB_REPO' HEAD" 2>&1)
+            log_info "symref 输出: $symref_output"
+            
+            default_branch=$(echo "$symref_output" | grep 'refs/heads/' | sed -E 's|.*refs/heads/([^[:space:]]+).*|\1|' | head -1)
+            # 如果提取失败，尝试使用 awk
+            if [[ -z "$default_branch" ]] || [[ "$default_branch" == *"HEAD"* ]]; then
+                default_branch=$(echo "$symref_output" | awk '/refs\/heads\// {match($0, /refs\/heads\/([^[:space:]]+)/, arr); if (arr[1] != "") {print arr[1]; exit}}')
+            fi
+            # 清理分支名，移除末尾的 "HEAD" 和空格
+            default_branch=$(echo "$default_branch" | sed 's/[[:space:]]*HEAD[[:space:]]*$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | head -1)
+            
+            if [[ -n "$default_branch" ]] && [[ "$default_branch" != "HEAD" ]]; then
                 log_info "检测到默认分支: $default_branch，使用该分支"
                 GIT_BRANCH="$default_branch"
             else
-                # 尝试常见的分支名
+                log_info "无法从 symref 检测默认分支，尝试直接检查常见分支..."
+                # 尝试常见的分支名（强制刷新）
                 for branch in main master develop; do
-                    if run_as_service_user "git ls-remote --heads '$GITHUB_REPO' '$branch'" >/dev/null 2>&1; then
+                    branch_check_output=$(run_as_service_user "GIT_TERMINAL_PROMPT=0 git ls-remote --heads '$GITHUB_REPO' '$branch'" 2>&1)
+                    if [[ $? -eq 0 ]] && [[ -n "$branch_check_output" ]]; then
                         log_info "找到分支: $branch，使用该分支"
                         GIT_BRANCH="$branch"
                         break
@@ -272,18 +486,49 @@ sync_repository() {
             fi
         fi
         
-        sudo rm -rf "$PROJECT_ROOT"
+        log_info "使用分支: $GIT_BRANCH"
+        
+        # 如果目录存在但非 Git 仓库，备份并删除
+        if [[ -d "$PROJECT_ROOT" ]] && [[ ! -d "$PROJECT_ROOT/.git" ]]; then
+            log_info "项目目录存在但不是 Git 仓库，备份现有目录..."
+            local backup_dir="${PROJECT_ROOT}.backup.$(date +%Y%m%d_%H%M%S)"
+            sudo mv "$PROJECT_ROOT" "$backup_dir" 2>/dev/null || true
+            log_info "备份目录: $backup_dir"
+        else
+            sudo rm -rf "$PROJECT_ROOT"
+        fi
+        
         sudo mkdir -p "$PROJECT_ROOT"
         sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$PROJECT_ROOT"
         
-        if ! run_as_service_user "git clone --branch '$GIT_BRANCH' --single-branch '$GITHUB_REPO' '$PROJECT_ROOT'" 2>/dev/null; then
-            log_info "⚠️  代码克隆失败，跳过代码同步步骤"
+        log_info "克隆仓库到: $PROJECT_ROOT"
+        local clone_output
+        clone_output=$(run_as_service_user "git clone --branch '$GIT_BRANCH' --single-branch '$GITHUB_REPO' '$PROJECT_ROOT'" 2>&1)
+        local clone_status=$?
+        
+        if [[ $clone_status -ne 0 ]]; then
+            log_info "⚠️  代码克隆失败，错误信息:"
+            echo "$clone_output" | head -10 | sed 's/^/   /'
+            log_info "可能的原因:"
+            log_info "  1. 网络连接问题"
+            log_info "  2. 仓库地址错误"
+            log_info "  3. 权限不足（需要 SSH 密钥或访问令牌）"
+            log_info "  4. 磁盘空间不足"
             log_info "提示: 如果项目目录已存在，将使用现有代码继续部署"
             set -e
             return 0
         fi
         
         log_ok "代码同步完成 (使用分支: $GIT_BRANCH)"
+    fi
+    
+    # 显示当前提交信息
+    if [[ -d "$PROJECT_ROOT/.git" ]]; then
+        local current_commit
+        current_commit=$(run_as_service_user "cd '$PROJECT_ROOT' && git rev-parse --short HEAD 2>/dev/null" || echo "未知")
+        local current_branch
+        current_branch=$(run_as_service_user "cd '$PROJECT_ROOT' && git branch --show-current 2>/dev/null" || echo "未知")
+        log_info "当前分支: $current_branch, 提交: $current_commit"
     fi
     
     # 恢复错误退出模式
@@ -303,74 +548,251 @@ build_frontend() {
 
     log_step "构建前端应用"
     
-    # 安装依赖
-    log_info "安装前端依赖..."
-    if ! run_as_service_user "cd '$PROJECT_ROOT/frontend' && if [[ -f package-lock.json ]]; then npm ci; else npm install; fi" 2>&1; then
-        log_info "⚠️  前端依赖安装失败，跳过前端构建"
+    # 检查 Node.js 和 npm
+    if ! command -v node >/dev/null 2>&1; then
+        log_info "⚠️  Node.js 未安装，跳过前端构建"
         return
     fi
+    
+    if ! command -v npm >/dev/null 2>&1; then
+        log_info "⚠️  npm 未安装，跳过前端构建"
+        return
+    fi
+    
+    log_info "Node.js 版本: $(node -v)"
+    log_info "npm 版本: $(npm -v)"
+    
+    # 检查 package.json 是否存在
+    if [[ ! -f "$PROJECT_ROOT/frontend/package.json" ]]; then
+        log_info "⚠️  未找到 package.json，跳过前端构建"
+        log_info "前端目录内容:"
+        run_as_service_user "ls -la '$PROJECT_ROOT/frontend'" 2>&1 | head -20 || true
+        return
+    fi
+    
+    # 检查 package.json 中是否有 build 脚本
+    if ! run_as_service_user "cd '$PROJECT_ROOT/frontend' && grep -q '\"build\"' package.json" 2>/dev/null; then
+        log_info "⚠️  package.json 中未找到 build 脚本，跳过前端构建"
+        log_info "package.json 中的脚本:"
+        run_as_service_user "cd '$PROJECT_ROOT/frontend' && grep -A 5 '\"scripts\"' package.json" 2>&1 || true
+        return
+    fi
+    
+    # 安装依赖
+    log_info "安装前端依赖..."
+    log_info "工作目录: $PROJECT_ROOT/frontend"
+    
+    local install_output
+    install_output=$(run_as_service_user "cd '$PROJECT_ROOT/frontend' && if [[ -f package-lock.json ]]; then npm ci; else npm install; fi" 2>&1)
+    local install_status=$?
+    
+    if [[ $install_status -ne 0 ]]; then
+        log_info "⚠️  前端依赖安装失败，错误信息:"
+        echo "$install_output" | tail -20 | sed 's/^/   /'
+        log_info "可能的原因:"
+        log_info "  1. 网络连接问题（npm 源访问失败）"
+        log_info "  2. package.json 或 package-lock.json 格式错误"
+        log_info "  3. 磁盘空间不足"
+        log_info "  4. 权限问题"
+        log_info "提示: 可以手动进入前端目录执行 npm install 查看详细错误"
+        return
+    fi
+    
+    log_ok "前端依赖安装完成"
     
     # 构建前端
     log_info "执行前端构建..."
-    if ! run_as_service_user "cd '$PROJECT_ROOT/frontend' && npm run build" 2>&1; then
-        log_info "⚠️  前端构建失败，跳过前端构建步骤"
-        return
-    fi
-
-    local dist_source="$PROJECT_ROOT/frontend/dist"
-    local dist_target="$FRONTEND_DIST_DIR"
-
-    # 检查构建输出是否存在
-    if [[ ! -d "$dist_source" ]]; then
-        log_info "⚠️  前端构建输出目录不存在: $dist_source"
+    log_info "构建命令: npm run build"
+    
+    local build_output
+    build_output=$(run_as_service_user "cd '$PROJECT_ROOT/frontend' && npm run build" 2>&1)
+    local build_status=$?
+    
+    if [[ $build_status -ne 0 ]]; then
+        log_info "⚠️  前端构建失败，错误信息:"
+        echo "$build_output" | tail -30 | sed 's/^/   /'
+        log_info "可能的原因:"
+        log_info "  1. 代码编译错误"
+        log_info "  2. 依赖版本不兼容"
+        log_info "  3. 构建配置错误"
+        log_info "  4. 内存不足"
+        log_info "提示: 可以手动进入前端目录执行 npm run build 查看详细错误"
         return
     fi
     
-    if [[ ! -f "$dist_source/index.html" ]]; then
-        log_info "⚠️  前端构建输出中未找到 index.html"
-        log_info "构建输出目录内容:"
-        run_as_service_user "ls -la '$dist_source'" 2>&1 || true
+    # 显示构建输出的最后几行（通常包含成功信息）
+    log_info "构建输出摘要:"
+    echo "$build_output" | tail -10 | sed 's/^/   /'
+
+    # 动态检测构建输出目录
+    log_info "检测构建输出目录..."
+    local dist_source=""
+    
+    # 方法1: 从 vite.config.js 读取 outDir 配置
+    if [[ -f "$PROJECT_ROOT/frontend/vite.config.js" ]]; then
+        log_info "读取 vite.config.js 配置..."
+        # 尝试提取 outDir 配置（支持相对路径和绝对路径）
+        local outdir_config
+        outdir_config=$(run_as_service_user "cd '$PROJECT_ROOT/frontend' && grep -oE \"outDir:\\s*['\\\"]([^'\\\"]+)['\\\"]\" vite.config.js 2>/dev/null | head -1 | sed -E \"s/outDir:\\s*['\\\"]([^'\\\"]+)['\\\"]/\\1/\" || echo ''" || echo "")
+        
+        if [[ -n "$outdir_config" ]]; then
+            log_info "从 vite.config.js 检测到输出目录配置: $outdir_config"
+            # 处理相对路径（相对于 frontend 目录）
+            if [[ "$outdir_config" == ../* ]]; then
+                # 相对路径，需要解析
+                local resolved_path
+                resolved_path=$(run_as_service_user "cd '$PROJECT_ROOT/frontend' && realpath '$outdir_config' 2>/dev/null || echo ''" || echo "")
+                if [[ -n "$resolved_path" ]] && [[ -d "$resolved_path" ]]; then
+                    dist_source="$resolved_path"
+                    log_info "解析后的输出目录: $dist_source"
+                else
+                    # 手动构建路径（处理 ../src/StockAnalyse.Api/wwwroot）
+                    dist_source="$PROJECT_ROOT/${outdir_config#../}"
+                    log_info "手动构建的输出目录: $dist_source"
+                fi
+            else
+                # 绝对路径或相对于 frontend 的路径
+                if [[ "$outdir_config" == /* ]]; then
+                    dist_source="$outdir_config"
+                else
+                    dist_source="$PROJECT_ROOT/frontend/$outdir_config"
+                fi
+            fi
+        fi
+    fi
+    
+    # 方法2: 检查常见的输出目录
+    local possible_dirs=(
+        "$PROJECT_ROOT/src/StockAnalyse.Api/wwwroot"  # Vite 配置的默认输出
+        "$PROJECT_ROOT/frontend/dist"                  # 标准 Vite 输出
+        "$PROJECT_ROOT/frontend/build"                 # 某些构建工具的输出
+        "$PROJECT_ROOT/frontend/wwwroot"               # 备用输出
+        "$dist_source"                                 # 从配置读取的目录
+    )
+    
+    # 如果还没有找到，尝试查找包含 index.html 的目录
+    if [[ -z "$dist_source" ]] || [[ ! -d "$dist_source" ]]; then
+        log_info "检查常见的构建输出目录..."
+        for dir in "${possible_dirs[@]}"; do
+            if [[ -n "$dir" ]] && [[ -d "$dir" ]] && [[ -f "$dir/index.html" ]]; then
+                dist_source="$dir"
+                log_info "找到构建输出目录: $dist_source"
+                break
+            fi
+        done
+    fi
+    
+    # 方法3: 如果还是没找到，搜索包含 index.html 的目录
+    if [[ -z "$dist_source" ]] || [[ ! -d "$dist_source" ]] || [[ ! -f "$dist_source/index.html" ]]; then
+        log_info "搜索包含 index.html 的目录..."
+        local found_dir
+        found_dir=$(run_as_service_user "find '$PROJECT_ROOT' -type f -name 'index.html' -path '*/wwwroot/*' -o -path '*/dist/*' -o -path '*/build/*' 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo ''" || echo "")
+        
+        if [[ -n "$found_dir" ]] && [[ -d "$found_dir" ]]; then
+            dist_source="$found_dir"
+            log_info "通过搜索找到构建输出目录: $dist_source"
+        fi
+    fi
+    
+    # 最终检查
+    if [[ -z "$dist_source" ]] || [[ ! -d "$dist_source" ]]; then
+        log_info "⚠️  无法确定构建输出目录"
+        log_info "已检查的目录:"
+        for dir in "${possible_dirs[@]}"; do
+            if [[ -n "$dir" ]]; then
+                log_info "  - $dir ($([ -d "$dir" ] && echo "存在" || echo "不存在"))"
+            fi
+        done
+        log_info "前端目录结构:"
+        run_as_service_user "cd '$PROJECT_ROOT/frontend' && find . -maxdepth 3 -type d -name 'dist' -o -name 'build' -o -name 'wwwroot' 2>/dev/null | head -10" 2>&1 || true
+        log_info "提示: 检查前端构建配置中的输出目录设置"
         return
     fi
+    
+    # 检查 index.html 是否存在
+    if [[ ! -f "$dist_source/index.html" ]]; then
+        log_info "⚠️  构建输出目录存在，但未找到 index.html: $dist_source"
+        log_info "输出目录内容:"
+        run_as_service_user "ls -lah '$dist_source'" 2>&1 | head -20 || true
+        
+        # 检查是否有其他 HTML 文件
+        local html_files
+        html_files=$(run_as_service_user "find '$dist_source' -name '*.html' -type f 2>/dev/null | head -5" || echo "")
+        if [[ -n "$html_files" ]]; then
+            log_info "找到其他 HTML 文件:"
+            echo "$html_files" | sed 's/^/   /'
+        fi
+        
+        log_info "可能的原因:"
+        log_info "  1. 构建过程中出现错误但未正确报告"
+        log_info "  2. 前端框架使用了不同的入口文件名"
+        log_info "提示: 检查构建输出日志"
+        return
+    fi
+    
+    log_info "✓ 找到构建输出目录: $dist_source"
+    log_info "✓ 找到 index.html: $dist_source/index.html"
+    
+    local dist_target="$FRONTEND_DIST_DIR"
 
     log_info "前端构建成功，输出目录: $dist_source"
     log_info "目标目录: $dist_target"
-
-    # 确保目标目录存在
-    log_info "准备目标目录..."
-    sudo mkdir -p "$dist_target"
-    sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$dist_target"
     
-    # 清空目标目录（保留目录本身）
-    log_info "清空目标目录..."
-    run_as_service_user "rm -rf '${dist_target:?}/'*" 2>/dev/null || true
-    run_as_service_user "rm -rf '${dist_target:?}/'.*" 2>/dev/null || true
+    # 检查源目录和目标目录是否相同（规范化路径后比较）
+    local source_normalized target_normalized
+    source_normalized=$(run_as_service_user "cd '$PROJECT_ROOT' && realpath '$dist_source' 2>/dev/null || echo '$dist_source'" || echo "$dist_source")
+    target_normalized=$(run_as_service_user "cd '$PROJECT_ROOT' && realpath '$dist_target' 2>/dev/null || echo '$dist_target'" || echo "$dist_target")
     
-    # 复制构建结果
-    log_info "复制构建结果到目标目录..."
-    if run_as_service_user "cp -R '$dist_source/.' '$dist_target/'" 2>&1; then
-        log_info "构建结果已拷贝至 $dist_target"
+    # 如果路径相同，跳过复制
+    if [[ "$source_normalized" == "$target_normalized" ]]; then
+        log_ok "构建输出目录与目标目录相同，无需复制"
+        log_info "文件已在正确位置: $dist_source"
+        log_info "验证: index.html 存在，文件大小: $(du -h '$dist_source/index.html' | cut -f1)"
     else
-        log_info "⚠️  复制失败，尝试使用 sudo..."
-        sudo cp -R "$dist_source/." "$dist_target/"
+        # 确保目标目录存在
+        log_info "准备目标目录..."
+        sudo mkdir -p "$dist_target"
         sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$dist_target"
+        
+        # 清空目标目录（保留目录本身）
+        log_info "清空目标目录..."
+        run_as_service_user "rm -rf '${dist_target:?}/'*" 2>/dev/null || true
+        run_as_service_user "rm -rf '${dist_target:?}/'.*" 2>/dev/null || true
+        
+        # 复制构建结果
+        log_info "复制构建结果到目标目录..."
+        log_info "从: $dist_source"
+        log_info "到: $dist_target"
+        
+        if run_as_service_user "cp -R '$dist_source/.' '$dist_target/'" 2>&1; then
+            log_info "构建结果已拷贝至 $dist_target"
+        else
+            log_info "⚠️  复制失败，尝试使用 sudo..."
+            sudo cp -R "$dist_source/." "$dist_target/"
+            sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$dist_target"
+        fi
+        
+        # 验证复制是否成功
+        if [[ -f "$dist_target/index.html" ]]; then
+            log_ok "前端构建完成，文件已复制到 $dist_target"
+            log_info "验证: index.html 存在，文件大小: $(du -h '$dist_target/index.html' | cut -f1)"
+        else
+            log_info "⚠️  警告: 复制后未找到 index.html，请检查复制过程"
+            log_info "目标目录内容:"
+            ls -la "$dist_target" 2>&1 || true
+        fi
     fi
     
-    # 验证复制是否成功
-    if [[ -f "$dist_target/index.html" ]]; then
-        log_ok "前端构建完成，文件已复制到 $dist_target"
-        log_info "验证: index.html 存在，文件大小: $(du -h '$dist_target/index.html' | cut -f1)"
-    else
-        log_info "⚠️  警告: 复制后未找到 index.html，请检查复制过程"
-        log_info "目标目录内容:"
-        ls -la "$dist_target" 2>&1 || true
+    # 设置正确的权限（如果源和目标相同，使用源目录）
+    local perm_dir="$dist_target"
+    if [[ "$source_normalized" == "$target_normalized" ]]; then
+        perm_dir="$dist_source"
     fi
     
-    # 设置正确的权限
     log_info "设置文件权限..."
-    sudo find "$dist_target" -type d -exec chmod 755 {} \;
-    sudo find "$dist_target" -type f -exec chmod 644 {} \;
-    sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$dist_target"
+    sudo find "$perm_dir" -type d -exec chmod 755 {} \;
+    sudo find "$perm_dir" -type f -exec chmod 644 {} \;
+    sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$perm_dir"
 }
 
 publish_backend() {

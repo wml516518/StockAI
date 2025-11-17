@@ -4,7 +4,9 @@
 # ====================================================
 
 # GitHub仓库地址 - 请替换为你的实际仓库地址
-GITHUB_REPO="https://gitclone.com/github.com/wml516518/StockAI.git"
+# 注意：如果使用镜像站点（如 gitclone.com），可能无法获取所有分支
+# 建议直接使用 GitHub 原始地址以确保获取所有分支
+GITHUB_REPO="https://github.com/wml516518/StockAI.git"
 
 # Git 分支 - 默认 main（如果仓库使用 master，请改为 master）
 GIT_BRANCH="master"
