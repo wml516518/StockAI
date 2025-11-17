@@ -23,69 +23,8 @@ import os
 import warnings
 import time
 from bs4 import BeautifulSoup
-import io
-import base64
 
-try:
-    import matplotlib  # type: ignore
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt  # type: ignore
-    import matplotlib.dates as mdates  # type: ignore
-    from matplotlib.ticker import MaxNLocator  # type: ignore
-    from matplotlib import font_manager  # type: ignore
-    from matplotlib.font_manager import FontProperties  # type: ignore
-    MATPLOTLIB_AVAILABLE = True
-except Exception as matplotlib_import_error:
-    matplotlib = None
-    plt = None
-    mdates = None
-    MaxNLocator = None
-    MATPLOTLIB_AVAILABLE = False
-    print(f"[{datetime.now()}] ⚠️ 未能导入matplotlib，图表生成功能不可用: {matplotlib_import_error}")
-else:
-    try:
-        # 优先尝试使用指定的中文字体绝对路径（跨平台判断）
-        if sys.platform.startswith("win"):
-            font_path = r"C:\Windows\Fonts\simhei.ttf"
-        else:
-            font_path = "/usr/share/fonts/noto/NotoSansCJKsc-Regular.otf"
-        selected_font = None
-
-        try:
-            if os.path.exists(font_path):
-                # 注册字体文件
-                font_manager.fontManager.addfont(font_path)  # type: ignore[attr-defined]
-                font_prop = FontProperties(fname=font_path)  # type: ignore[name-defined]
-                # 使用字体名称应用到全局
-                selected_font = font_prop.get_name()
-        except Exception as e:
-            print(f"[{datetime.now()}] ⚠️ 无法加载指定字体文件: {font_path}, 错误: {e}")
-
-        # 若未能通过绝对路径设置，则尝试常见中文字体名称
-        font_candidates = [name for name in [
-            selected_font,
-            "Noto Sans CJK SC",
-            "Noto Sans CJK",
-            "WenQuanYi Zen Hei",
-            "Microsoft YaHei",
-            "SimHei",
-            "STHeiti",
-            "Heiti TC",
-            "Arial Unicode MS",
-            "DejaVu Sans"
-        ] if name]
-        for font_name in font_candidates:
-            try:
-                font_manager.findfont(font_name, fallback_to_default=False)  # type: ignore[attr-defined]
-                selected_font = font_name
-                break
-            except Exception:
-                continue
-        if selected_font:
-            plt.rcParams["font.family"] = selected_font
-        plt.rcParams["axes.unicode_minus"] = False
-    except Exception as font_config_error:
-        print(f"[{datetime.now()}] ⚠️ 配置matplotlib中文字体失败，将使用默认字体: {font_config_error}")
+# matplotlib 相关代码已移除，不再需要生成图片
 
 # 全局禁用代理以解决连接问题（与测试脚本test_industry_name_em.py保持一致）
 # 首先移除所有代理环境变量（与测试脚本保持一致）
@@ -961,67 +900,27 @@ def _format_date_str(value):
     return dt_value.strftime("%Y-%m-%d")
 
 
-def _generate_price_chart(df: pd.DataFrame):
+def _generate_chart_highlights(df: pd.DataFrame):
     """
-    生成股价走势图并标注关键数据，返回Base64编码的PNG图像和关键信息。
+    生成图表关键信息（不生成图片），返回关键数据。
     """
     try:
-        if not MATPLOTLIB_AVAILABLE or plt is None or mdates is None or MaxNLocator is None:
-            return None, None
-
         if df is None or df.empty or len(df) < 2:
-            return None, None
+            return None
 
         plot_df = df.copy()
         plot_df['tradeDate'] = pd.to_datetime(plot_df['tradeDate'])
         plot_df = plot_df.dropna(subset=['tradeDate', 'close'])
 
         if plot_df.empty:
-            return None, None
+            return None
 
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-
-        # 绘制收盘价
-        ax.plot(plot_df['tradeDate'], plot_df['close'], label='收盘价', color='#1f77b4', linewidth=2)
-
-        # 绘制移动平均线
-        ma_colors = {
-            'MA5': '#ff7f0e',
-            'MA10': '#2ca02c',
-            'MA20': '#9467bd',
-            'MA60': '#8c564b'
-        }
-        for ma_key, color in ma_colors.items():
-            if ma_key in plot_df.columns and plot_df[ma_key].notna().any():
-                ax.plot(plot_df['tradeDate'], plot_df[ma_key], label=ma_key, linewidth=1.5, alpha=0.85, color=color)
-
-        # 关键点
         highlights = {}
-
-        def _add_point(row, label, color, offset):
-            trade_dt = _safe_to_datetime(row['tradeDate'])
-            price = float(row.get('close') if label == '当前价' else row.get('high') if '高' in label else row.get('low'))
-            if trade_dt is None or price is None:
-                return
-            ax.scatter(trade_dt, price, color=color, s=55, zorder=5)
-            annotation = f"{label} {price:.2f}"
-            ax.annotate(
-                annotation,
-                xy=(trade_dt, price),
-                xytext=offset,
-                textcoords='offset points',
-                fontsize=9,
-                fontweight='bold',
-                color=color,
-                arrowprops=dict(arrowstyle="->", color=color, lw=1.1, alpha=0.8),
-                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, lw=0.8, alpha=0.8)
-            )
 
         # 最高价
         if 'high' in plot_df.columns and plot_df['high'].notna().any():
             high_idx = plot_df['high'].idxmax()
             high_row = plot_df.loc[high_idx]
-            _add_point(high_row, '最高价', '#d62728', (10, 25))
             highlights['highest'] = {
                 'date': _format_date_str(high_row['tradeDate']),
                 'price': float(high_row['high'])
@@ -1031,7 +930,6 @@ def _generate_price_chart(df: pd.DataFrame):
         if 'low' in plot_df.columns and plot_df['low'].notna().any():
             low_idx = plot_df['low'].idxmin()
             low_row = plot_df.loc[low_idx]
-            _add_point(low_row, '最低价', '#17becf', (10, -35))
             highlights['lowest'] = {
                 'date': _format_date_str(low_row['tradeDate']),
                 'price': float(low_row['low'])
@@ -1039,7 +937,6 @@ def _generate_price_chart(df: pd.DataFrame):
 
         # 当前价（最新收盘价）
         latest_row = plot_df.iloc[-1]
-        _add_point(latest_row, '当前价', '#2ca02c', (-80, -25))
         highlights['latest'] = {
             'date': _format_date_str(latest_row['tradeDate']),
             'price': float(latest_row['close'])
@@ -1055,18 +952,6 @@ def _generate_price_chart(df: pd.DataFrame):
         if ma_values:
             highlights['movingAverages'] = ma_values
 
-        # 图形美化
-        ax.set_title('股价走势（含主要均线）', fontsize=12, fontweight='bold')
-        ax.set_xlabel('日期')
-        ax.set_ylabel('价格（元）')
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-        fig.autofmt_xdate()
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6, prune='both'))
-        ax.grid(True, linestyle='--', alpha=0.3)
-        ax.legend(loc='upper left', ncol=2, fontsize=9)
-        ax.set_xlim(plot_df['tradeDate'].iloc[0], plot_df['tradeDate'].iloc[-1])
-
         # 收益区间
         start_price = float(plot_df['close'].iloc[0])
         end_price = float(plot_df['close'].iloc[-1])
@@ -1079,18 +964,10 @@ def _generate_price_chart(df: pd.DataFrame):
             'changePercent': round(change_pct, 2)
         }
 
-        buf = io.BytesIO()
-        fig.tight_layout()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        buf.close()
-
-        return img_base64, highlights
+        return highlights
     except Exception as chart_error:
-        print(f"[{datetime.now()}] ⚠️ 生成股价走势图失败: {chart_error}")
-        return None, None
+        print(f"[{datetime.now()}] ⚠️ 生成图表关键信息失败: {chart_error}")
+        return None
 
 
 @app.route('/api/stock/analyze/<stock_code>', methods=['GET'])
@@ -1319,20 +1196,17 @@ def analyze_stock_data(stock_code):
             'volatilityTrend': 'high' if volatility > 5 else 'low'
         }
 
-        chart_image, chart_highlights = _generate_price_chart(
+        # 生成图表关键信息（不生成图片）
+        chart_highlights = _generate_chart_highlights(
             df[['tradeDate', 'close', 'high', 'low', 'MA5', 'MA10', 'MA20', 'MA60']].copy()
         )
-        if chart_image:
+        if chart_highlights:
             analysis_result['chart'] = {
-                'imageBase64': chart_image,
-                'contentType': 'image/png',
                 'highlights': chart_highlights
             }
         
         # 7. 生成洞察
         insights = []
-        if chart_image:
-            insights.append("已生成股价走势图，标注最高、最低与当前价等关键点位供参考。")
         
         # 价格趋势洞察
         price_trend = analysis_result['trends'].get('priceTrend', 'unknown')

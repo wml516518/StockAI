@@ -86,9 +86,14 @@
               </div>
             </div>
 
-            <div v-if="chartImageSrc" class="chart-section">
+            <div v-if="chartData.length > 0" class="chart-section">
               <h5>技术面图表</h5>
-              <img :src="chartImageSrc" alt="股价走势图" class="chart-image" />
+              <!-- ECharts 图表 -->
+              <StockChart
+                :data="chartData"
+                :highlights="chartHighlightsObj"
+                :stock-name="currentSession.stockInfo?.name || currentSession.displayName || ''"
+              />
               <ul v-if="chartHighlights.length" class="chart-highlights">
                 <li v-for="item in chartHighlights" :key="item.label">
                   <strong>{{ item.label }}：</strong>{{ item.value }}
@@ -182,6 +187,7 @@ import api from '../services/api'
 import { stockService } from '../services/stockService'
 import { useAiAnalysisStore, normalizeStockCode } from '../stores/aiAnalysis'
 import { useWatchlistStore } from '../stores/watchlist'
+import StockChart from '../components/StockChart.vue'
 
 const route = useRoute()
 const aiAnalysisStore = useAiAnalysisStore()
@@ -261,13 +267,11 @@ const getHtml2Canvas = async () => {
   return html2CanvasLoaderPromise
 }
 
-const chartImageSrc = computed(() => {
-  const chart = currentSession.value?.technicalChart
-  if (!chart?.imageBase64) {
-    return ''
-  }
-  const contentType = chart.contentType || 'image/png'
-  return `data:${contentType};base64,${chart.imageBase64}`
+// 图表数据
+const chartData = ref([])
+
+const chartHighlightsObj = computed(() => {
+  return currentSession.value?.technicalChart?.highlights || {}
 })
 
 const formatNumber = (value, digits = 2) => {
@@ -469,6 +473,7 @@ const handleAnalyze = async (session, forceRefresh = false) => {
   session.technicalChart = null
   session.rating = null
   session.actionSuggestion = null
+  chartData.value = [] // 清空图表数据
 
   try {
     console.log('正在获取股票最新数据...', code)
@@ -557,6 +562,29 @@ const handleAnalyze = async (session, forceRefresh = false) => {
       session.lastAnalyzedStockCode = code
 
       watchlistStore.setStockRecommendation(code, session.rating, session.actionSuggestion)
+
+      // 获取历史数据用于图表显示
+      try {
+        const endDate = new Date()
+        const startDate = new Date()
+        startDate.setMonth(startDate.getMonth() - 3) // 获取最近3个月的数据
+        
+        const historyData = await stockService.getHistory(code, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0])
+        if (historyData && Array.isArray(historyData) && historyData.length > 0) {
+          chartData.value = historyData.map(item => ({
+            tradeDate: item.tradeDate,
+            open: item.open,
+            high: item.high,
+            low: item.low,
+            close: item.close,
+            volume: item.volume
+          }))
+          console.log('已加载历史数据用于图表:', chartData.value.length, '条')
+        }
+      } catch (error) {
+        console.warn('获取历史数据失败，图表将使用图片模式:', error)
+        chartData.value = []
+      }
     } else if (typeof response === 'string') {
       session.result = response
       session.technicalChart = null
@@ -616,6 +644,7 @@ const handleAnalyze = async (session, forceRefresh = false) => {
       session.result = '分析失败: ' + (error.message || '未知错误')
     }
     session.technicalChart = null
+    chartData.value = [] // 清空图表数据
   } finally {
     session.analyzing = false
     if (!session.result || session.result.includes('失败') || session.result.includes('错误')) {
@@ -1253,18 +1282,6 @@ onActivated(() => {
   color: #1f3c88;
   font-size: 16px;
   font-weight: 600;
-}
-
-.chart-image {
-  width: 100%;
-  max-height: 320px;
-  object-fit: contain;
-  background: #fff;
-  border: 1px solid #e1e6f8;
-  border-radius: 4px;
-  padding: 8px;
-  box-shadow: 0 2px 6px rgba(31, 60, 136, 0.08);
-  margin-bottom: 12px;
 }
 
 .chart-highlights {
