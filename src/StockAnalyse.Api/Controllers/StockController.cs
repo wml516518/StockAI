@@ -55,6 +55,89 @@ public class StockController : ControllerBase
     }
 
     /// <summary>
+    /// 测试接口：获取股票原始API数据（用于调试字段映射）
+    /// </summary>
+    [HttpGet("{code}/test-raw-data")]
+    public async Task<ActionResult<object>> TestRawData(string code, DateTime? startDate, DateTime? endDate)
+    {
+        var start = startDate ?? DateTime.Now.AddDays(-7);
+        var end = endDate ?? DateTime.Now;
+        
+        try
+        {
+            var market = code.StartsWith("6") ? "1" : "0";
+            var secid = $"{market}.{code}";
+            var beg = start.ToString("yyyyMMdd");
+            var endStr = end.ToString("yyyyMMdd");
+
+            var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={endStr}";
+            
+            using var httpClient = new HttpClient();
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+            
+            var response = await httpClient.GetStringAsync(url);
+            dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
+            
+            if (data?.data?.klines == null)
+            {
+                return Ok(new { success = false, message = "API返回数据为空", rawResponse = response });
+            }
+
+            var rawLines = new List<object>();
+            var parsedData = new List<object>();
+            
+            int count = 0;
+            foreach (var k in data.data.klines)
+            {
+                if (count >= 5) break; // 只返回前5条数据
+                
+                string line = k.ToString();
+                var parts = line.Split(',');
+                
+                rawLines.Add(new
+                {
+                    rawLine = line,
+                    parts = parts,
+                    partsCount = parts.Length
+                });
+                
+                if (parts.Length >= 7)
+                {
+                    parsedData.Add(new
+                    {
+                        日期 = parts[0],
+                        parts1_当前解析为收盘 = parts[1],
+                        parts2_当前解析为最高 = parts[2],
+                        parts3_当前解析为最低 = parts[3],
+                        parts4_当前解析为开盘 = parts[4],
+                        parts5_成交量 = parts[5],
+                        parts6_成交额 = parts[6],
+                        说明 = "请告诉我parts[1]到parts[4]实际对应的是什么价格"
+                    });
+                }
+                
+                count++;
+            }
+            
+            return Ok(new
+            {
+                success = true,
+                stockCode = code,
+                dateRange = $"{start:yyyy-MM-dd} 到 {end:yyyy-MM-dd}",
+                totalRecords = ((System.Collections.ICollection)data.data.klines).Count,
+                rawLines = rawLines,
+                parsedData = parsedData,
+                note = "请查看parsedData中的parts[1]到parts[4]的值，告诉我它们分别对应：开盘、收盘、最高、最低中的哪一个"
+            });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+        }
+    }
+
+    /// <summary>
     /// 获取排名列表
     /// </summary>
     [HttpGet("ranking/{market}")]

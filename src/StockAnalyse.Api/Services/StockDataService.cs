@@ -237,10 +237,37 @@ public class StockDataService : IStockDataService
 
     public async Task<List<StockHistory>> GetDailyDataAsync(string stockCode, DateTime startDate, DateTime endDate)
     {
-        return await _context.StockHistories
-            .Where(h => h.StockCode == stockCode && h.TradeDate >= startDate && h.TradeDate <= endDate)
+        // 确保日期范围包含整天：startDate从00:00:00开始，endDate到23:59:59结束
+        var start = startDate.Date; // 确保从当天的00:00:00开始
+        var end = endDate.Date.AddDays(1).AddTicks(-1); // 到当天的23:59:59.9999999结束
+        
+        // 1. 先从API获取最新数据（确保包含当前月份的数据）
+        try
+        {
+            _logger.LogInformation("尝试从API获取股票 {Code} 的历史数据，日期范围: {Start} 到 {End}", stockCode, start, end);
+            var fetchedCount = await FetchAndStoreDailyHistoryAsync(stockCode, start, end);
+            if (fetchedCount > 0)
+            {
+                _logger.LogInformation("从API成功获取并保存 {Count} 条 {Code} 的历史数据", fetchedCount, stockCode);
+            }
+            else
+            {
+                _logger.LogWarning("从API获取 {Code} 的历史数据失败或为空，将使用数据库数据", stockCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "从API获取股票 {Code} 历史数据时发生异常，将使用数据库数据", stockCode);
+        }
+        
+        // 2. 从数据库获取数据（包括刚保存的API数据）
+        var histories = await _context.StockHistories
+            .Where(h => h.StockCode == stockCode && h.TradeDate >= start && h.TradeDate <= end)
             .OrderBy(h => h.TradeDate)
             .ToListAsync();
+        
+        _logger.LogInformation("从数据库获取到 {Count} 条 {Code} 的历史数据", histories.Count, stockCode);
+        return histories;
     }
 
     public async Task<(decimal macd, decimal signal, decimal histogram)> CalculateMACDAsync(string stockCode)
@@ -503,19 +530,36 @@ public class StockDataService : IStockDataService
 
             foreach (var k in data.data.klines)
             {
-                string line = k.ToString(); // "YYYY-MM-DD,open,close,high,low,volume,amount"
+                string line = k.ToString(); 
+                // 东方财富API fields2=f51,f52,f53,f54,f55,f56,f57 对应：
+                // f51=日期, f52=开盘, f53=收盘, f54=最高, f55=最低, f56=成交量, f57=成交额
+                // 实际返回格式: "YYYY-MM-DD,开盘,收盘,最高,最低,成交量,成交额"
                 var parts = line.Split(',');
-                if (parts.Length < 7) continue;
+                if (parts.Length < 7) 
+                {
+                    _logger.LogWarning("数据格式不正确，字段数不足: {Line}", line);
+                    continue;
+                }
 
                 try
                 {
                     var tradeDate = DateTime.Parse(parts[0]);
-                    var open = SafeConvertToDecimal(parts[1]);
-                    var close = SafeConvertToDecimal(parts[2]);
-                    var high = SafeConvertToDecimal(parts[3]);
-                    var low = SafeConvertToDecimal(parts[4]);
-                    var volume = SafeConvertToDecimal(parts[5]);
-                    var amount = SafeConvertToDecimal(parts[6]);
+                    // 根据实际测试确认，东方财富API fields2=f51,f52,f53,f54,f55,f56,f57 的实际返回格式是：
+                    // f51=日期, f52=开盘, f53=收盘, f54=最高, f55=最低, f56=成交量, f57=成交额
+                    // 实际返回格式: "YYYY-MM-DD,开盘,收盘,最高,最低,成交量,成交额"
+                    var open = SafeConvertToDecimal(parts[1]);   // 开盘价 (f52)
+                    var close = SafeConvertToDecimal(parts[2]);  // 收盘价 (f53)
+                    var high = SafeConvertToDecimal(parts[3]);  // 最高价 (f54)
+                    var low = SafeConvertToDecimal(parts[4]);    // 最低价 (f55)
+                    var volume = SafeConvertToDecimal(parts[5]); // 成交量 (f56)
+                    var amount = SafeConvertToDecimal(parts[6]); // 成交额 (f57)
+                    
+                    // 添加调试日志（仅记录第一条数据，避免日志过多）
+                    if (saved == 0)
+                    {
+                        _logger.LogInformation("解析第一条数据示例 - 日期: {Date}, 原始数据: {Line}, 开盘: {Open}, 收盘: {Close}, 最高: {High}, 最低: {Low}", 
+                            tradeDate, line, open, close, high, low);
+                    }
 
                     // 跳过无效数据（价格为0或负数）
                     if (open <= 0 || close <= 0 || high <= 0 || low <= 0)

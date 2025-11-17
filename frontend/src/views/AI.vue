@@ -565,11 +565,27 @@ const handleAnalyze = async (session, forceRefresh = false) => {
 
       // 获取历史数据用于图表显示
       try {
+        // 修复月份计算：确保包含当前月份的数据
         const endDate = new Date()
         const startDate = new Date()
-        startDate.setMonth(startDate.getMonth() - 3) // 获取最近3个月的数据
         
-        const historyData = await stockService.getHistory(code, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0])
+        // 获取最近3个月的数据，确保包含当前月份
+        // 先设置为当月1号，避免跨月问题
+        startDate.setDate(1)
+        startDate.setMonth(startDate.getMonth() - 3) // 往前推3个月
+        
+        // 格式化日期为 YYYY-MM-DD，避免时区问题
+        const formatDate = (date) => {
+          const year = date.getFullYear()
+          const month = String(date.getMonth() + 1).padStart(2, '0')
+          const day = String(date.getDate()).padStart(2, '0')
+          return `${year}-${month}-${day}`
+        }
+        
+        const startDateStr = formatDate(startDate)
+        const endDateStr = formatDate(endDate)
+        
+        const historyData = await stockService.getHistory(code, startDateStr, endDateStr)
         if (historyData && Array.isArray(historyData) && historyData.length > 0) {
           chartData.value = historyData.map(item => ({
             tradeDate: item.tradeDate,

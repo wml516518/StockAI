@@ -33,7 +33,9 @@ const calculateMA = (data, period) => {
     } else {
       let sum = 0
       for (let j = i - period + 1; j <= i; j++) {
-        sum += data[j].close
+        // 支持大小写字段名
+        const close = data[j].close ?? data[j].Close ?? 0
+        sum += Number(close)
       }
       result.push((sum / period).toFixed(2))
     }
@@ -77,13 +79,23 @@ const initChart = () => {
         let result = `<div style="margin-bottom: 4px;"><strong>${params[0].axisValue}</strong></div>`
         
         params.forEach(param => {
-          if (param.seriesName === 'K线' && Array.isArray(param.data)) {
+          if (param.seriesName === 'K线' && Array.isArray(param.data) && param.data.length >= 4) {
             const data = param.data
             // ECharts candlestick 数据格式: [开盘, 收盘, 最低, 最高]
-            const open = data[0] !== null && data[0] !== undefined ? Number(data[0]).toFixed(2) : 'N/A'
-            const close = data[1] !== null && data[1] !== undefined ? Number(data[1]).toFixed(2) : 'N/A'
-            const low = data[2] !== null && data[2] !== undefined ? Number(data[2]).toFixed(2) : 'N/A'
-            const high = data[3] !== null && data[3] !== undefined ? Number(data[3]).toFixed(2) : 'N/A'
+            // 确保数据有效且为数字
+            const openVal = data[0]
+            const closeVal = data[1]
+            const lowVal = data[2]
+            const highVal = data[3]
+            
+            const open = (openVal !== null && openVal !== undefined && !isNaN(Number(openVal))) 
+              ? Number(openVal).toFixed(2) : 'N/A'
+            const close = (closeVal !== null && closeVal !== undefined && !isNaN(Number(closeVal))) 
+              ? Number(closeVal).toFixed(2) : 'N/A'
+            const low = (lowVal !== null && lowVal !== undefined && !isNaN(Number(lowVal))) 
+              ? Number(lowVal).toFixed(2) : 'N/A'
+            const high = (highVal !== null && highVal !== undefined && !isNaN(Number(highVal))) 
+              ? Number(highVal).toFixed(2) : 'N/A'
             
             result += `
               <div style="margin: 2px 0;">
@@ -96,7 +108,8 @@ const initChart = () => {
               </div>
             `
           } else if (param.seriesName !== 'K线') {
-            const value = param.value !== null && param.value !== undefined ? Number(param.value).toFixed(2) : 'N/A'
+            const value = param.value !== null && param.value !== undefined && !isNaN(Number(param.value)) 
+              ? Number(param.value).toFixed(2) : 'N/A'
             result += `
               <div style="margin: 2px 0;">
                 <span style="display:inline-block;width:10px;height:10px;background:${param.color};border-radius:2px;margin-right:5px;"></span>
@@ -237,22 +250,31 @@ const updateChart = () => {
   if (!chartInstance || !props.data || props.data.length === 0) return
 
   // 按日期排序
+  // 支持大小写字段名
   const sortedData = [...props.data].sort((a, b) => {
-    const dateA = new Date(a.tradeDate)
-    const dateB = new Date(b.tradeDate)
+    const dateA = new Date(a.tradeDate ?? a.TradeDate ?? '')
+    const dateB = new Date(b.tradeDate ?? b.TradeDate ?? '')
     return dateA - dateB
   })
 
   // 准备K线数据 [开盘, 收盘, 最低, 最高]
-  const candlestickData = sortedData.map(item => [
-    Number(item.open),
-    Number(item.close),
-    Number(item.low),
-    Number(item.high)
-  ])
+  // 支持大小写字段名，确保兼容性
+  const candlestickData = sortedData.map(item => {
+    const open = item.open ?? item.Open ?? 0
+    const close = item.close ?? item.Close ?? 0
+    const low = item.low ?? item.Low ?? 0
+    const high = item.high ?? item.High ?? 0
+    return [
+      Number(open),
+      Number(close),
+      Number(low),
+      Number(high)
+    ]
+  })
 
   // 准备日期数据
-  const dates = sortedData.map(item => item.tradeDate)
+  // 支持大小写字段名
+  const dates = sortedData.map(item => item.tradeDate ?? item.TradeDate ?? '')
 
   // 计算移动平均线
   const ma5 = calculateMA(sortedData, 5)
