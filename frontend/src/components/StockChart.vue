@@ -23,6 +23,8 @@ const props = defineProps({
 
 const chartContainer = ref(null)
 let chartInstance = null
+// 保存原始数据引用，供tooltip使用
+let currentChartData = []
 
 // 计算移动平均线
 const calculateMA = (data, period) => {
@@ -79,14 +81,80 @@ const initChart = () => {
         let result = `<div style="margin-bottom: 4px;"><strong>${params[0].axisValue}</strong></div>`
         
         params.forEach(param => {
-          if (param.seriesName === 'K线' && Array.isArray(param.data) && param.data.length >= 4) {
-            const data = param.data
+          if (param.seriesName === 'K线') {
             // ECharts candlestick 数据格式: [开盘, 收盘, 最低, 最高]
-            // 确保数据有效且为数字
-            const openVal = data[0]
-            const closeVal = data[1]
-            const lowVal = data[2]
-            const highVal = data[3]
+            // 在axis trigger模式下，优先从原始数据中获取，因为param.data可能不是数组格式
+            let openVal, closeVal, lowVal, highVal
+            
+            // 优先从原始数据中获取（最可靠的方式）
+            const dataIndex = param.dataIndex
+            // 使用保存的原始数据引用，确保能够访问
+            const sourceData = currentChartData.length > 0 ? currentChartData : (props.data || [])
+            
+            if (dataIndex !== undefined && sourceData && Array.isArray(sourceData) && sourceData[dataIndex]) {
+              const item = sourceData[dataIndex]
+              openVal = item.open ?? item.Open ?? 0
+              closeVal = item.close ?? item.Close ?? 0
+              lowVal = item.low ?? item.Low ?? 0
+              highVal = item.high ?? item.High ?? 0
+              
+              // 调试：打印从原始数据获取的值
+              if (process.env.NODE_ENV === 'development') {
+                console.log(`[K线Tooltip] 从原始数据[${dataIndex}]获取:`, { 
+                  openVal, closeVal, lowVal, highVal,
+                  rawItem: item,
+                  paramData: param.data,
+                  paramValue: param.value,
+                  sourceDataLength: sourceData.length
+                })
+              }
+            } else if (Array.isArray(param.data) && param.data.length >= 4) {
+              // 数组格式: [开盘, 收盘, 最低, 最高]
+              openVal = param.data[0]
+              closeVal = param.data[1]
+              lowVal = param.data[2]
+              highVal = param.data[3]
+              
+              // 调试：打印解析后的值
+              if (process.env.NODE_ENV === 'development') {
+                console.log('[K线Tooltip] 从param.data数组解析:', { openVal, closeVal, lowVal, highVal })
+              }
+            } else if (Array.isArray(param.value) && param.value.length >= 4) {
+              // 某些ECharts版本可能使用param.value
+              openVal = param.value[0]
+              closeVal = param.value[1]
+              lowVal = param.value[2]
+              highVal = param.value[3]
+              
+              // 调试：打印从param.value获取的值
+              if (process.env.NODE_ENV === 'development') {
+                console.log('[K线Tooltip] 从param.value数组解析:', { openVal, closeVal, lowVal, highVal })
+              }
+            } else if (param.data && typeof param.data === 'object') {
+              // 对象格式（备用）
+              openVal = param.data[0] ?? param.data.open ?? param.data.Open
+              closeVal = param.data[1] ?? param.data.close ?? param.data.Close
+              lowVal = param.data[2] ?? param.data.low ?? param.data.Low
+              highVal = param.data[3] ?? param.data.high ?? param.data.High
+              
+              // 调试：打印从对象获取的值
+              if (process.env.NODE_ENV === 'development') {
+                console.log('[K线Tooltip] 从param.data对象解析:', { openVal, closeVal, lowVal, highVal })
+              }
+            } else {
+              // 如果所有方式都失败，使用默认值并记录警告
+              console.warn('[K线Tooltip] 无法获取数据，使用默认值', {
+                dataIndex,
+                paramData: param.data,
+                paramValue: param.value,
+                sourceDataLength: sourceData.length,
+                propsDataLength: props.data?.length
+              })
+              openVal = 0
+              closeVal = 0
+              lowVal = 0
+              highVal = 0
+            }
             
             const open = (openVal !== null && openVal !== undefined && !isNaN(Number(openVal))) 
               ? Number(openVal).toFixed(2) : 'N/A'
@@ -256,14 +324,19 @@ const updateChart = () => {
     const dateB = new Date(b.tradeDate ?? b.TradeDate ?? '')
     return dateA - dateB
   })
+  
+  // 保存排序后的数据引用，供tooltip使用
+  currentChartData = sortedData
 
   // 准备K线数据 [开盘, 收盘, 最低, 最高]
+  // ECharts candlestick 数据格式: [开盘, 收盘, 最低, 最高]
   // 支持大小写字段名，确保兼容性
   const candlestickData = sortedData.map(item => {
     const open = item.open ?? item.Open ?? 0
     const close = item.close ?? item.Close ?? 0
     const low = item.low ?? item.Low ?? 0
     const high = item.high ?? item.High ?? 0
+    // 返回格式: [开盘, 收盘, 最低, 最高]
     return [
       Number(open),
       Number(close),
@@ -271,6 +344,11 @@ const updateChart = () => {
       Number(high)
     ]
   })
+  
+  // 调试：打印第一条数据以验证格式
+  if (candlestickData.length > 0 && process.env.NODE_ENV === 'development') {
+    console.log('K线数据格式示例（第一条）:', candlestickData[0], '原始数据:', sortedData[0])
+  }
 
   // 准备日期数据
   // 支持大小写字段名

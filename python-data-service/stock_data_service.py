@@ -18,6 +18,7 @@ import akshare as ak
 import pandas as pd
 import numpy as np
 import traceback
+import json
 from datetime import datetime, timedelta
 import os
 import warnings
@@ -311,7 +312,59 @@ def get_stock_news(stock_code):
 
         print(f"[{datetime.now()}] 获取个股新闻: 输入={stock_code}, 标准化={clean_code}")
 
-        df_news = ak.stock_news_em(symbol=clean_code)
+        # 添加重试机制和错误处理
+        max_retries = 3
+        df_news = None
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                df_news = ak.stock_news_em(symbol=clean_code)
+                break  # 成功获取数据，退出重试循环
+            except json.JSONDecodeError as json_err:
+                last_error = json_err
+                error_msg = str(json_err)
+                print(f"[{datetime.now()}] ⚠️ [尝试 {attempt + 1}/{max_retries}] AKShare stock_news_em JSON解析失败: {error_msg}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # 递增等待时间：2秒、4秒、6秒
+                    print(f"[{datetime.now()}] 等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"[{datetime.now()}] ❌ 所有重试均失败，返回空结果")
+                    # 最后一次重试失败，返回空结果而不是抛出异常
+                    return jsonify({
+                        'success': True,
+                        'data': {
+                            'stockCode': stock_code,
+                            'normalizedCode': clean_code,
+                            'count': 0,
+                            'fetchedAt': datetime.now().isoformat(),
+                            'items': [],
+                            'warning': '数据源暂时不可用，请稍后重试'
+                        }
+                    })
+            except Exception as e:
+                last_error = e
+                error_msg = str(e)
+                error_type = type(e).__name__
+                print(f"[{datetime.now()}] ⚠️ [尝试 {attempt + 1}/{max_retries}] AKShare stock_news_em 调用失败: {error_type}: {error_msg}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"[{datetime.now()}] 等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"[{datetime.now()}] ❌ 所有重试均失败，返回空结果")
+                    return jsonify({
+                        'success': True,
+                        'data': {
+                            'stockCode': stock_code,
+                            'normalizedCode': clean_code,
+                            'count': 0,
+                            'fetchedAt': datetime.now().isoformat(),
+                            'items': [],
+                            'warning': f'获取新闻数据失败: {error_type}'
+                        }
+                    })
 
         if df_news is None or df_news.empty:
             print(f"[{datetime.now()}] ⚠️ AKShare stock_news_em 返回空数据: {clean_code}")
