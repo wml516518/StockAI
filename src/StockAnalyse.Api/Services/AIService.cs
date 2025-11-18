@@ -12,12 +12,17 @@ using System.Text;
 
 namespace StockAnalyse.Api.Services;
 
+public class AIPromptSettings
+{
+    public string SystemPrompt { get; set; } = string.Empty;
+    public double Temperature { get; set; } = 0.7;
+}
+
 public class AIService : IAIService
 {
     private readonly StockDbContext _context;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<AIService> _logger;
-    private readonly AIPromptConfigService _promptConfigService;
     private readonly IStockDataService _stockDataService;
     private readonly INewsService _newsService;
 
@@ -26,12 +31,14 @@ public class AIService : IAIService
         + "回答要诙谐、有趣、通俗易懂，可适度使用生活化比喻，但不得遗漏关键财务指标、行业信息、风险提示等核心内容,且确保数据的实时性和准确性。"
         + "用简短段落清晰说明重点，让用户听得懂、记得住。";
 
-    public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, AIPromptConfigService promptConfigService, IStockDataService stockDataService, INewsService newsService)
+    private const string DefaultStockAnalysisPrompt =
+        "你是一名资深的A股分析师。请结合财务数据、技术指标、消息面、行业地位，对指定股票进行结构化分析，并给出风险提示与操作建议。";
+
+    public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, IStockDataService stockDataService, INewsService newsService)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
-        _promptConfigService = promptConfigService;
         _stockDataService = stockDataService;
         _newsService = newsService;
     }
@@ -659,8 +666,12 @@ public class AIService : IAIService
         {
             return new AIPromptSettings { SystemPrompt = d.SystemPrompt, Temperature = d.Temperature };
         }
-        // 3) JSON配置文件回退
-        return await _promptConfigService.GetSettingsAsync();
+        // 3) 硬编码默认值回退（数据库中没有默认提示词时的最后保障）
+        return new AIPromptSettings 
+        { 
+            SystemPrompt = DefaultStockAnalysisPrompt, 
+            Temperature = 0.7 
+        };
     }
 }
 

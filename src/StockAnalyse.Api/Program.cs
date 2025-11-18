@@ -88,7 +88,6 @@ builder.Services.AddScoped<INewsService, NewsService>();
 builder.Services.AddScoped<IStockDataCacheService, StockDataCacheService>();
 builder.Services.AddScoped<IAIService, AIService>();
 builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
-builder.Services.AddSingleton<AIPromptConfigService>();
 
 // 量化交易服务
 builder.Services.AddScoped<IQuantTradingService, QuantTradingService>();
