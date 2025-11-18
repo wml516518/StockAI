@@ -18,6 +18,11 @@ const props = defineProps({
   stockName: {
     type: String,
     default: ''
+  },
+  // 支持多股票数据，格式: [{ stockCode: '000001', stockName: '平安银行', data: [...] }, ...]
+  multiStockData: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -315,10 +320,28 @@ const initChart = () => {
 
 // 更新图表数据
 const updateChart = () => {
-  if (!chartInstance || !props.data || props.data.length === 0) return
+  if (!chartInstance) return
+
+  // 优先使用单股票模式（props.data）
+  if (props.data && props.data.length > 0) {
+    updateSingleStockChart()
+  } else if (props.multiStockData && props.multiStockData.length > 0) {
+    // 多股票模式：为每只股票创建单独的系列（备用）
+    updateMultiStockChart()
+  } else {
+    // 无数据，清空图表
+    chartInstance.setOption({
+      xAxis: { data: [] },
+      series: []
+    })
+  }
+}
+
+// 单股票模式更新
+const updateSingleStockChart = () => {
+  if (!props.data || props.data.length === 0) return
 
   // 按日期排序
-  // 支持大小写字段名
   const sortedData = [...props.data].sort((a, b) => {
     const dateA = new Date(a.tradeDate ?? a.TradeDate ?? '')
     const dateB = new Date(b.tradeDate ?? b.TradeDate ?? '')
@@ -329,14 +352,11 @@ const updateChart = () => {
   currentChartData = sortedData
 
   // 准备K线数据 [开盘, 收盘, 最低, 最高]
-  // ECharts candlestick 数据格式: [开盘, 收盘, 最低, 最高]
-  // 支持大小写字段名，确保兼容性
   const candlestickData = sortedData.map(item => {
     const open = item.open ?? item.Open ?? 0
     const close = item.close ?? item.Close ?? 0
     const low = item.low ?? item.Low ?? 0
     const high = item.high ?? item.High ?? 0
-    // 返回格式: [开盘, 收盘, 最低, 最高]
     return [
       Number(open),
       Number(close),
@@ -344,14 +364,8 @@ const updateChart = () => {
       Number(high)
     ]
   })
-  
-  // 调试：打印第一条数据以验证格式
-  if (candlestickData.length > 0 && process.env.NODE_ENV === 'development') {
-    console.log('K线数据格式示例（第一条）:', candlestickData[0], '原始数据:', sortedData[0])
-  }
 
   // 准备日期数据
-  // 支持大小写字段名
   const dates = sortedData.map(item => item.tradeDate ?? item.TradeDate ?? '')
 
   // 计算移动平均线
@@ -390,6 +404,105 @@ const updateChart = () => {
   })
 }
 
+// 多股票模式更新
+const updateMultiStockChart = () => {
+  if (!props.multiStockData || props.multiStockData.length === 0) return
+
+  // 为每只股票准备数据
+  const stockSeries = []
+  const allDates = new Set()
+  const stockDataMap = new Map() // 用于存储每只股票的数据
+  
+  // 定义颜色数组，为每只股票分配不同颜色
+  const colors = [
+    { up: '#ef5350', down: '#26a69a' }, // 红色/绿色
+    { up: '#ff9800', down: '#4caf50' }, // 橙色/绿色
+    { up: '#2196f3', down: '#00bcd4' }, // 蓝色/青色
+    { up: '#9c27b0', down: '#e91e63' }, // 紫色/粉色
+    { up: '#795548', down: '#607d8b' }  // 棕色/蓝灰色
+  ]
+
+  props.multiStockData.forEach((stockInfo, index) => {
+    const stockCode = stockInfo.stockCode || stockInfo.code || `股票${index + 1}`
+    const stockName = stockInfo.stockName || stockInfo.name || stockCode
+    const data = stockInfo.data || []
+    
+    if (data.length === 0) return
+
+    // 按日期排序
+    const sortedData = [...data].sort((a, b) => {
+      const dateA = new Date(a.tradeDate ?? a.TradeDate ?? '')
+      const dateB = new Date(b.tradeDate ?? b.TradeDate ?? '')
+      return dateA - dateB
+    })
+
+    // 收集所有日期
+    sortedData.forEach(item => {
+      const date = item.tradeDate ?? item.TradeDate ?? ''
+      if (date) allDates.add(date)
+    })
+
+    // 准备K线数据
+    const candlestickData = sortedData.map(item => {
+      const open = item.open ?? item.Open ?? 0
+      const close = item.close ?? item.Close ?? 0
+      const low = item.low ?? item.Low ?? 0
+      const high = item.high ?? item.High ?? 0
+      return [
+        Number(open),
+        Number(close),
+        Number(low),
+        Number(high)
+      ]
+    })
+
+    // 保存数据供tooltip使用
+    stockDataMap.set(stockCode, sortedData)
+
+    // 获取颜色
+    const color = colors[index % colors.length]
+
+    // 创建K线系列
+    stockSeries.push({
+      name: `${stockName}(${stockCode})`,
+      type: 'candlestick',
+      data: candlestickData,
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      itemStyle: {
+        color: color.up,
+        color0: color.down,
+        borderColor: color.up,
+        borderColor0: color.down
+      }
+    })
+  })
+
+  // 合并所有日期并排序
+  const sortedDates = Array.from(allDates).sort((a, b) => {
+    return new Date(a) - new Date(b)
+  })
+
+  // 更新图表
+  chartInstance.setOption({
+    title: {
+      text: `多股票对比走势图（${props.multiStockData.length}只股票）`
+    },
+    legend: {
+      data: stockSeries.map(s => s.name),
+      top: 35,
+      left: 'center'
+    },
+    xAxis: {
+      data: sortedDates
+    },
+    series: stockSeries
+  })
+
+  // 保存多股票数据供tooltip使用
+  currentChartData = Array.from(stockDataMap.values()).flat()
+}
+
 // 处理窗口大小变化
 const handleResize = () => {
   if (chartInstance) {
@@ -404,13 +517,22 @@ watch(() => props.data, () => {
   })
 }, { deep: true })
 
+watch(() => props.multiStockData, () => {
+  nextTick(() => {
+    updateChart()
+  })
+}, { deep: true })
+
 watch(() => props.stockName, () => {
   if (chartInstance) {
-    chartInstance.setOption({
-      title: {
-        text: props.stockName ? `${props.stockName} - 股价走势（含主要均线）` : '股价走势（含主要均线）'
-      }
-    })
+    const useMultiStock = props.multiStockData && props.multiStockData.length > 0
+    if (!useMultiStock) {
+      chartInstance.setOption({
+        title: {
+          text: props.stockName ? `${props.stockName} - 股价走势（含主要均线）` : '股价走势（含主要均线）'
+        }
+      })
+    }
   }
 })
 

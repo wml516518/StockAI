@@ -267,8 +267,10 @@ const getHtml2Canvas = async () => {
   return html2CanvasLoaderPromise
 }
 
-// 图表数据
-const chartData = ref([])
+// 图表数据从session中获取
+const chartData = computed(() => {
+  return currentSession.value?.chartData || []
+})
 
 const chartHighlightsObj = computed(() => {
   return currentSession.value?.technicalChart?.highlights || {}
@@ -473,7 +475,7 @@ const handleAnalyze = async (session, forceRefresh = false) => {
   session.technicalChart = null
   session.rating = null
   session.actionSuggestion = null
-  chartData.value = [] // 清空图表数据
+  session.chartData = [] // 清空图表数据
 
   try {
     console.log('正在获取股票最新数据...', code)
@@ -587,7 +589,8 @@ const handleAnalyze = async (session, forceRefresh = false) => {
         
         const historyData = await stockService.getHistory(code, startDateStr, endDateStr)
         if (historyData && Array.isArray(historyData) && historyData.length > 0) {
-          chartData.value = historyData.map(item => ({
+          // 将图表数据存储到当前session中
+          session.chartData = historyData.map(item => ({
             tradeDate: item.tradeDate,
             open: item.open,
             high: item.high,
@@ -595,11 +598,12 @@ const handleAnalyze = async (session, forceRefresh = false) => {
             close: item.close,
             volume: item.volume
           }))
-          console.log('已加载历史数据用于图表:', chartData.value.length, '条')
+          
+          console.log('已加载历史数据用于图表:', session.chartData.length, '条')
         }
       } catch (error) {
         console.warn('获取历史数据失败，图表将使用图片模式:', error)
-        chartData.value = []
+        session.chartData = []
       }
     } else if (typeof response === 'string') {
       session.result = response
@@ -660,7 +664,7 @@ const handleAnalyze = async (session, forceRefresh = false) => {
       session.result = '分析失败: ' + (error.message || '未知错误')
     }
     session.technicalChart = null
-    chartData.value = [] // 清空图表数据
+    session.chartData = [] // 清空图表数据
   } finally {
     session.analyzing = false
     if (!session.result || session.result.includes('失败') || session.result.includes('错误')) {

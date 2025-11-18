@@ -22,6 +22,7 @@ const createSession = (stockCode = '', analysisType = DEFAULT_ANALYSIS_TYPE, sto
   hasAnalyzed: false,
   lastAnalyzedStockCode: '',
   technicalChart: null,
+  chartData: [], // 图表数据，每个session独立
   rating: null,
   actionSuggestion: null,
   chatMessages: [],
@@ -85,6 +86,7 @@ export const useAiAnalysisStore = defineStore('aiAnalysis', () => {
     session.hasAnalyzed = false
     session.lastAnalyzedStockCode = ''
     session.technicalChart = null
+    session.chartData = [] // 清空图表数据
     session.rating = null
     session.actionSuggestion = null
     session.chatMessages = []
