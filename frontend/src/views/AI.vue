@@ -86,13 +86,14 @@
               </div>
             </div>
 
-            <div v-if="chartData.length > 0" class="chart-section">
+            <div v-if="chartData && chartData.length > 0" class="chart-section">
               <h5>技术面图表</h5>
               <!-- ECharts 图表 -->
               <StockChart
+                :key="`chart-${currentSession?.id || 'default'}-${chartData.length}`"
                 :data="chartData"
                 :highlights="chartHighlightsObj"
-                :stock-name="currentSession.stockInfo?.name || currentSession.displayName || ''"
+                :stock-name="currentSession?.stockInfo?.name || currentSession?.displayName || ''"
               />
               <ul v-if="chartHighlights.length" class="chart-highlights">
                 <li v-for="item in chartHighlights" :key="item.label">

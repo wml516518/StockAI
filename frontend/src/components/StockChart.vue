@@ -320,16 +320,33 @@ const initChart = () => {
 
 // 更新图表数据
 const updateChart = () => {
-  if (!chartInstance) return
+  if (!chartInstance) {
+    console.warn('[StockChart] chartInstance不存在，无法更新图表')
+    return
+  }
+
+  // 调试信息
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[StockChart] updateChart调用:', {
+      hasData: !!props.data,
+      dataLength: props.data?.length || 0,
+      hasMultiStockData: !!props.multiStockData,
+      multiStockDataLength: props.multiStockData?.length || 0,
+      firstDataItem: props.data?.[0]
+    })
+  }
 
   // 优先使用单股票模式（props.data）
-  if (props.data && props.data.length > 0) {
+  if (props.data && Array.isArray(props.data) && props.data.length > 0) {
     updateSingleStockChart()
-  } else if (props.multiStockData && props.multiStockData.length > 0) {
+  } else if (props.multiStockData && Array.isArray(props.multiStockData) && props.multiStockData.length > 0) {
     // 多股票模式：为每只股票创建单独的系列（备用）
     updateMultiStockChart()
   } else {
     // 无数据，清空图表
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[StockChart] 无数据，清空图表')
+    }
     chartInstance.setOption({
       xAxis: { data: [] },
       series: []
@@ -339,7 +356,10 @@ const updateChart = () => {
 
 // 单股票模式更新
 const updateSingleStockChart = () => {
-  if (!props.data || props.data.length === 0) return
+  if (!props.data || !Array.isArray(props.data) || props.data.length === 0) {
+    console.warn('[StockChart] updateSingleStockChart: 数据无效', props.data)
+    return
+  }
 
   // 按日期排序
   const sortedData = [...props.data].sort((a, b) => {
@@ -374,34 +394,50 @@ const updateSingleStockChart = () => {
   const ma20 = calculateMA(sortedData, 20)
   const ma60 = calculateMA(sortedData, 60)
 
+  // 调试信息
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[StockChart] 更新单股票图表:', {
+      dataCount: sortedData.length,
+      datesCount: dates.length,
+      candlestickDataCount: candlestickData.length,
+      firstDate: dates[0],
+      lastDate: dates[dates.length - 1],
+      firstCandlestick: candlestickData[0]
+    })
+  }
+
   // 更新图表
-  chartInstance.setOption({
-    xAxis: {
-      data: dates
-    },
-    series: [
-      {
-        name: 'K线',
-        data: candlestickData
+  try {
+    chartInstance.setOption({
+      xAxis: {
+        data: dates
       },
-      {
-        name: 'MA5',
-        data: ma5
-      },
-      {
-        name: 'MA10',
-        data: ma10
-      },
-      {
-        name: 'MA20',
-        data: ma20
-      },
-      {
-        name: 'MA60',
-        data: ma60
-      }
-    ]
-  })
+      series: [
+        {
+          name: 'K线',
+          data: candlestickData
+        },
+        {
+          name: 'MA5',
+          data: ma5
+        },
+        {
+          name: 'MA10',
+          data: ma10
+        },
+        {
+          name: 'MA20',
+          data: ma20
+        },
+        {
+          name: 'MA60',
+          data: ma60
+        }
+      ]
+    }, { notMerge: false })
+  } catch (error) {
+    console.error('[StockChart] 更新图表失败:', error)
+  }
 }
 
 // 多股票模式更新
@@ -511,11 +547,19 @@ const handleResize = () => {
 }
 
 // 监听数据变化
-watch(() => props.data, () => {
+watch(() => props.data, (newData, oldData) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[StockChart] props.data变化:', {
+      newLength: newData?.length || 0,
+      oldLength: oldData?.length || 0,
+      hasData: !!newData && newData.length > 0,
+      isArray: Array.isArray(newData)
+    })
+  }
   nextTick(() => {
     updateChart()
   })
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 watch(() => props.multiStockData, () => {
   nextTick(() => {
@@ -539,7 +583,17 @@ watch(() => props.stockName, () => {
 onMounted(() => {
   nextTick(() => {
     initChart()
-    updateChart()
+    // 延迟一下确保DOM已渲染和props已传递
+    setTimeout(() => {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[StockChart] onMounted后更新图表:', {
+          hasData: !!props.data,
+          dataLength: props.data?.length || 0,
+          chartInstanceExists: !!chartInstance
+        })
+      }
+      updateChart()
+    }, 200)
   })
 })
 
