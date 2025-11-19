@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Newtonsoft.Json.Linq;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -359,6 +361,41 @@ public class ScreenService : IScreenService
         }
         
         return results;
+    }
+
+    public async Task<string> GetShortTermHotStrategyAsync(int topHot, int topThemes, int themeMembers)
+    {
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL")
+                ?? "http://localhost:5001";
+
+            var url = $"{pythonServiceUrl}/api/strategy/hot-volume-breakout?topHot={topHot}&topThemes={topThemes}&themeMembers={themeMembers}";
+
+            _logger.LogInformation("请求Python短线策略接口: {Url}", url);
+
+            using var pythonClient = new HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(180)
+            };
+            pythonClient.DefaultRequestHeaders.Add("User-Agent", "StockAnalyse.Api/1.0");
+
+            var response = await pythonClient.GetAsync(url);
+            var content = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Python短线策略接口返回错误状态码 {StatusCode}: {Content}", response.StatusCode, content);
+                throw new InvalidOperationException($"Python服务调用失败: {response.StatusCode}");
+            }
+
+            return content;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取短线策略结果失败");
+            throw;
+        }
     }
 }
 

@@ -24,6 +24,7 @@ import os
 import warnings
 import time
 from bs4 import BeautifulSoup
+from strategy_hot_volume_breakout import run_strategy
 
 # matplotlib 相关代码已移除，不再需要生成图片
 
@@ -1909,6 +1910,112 @@ def get_hot_rank_by_code(stock_code):
         except Exception:
             pass
         return jsonify({'success': False, 'error': error_msg}), 500
+
+
+@app.route('/api/strategy/hot-volume-breakout', methods=['GET'])
+def run_hot_volume_breakout_strategy():
+    """热点题材成交量放大策略（短线操作）"""
+    try:
+        def parse_int(param_name, default_value, min_value=1, max_value=500):
+            raw = request.args.get(param_name, default_value)
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                value = default_value
+            return max(min_value, min(value, max_value))
+
+        top_hot = parse_int('topHot', 60, 10, 200)
+        top_themes = parse_int('topThemes', 3, 1, 10)
+        theme_members = parse_int('themeMembers', 3, 1, 10)
+
+        print(f"[{datetime.now()}] ⚡️ 执行热点题材成交量放大策略: top_hot={top_hot}, top_themes={top_themes}, theme_members={theme_members}")
+
+        strategy_results = run_strategy(top_hot, top_themes, theme_members)
+
+        def to_float(value):
+            try:
+                if value is None or value == '':
+                    return None
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def normalize_rules(rules):
+            if not isinstance(rules, dict):
+                return {}
+            normalized = {}
+            for key, value in rules.items():
+                if value is None:
+                    normalized[key] = False
+                elif isinstance(value, (bool, np.bool_)):
+                    normalized[key] = bool(value)
+                else:
+                    try:
+                        normalized[key] = bool(value)
+                    except Exception:
+                        normalized[key] = False
+            return normalized
+
+        mapped_results = []
+        for item in strategy_results:
+            mapped = {
+                'stockCode': item.get('stock_code') or item.get('stockCode'),
+                'stockName': item.get('stock_name') or item.get('stockName'),
+                'themeName': item.get('theme_name'),
+                'themeRank': item.get('theme_rank'),
+                'themeMemberRank': item.get('theme_member_rank'),
+                'themeTotalHeat': to_float(item.get('theme_total_heat')),
+                'memberConceptHeat': to_float(item.get('member_concept_heat')),
+                'stockHotRank': item.get('stock_hot_rank'),
+                'tradeDate': item.get('trade_date'),
+                'close': to_float(item.get('close')),
+                'pctChange': to_float(item.get('pct_change')),
+                'turnoverPercent': to_float(item.get('turnover_pct')),
+                'volumeRatio': to_float(item.get('volume_ratio')),
+                'passed': bool(item.get('passed')),
+                'failReason': item.get('fail_reason') or '',
+                'rules': normalize_rules(item.get('rules'))
+            }
+            mapped_results.append(mapped)
+
+        passed_count = len([r for r in mapped_results if r['passed']])
+
+        response_payload = {
+            'success': True,
+            'strategyName': '热点题材成交量放大策略',
+            'operationType': '短线',
+            'description': '结合AKShare热点题材、成交量放大与短期均线的短线选股策略，适用于追踪当日热点主线龙头。',
+            'conditions': [
+                '成交量放大：近3日均量 ≥ 过去10日均量 * 1.5',
+                '站上短期均线：收盘价 > MA5 且 > MA10',
+                '热门题材：匹配当日最热 1-3 个题材且个股位于该题材热度前列',
+                '当日换手率 ≥ 5%',
+                'K线实体阳线，拒绝冲高回落'
+            ],
+            'parameters': {
+                'topHot': top_hot,
+                'topThemes': top_themes,
+                'themeMembers': theme_members
+            },
+            'generatedAt': datetime.now().isoformat(),
+            'resultCount': len(mapped_results),
+            'passedCount': passed_count,
+            'results': mapped_results
+        }
+
+        return jsonify(response_payload)
+    except Exception as exc:
+        error_message = str(exc)
+        print(f"[{datetime.now()}] ❌ 热点题材策略执行失败: {error_message}")
+        try:
+            print(traceback.format_exc())
+        except Exception:
+            pass
+        return jsonify({
+            'success': False,
+            'error': 'strategy_failed',
+            'message': error_message
+        }), 500
 
 
 @app.route('/api/stock/hot-rank', methods=['GET'])

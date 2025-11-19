@@ -58,6 +58,25 @@ public class ScreenController : ControllerBase
             return StatusCode(500, new { error = "选股查询失败", message = ex.Message });
         }
     }
+
+    /// <summary>
+    /// 热点题材成交量放大短线策略（依赖Python AKShare服务）
+    /// </summary>
+    [HttpGet("short-term/hot-volume-breakout")]
+    public async Task<IActionResult> GetShortTermHotStrategy([FromQuery] int topHot = 60, [FromQuery] int topThemes = 3, [FromQuery] int themeMembers = 3)
+    {
+        try
+        {
+            _logger.LogInformation("请求短线热点策略: topHot={TopHot}, topThemes={TopThemes}, themeMembers={ThemeMembers}", topHot, topThemes, themeMembers);
+            var jsonPayload = await _screenService.GetShortTermHotStrategyAsync(topHot, topThemes, themeMembers);
+            return Content(jsonPayload, "application/json");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取短线热点策略失败");
+            return StatusCode(500, new { error = "short_term_strategy_failed", message = ex.Message });
+        }
+    }
 }
 
 

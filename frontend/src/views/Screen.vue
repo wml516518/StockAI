@@ -47,6 +47,97 @@
         </div>
       </div>
 
+      <!-- 短线热点策略 -->
+      <div class="card short-term-card">
+        <div class="short-term-header">
+          <div>
+            <h3>热点题材成交量放大策略 <small class="short-term-subtitle">(短线操作)</small></h3>
+            <p class="short-term-desc">
+              调用 AKShare 热门题材 + 成交量放大模型，一键锁定当日最强的短线龙头，满足短线交易的五大条件。
+            </p>
+          </div>
+          <span class="strategy-badge">短线</span>
+        </div>
+        <div class="short-term-controls">
+          <label>
+            热点个股范围
+            <input v-model.number="shortTermParams.topHot" type="number" min="10" max="200" step="5">
+          </label>
+          <label>
+            题材数量
+            <input v-model.number="shortTermParams.topThemes" type="number" min="1" max="10">
+          </label>
+          <label>
+            每题材入选
+            <input v-model.number="shortTermParams.themeMembers" type="number" min="1" max="10">
+          </label>
+        </div>
+        <div class="short-term-actions">
+          <button class="btn btn-accent" @click="fetchShortTermStrategy" :disabled="shortTermLoading">
+            {{ shortTermLoading ? '⚡️ 正在扫描热点...' : '🔥 执行短线选股' }}
+          </button>
+          <span class="short-term-note">本策略定位为 <strong>短线操作</strong>，建议结合风险控制与回测结果参考。</span>
+        </div>
+        <div v-if="shortTermLoading" class="loading">⚡️ 正在获取 AKShare 热点数据...</div>
+        <div v-else-if="shortTermError" class="warning">{{ shortTermError }}</div>
+        <div v-else-if="shortTermData" class="short-term-result">
+          <div class="short-term-summary">
+            <div>共 <strong>{{ shortTermData.resultCount || shortTermDisplayResults.length }}</strong> 只候选股</div>
+            <div>满足全部条件：<strong>{{ shortTermData.passedCount || shortTermWinners.length }}</strong> 只</div>
+            <div>生成时间：{{ formatDateTime(shortTermData.generatedAt) }}</div>
+          </div>
+          <div v-if="shortTermWinners.length" class="short-term-winners">
+            <strong>策略通过（短线龙头）：</strong>
+            <span v-for="winner in shortTermWinners" :key="winner.stockCode" class="winner-tag">
+              {{ winner.stockCode }} {{ winner.stockName }} · {{ winner.themeName }}
+            </span>
+          </div>
+          <div class="results-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>股票</th>
+                  <th>题材/位次</th>
+                  <th>收盘价</th>
+                  <th>涨跌幅</th>
+                  <th>换手率</th>
+                  <th>量能放大倍数</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="stock in shortTermDisplayResults"
+                  :key="stock.stockCode + stock.themeName"
+                  :class="{ 'short-term-pass': stock.passed }"
+                >
+                  <td>
+                    {{ stock.stockCode }}
+                    <div class="muted">{{ stock.stockName }}</div>
+                  </td>
+                  <td>
+                    {{ stock.themeName }}
+                    <div class="muted">题材#{{ stock.themeRank }} / 成员#{{ stock.themeMemberRank }}</div>
+                  </td>
+                  <td>{{ stock.close ? Number(stock.close).toFixed(2) : '-' }}</td>
+                  <td :class="getPriceClass(stock.pctChange)">{{ formatPercent(stock.pctChange) }}</td>
+                  <td>{{ formatPercent(stock.turnoverPercent) }}</td>
+                  <td>{{ stock.volumeRatio ? 'x' + Number(stock.volumeRatio).toFixed(2) : '-' }}</td>
+                  <td>
+                    <span v-if="stock.passed" class="badge badge-pass">满足策略</span>
+                    <span v-else class="muted">{{ stock.failReason || '待观察' }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="short-term-hint">仅展示前 {{ shortTermDisplayResults.length }} 条结果，更多可通过接口获取。</div>
+        </div>
+        <div v-else class="short-term-placeholder">
+          点击上方按钮即可加载短线策略结果。
+        </div>
+      </div>
+
       <!-- 设置选股条件 -->
       <div class="card">
         <h3>设置选股条件</h3>
@@ -296,6 +387,7 @@
 import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import api from '../services/api'
 import { screenTemplateService } from '../services/screenTemplateService'
+import { screenService } from '../services/screenService'
 import { useWatchlistStore } from '../stores/watchlist'
 
 const loading = ref(false)
@@ -345,6 +437,14 @@ const selectedStockCodes = ref([])
 const bulkCategoryId = ref('')
 const bulkAdding = ref(false)
 const bulkMessage = ref('')
+const shortTermParams = ref({
+  topHot: 60,
+  topThemes: 3,
+  themeMembers: 3
+})
+const shortTermData = ref(null)
+const shortTermLoading = ref(false)
+const shortTermError = ref('')
 
 const watchlistStore = useWatchlistStore()
 const watchlistCategories = computed(() => watchlistStore.categories || [])
@@ -576,6 +676,24 @@ const handleScreen = async (pageIndex = 1) => {
   }
 }
 
+const fetchShortTermStrategy = async () => {
+  shortTermLoading.value = true
+  shortTermError.value = ''
+  try {
+    const response = await screenService.fetchShortTermHotStrategy({
+      topHot: shortTermParams.value.topHot,
+      topThemes: shortTermParams.value.topThemes,
+      themeMembers: shortTermParams.value.themeMembers
+    })
+    shortTermData.value = response
+  } catch (error) {
+    console.error('获取短线策略失败:', error)
+    shortTermError.value = error.response?.data?.message || error.message || '获取短线策略失败'
+  } finally {
+    shortTermLoading.value = false
+  }
+}
+
 const goToPage = (page) => {
   if (page >= 1 && page <= totalPages.value && page !== currentPage.value) {
     handleScreen(page)
@@ -604,6 +722,16 @@ const visiblePages = computed(() => {
     pages.push(i)
   }
   return pages
+})
+
+const shortTermDisplayResults = computed(() => {
+  if (!shortTermData.value?.results) return []
+  return shortTermData.value.results.slice(0, 12)
+})
+
+const shortTermWinners = computed(() => {
+  if (!shortTermData.value?.results) return []
+  return shortTermData.value.results.filter(item => item.passed)
 })
 
 const clearConditions = () => {
@@ -647,6 +775,15 @@ const formatPercent = (percent) => {
 const formatVolume = (volume) => {
   if (volume === null || volume === undefined) return '-'
   return (volume / 10000).toFixed(2) + '万手'
+}
+
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString()
 }
 
 const getPriceClass = (value) => {
@@ -1013,6 +1150,154 @@ table tr:hover {
   font-weight: bold;
 }
 
+.short-term-card {
+  border: 1px solid #ffe2cc;
+  background: linear-gradient(135deg, #fff8f2 0%, #fff 100%);
+}
+
+.short-term-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.short-term-subtitle {
+  font-weight: normal;
+  font-size: 0.8em;
+  color: #ff7a18;
+}
+
+.short-term-desc {
+  margin: 4px 0 0;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.strategy-badge {
+  background: #ff7a18;
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.short-term-controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.short-term-controls label {
+  flex: 1;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  font-size: 0.9em;
+  color: #374151;
+  font-weight: 600;
+}
+
+.short-term-controls input {
+  margin-top: 4px;
+  padding: 6px 10px;
+  border: 1px solid #f7b58c;
+  border-radius: 4px;
+}
+
+.short-term-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.btn-accent {
+  background: linear-gradient(90deg, #ff7a18, #ffb347);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 10px rgba(255, 122, 24, 0.3);
+}
+
+.short-term-note {
+  color: #6b7280;
+  font-size: 0.9em;
+}
+
+.short-term-result {
+  border-top: 1px dashed #ffd0a8;
+  padding-top: 12px;
+}
+
+.short-term-summary {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.95em;
+  color: #374151;
+  margin-bottom: 10px;
+}
+
+.short-term-winners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.9em;
+  margin-bottom: 10px;
+}
+
+.winner-tag {
+  background: #fff;
+  border: 1px solid #ffdab5;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.muted {
+  color: #6b7280;
+  font-size: 0.85em;
+}
+
+.short-term-pass {
+  background: rgba(255, 204, 153, 0.25);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+.badge-pass {
+  background: #16a34a;
+  color: white;
+}
+
+.short-term-hint {
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: #9ca3af;
+}
+
+.short-term-placeholder {
+  padding: 12px;
+  background: #fffdf8;
+  border: 1px dashed #ffe0bf;
+  border-radius: 6px;
+  color: #9ca3af;
+  text-align: center;
+}
+
 @media (max-width: 768px) {
   .content {
     padding: 15px;
@@ -1044,6 +1329,14 @@ table tr:hover {
   .pagination-info {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .short-term-controls {
+    flex-direction: column;
+  }
+
+  .short-term-summary {
+    flex-direction: column;
   }
 }
 </style>
