@@ -19,9 +19,9 @@ const route = useRoute()
 
 const tabs = [
   { path: '/watchlist', label: '自选股' },
+  { path: '/ai', label: 'AI分析' },
   { path: '/screen', label: '条件选股' },
   { path: '/quant', label: '📊 量化交易' },
-  { path: '/ai', label: 'AI分析' },
   { path: '/settings', label: '⚙️ 设置' }
 ]
 
