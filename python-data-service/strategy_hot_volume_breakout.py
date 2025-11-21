@@ -521,6 +521,254 @@ def load_daily_bars(symbol: str, lookback_days: int = 90) -> pd.DataFrame:
     raise RuntimeError(f"无法获取 {symbol} 的日线数据，所有备用方案都已尝试")
 
 
+# 全局缓存实时行情数据，避免重复请求
+_cached_spot_data = None
+_cached_spot_time = None
+_CACHE_DURATION = 60  # 缓存60秒
+
+def get_turnover_rate(symbol: str) -> Optional[float]:
+    """从实时行情API获取换手率（百分比，如5.0表示5%）。
+    
+    尝试多种方法：
+    1. 从全市场实时行情数据中查找
+    2. 从单个股票实时行情接口获取
+    3. 如果都失败，返回None
+    """
+    global _cached_spot_data, _cached_spot_time
+    
+    # 方法1：从全市场实时行情数据中查找（使用缓存）
+    try:
+        current_time = time.time()
+        if _cached_spot_data is None or _cached_spot_time is None or (current_time - _cached_spot_time) > _CACHE_DURATION:
+            print(f"[DEBUG] 方法1：正在获取全市场实时行情数据...")
+            try:
+                _cached_spot_data = fetch_with_retry(
+                    ak.stock_zh_a_spot_em,
+                    "实时行情（换手率）",
+                    retries=3,  # 增加重试次数
+                    delay=2.0   # 增加延迟时间
+                )
+                _cached_spot_time = current_time
+                if _cached_spot_data is not None and not _cached_spot_data.empty:
+                    print(f"[DEBUG] 方法1：成功获取 {len(_cached_spot_data)} 条实时行情数据")
+                    print(f"[DEBUG] 方法1：数据列名: {list(_cached_spot_data.columns)}")
+                else:
+                    print(f"[WARN] 方法1：获取的数据为空")
+            except Exception as fetch_exc:
+                # 网络错误时，不打印完整堆栈，只打印关键信息
+                exc_msg = str(fetch_exc)
+                if 'Connection' in exc_msg or 'timeout' in exc_msg.lower() or 'urllib3' in exc_msg:
+                    print(f"[WARN] 方法1：网络连接失败，跳过（可能是网络问题或接口暂时不可用）")
+                else:
+                    print(f"[WARN] 方法1：获取数据失败: {exc_msg[:150]}")
+                _cached_spot_data = None
+        
+        df = _cached_spot_data
+        if df is not None and not df.empty:
+            # 查找股票代码列（更宽松的匹配）
+            code_col = None
+            for col in df.columns:
+                col_str = str(col)
+                col_lower = col_str.lower()
+                # 更宽松的匹配条件
+                if ('代码' in col_str or 'code' in col_lower) and '名称' not in col_str and 'name' not in col_lower:
+                    code_col = col
+                    break
+            
+            if code_col is None:
+                print(f"[DEBUG] 方法1：未找到代码列，所有列: {list(df.columns)}")
+            else:
+                symbol_clean = symbol.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '').strip()
+                print(f"[DEBUG] 方法1：查找股票代码 {symbol_clean}，代码列: {code_col}")
+                
+                # 查找换手率列（更宽松的匹配）
+                turnover_col = None
+                for col in df.columns:
+                    col_str = str(col)
+                    col_lower = col_str.lower()
+                    # 更宽松的匹配：换手、turnover、rate等关键词
+                    if ('换手' in col_str or 
+                        ('turnover' in col_lower and 'rate' in col_lower) or
+                        (col_lower == 'turnoverrate') or
+                        ('turnover' in col_lower and 'ratio' in col_lower)):
+                        turnover_col = col
+                        break
+                
+                if turnover_col is None:
+                    print(f"[DEBUG] 方法1：未找到换手率列，所有列: {list(df.columns)}")
+                else:
+                    print(f"[DEBUG] 方法1：找到换手率列: {turnover_col}")
+                    # 尝试匹配股票代码
+                    found = False
+                    for idx, row in df.iterrows():
+                        code_val = str(row[code_col]).replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '').strip()
+                        if code_val == symbol_clean:
+                            found = True
+                            turnover_rate = row[turnover_col]
+                            print(f"[DEBUG] 方法1：找到匹配股票，换手率原始值: {turnover_rate} (类型: {type(turnover_rate)})")
+                            if pd.notna(turnover_rate):
+                                try:
+                                    # 尝试直接转换
+                                    rate_value = float(turnover_rate)
+                                    if 0 <= rate_value <= 1000:
+                                        print(f"[INFO] 方法1成功获取 {symbol} 换手率: {rate_value}%")
+                                        return rate_value
+                                    else:
+                                        print(f"[DEBUG] 方法1：换手率值超出合理范围: {rate_value}")
+                                except (ValueError, TypeError):
+                                    # 尝试移除百分号
+                                    try:
+                                        value_str = str(turnover_rate).replace('%', '').strip()
+                                        rate_value = float(value_str)
+                                        if 0 <= rate_value <= 1000:
+                                            print(f"[INFO] 方法1成功获取 {symbol} 换手率: {rate_value}%")
+                                            return rate_value
+                                    except (ValueError, TypeError) as e:
+                                        print(f"[DEBUG] 方法1解析 {symbol} 换手率值失败: {turnover_rate}, 错误: {e}")
+                    
+                    if not found:
+                        # 打印前几条数据用于调试
+                        print(f"[DEBUG] 方法1未找到匹配的股票代码: {symbol_clean}")
+                        if len(df) > 0:
+                            print(f"[DEBUG] 方法1：前3条数据的代码列值: {df[code_col].head(3).tolist()}")
+    except Exception as exc:
+        exc_msg = str(exc)
+        # 对于网络错误，不打印完整堆栈
+        if 'Connection' in exc_msg or 'timeout' in exc_msg.lower() or 'urllib3' in exc_msg:
+            print(f"[WARN] 方法1获取 {symbol} 换手率失败: 网络连接问题")
+        else:
+            print(f"[DEBUG] 方法1获取 {symbol} 换手率失败: {exc_msg[:200]}")
+    
+    # 方法2：使用单个股票的实时行情接口
+    try:
+        # 尝试使用 stock_individual_info_em 获取单个股票信息
+        symbol_clean = symbol.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '').strip()
+        # 构造完整的股票代码（带市场前缀）
+        if symbol.startswith('sh') or symbol.startswith('SH'):
+            full_code = f"sh{symbol_clean}"
+        elif symbol.startswith('sz') or symbol.startswith('SZ'):
+            full_code = f"sz{symbol_clean}"
+        else:
+            # 根据代码判断市场
+            full_code = f"sh{symbol_clean}" if symbol_clean.startswith('6') else f"sz{symbol_clean}"
+        
+        # 尝试不同的参数名
+        df_info = None
+        try:
+            df_info = fetch_with_retry(
+                lambda: ak.stock_individual_info_em(symbol=full_code),
+                f"{symbol} 个股信息（方法2a）",
+                retries=2,
+                delay=1.0
+            )
+        except Exception as e:
+            exc_msg = str(e)
+            if 'Connection' not in exc_msg and 'timeout' not in exc_msg.lower() and 'urllib3' not in exc_msg:
+                # 只有非网络错误才尝试其他方法
+                try:
+                    df_info = fetch_with_retry(
+                        lambda: ak.stock_individual_info_em(stock=full_code),
+                        f"{symbol} 个股信息（方法2b）",
+                        retries=2,
+                        delay=1.0
+                    )
+                except Exception:
+                    try:
+                        # 尝试不带前缀的代码
+                        df_info = fetch_with_retry(
+                            lambda: ak.stock_individual_info_em(symbol=symbol_clean),
+                            f"{symbol} 个股信息（方法2c）",
+                            retries=2,
+                            delay=1.0
+                        )
+                    except Exception:
+                        pass
+            else:
+                print(f"[WARN] 方法2：网络连接失败，跳过")
+        
+        if df_info is not None and not df_info.empty:
+            # 查找换手率字段
+            for idx, row in df_info.iterrows():
+                # 尝试不同的行格式
+                if len(row) >= 2:
+                    item_name = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
+                    item_value = row.iloc[1] if len(row) > 1 else None
+                elif len(row) == 1:
+                    # 可能是单列格式，尝试从列名或值中提取
+                    item_name = str(row.index[0]) if len(row.index) > 0 else ''
+                    item_value = row.iloc[0] if len(row) > 0 else None
+                else:
+                    continue
+                
+                if '换手' in item_name and item_value is not None:
+                    try:
+                        # 移除百分号并转换为浮点数
+                        value_str = str(item_value).replace('%', '').strip()
+                        rate_value = float(value_str)
+                        if 0 <= rate_value <= 1000:
+                            print(f"[INFO] 方法2成功获取 {symbol} 换手率: {rate_value}%")
+                            return rate_value
+                    except (ValueError, TypeError) as e:
+                        print(f"[DEBUG] 方法2解析 {symbol} 换手率值失败: {item_value}, 错误: {e}")
+    except Exception as exc:
+        exc_msg = str(exc)
+        if 'Connection' in exc_msg or 'timeout' in exc_msg.lower() or 'urllib3' in exc_msg:
+            print(f"[WARN] 方法2获取 {symbol} 换手率失败: 网络连接问题")
+        else:
+            print(f"[DEBUG] 方法2获取 {symbol} 换手率失败: {exc_msg[:150]}")
+    
+    # 方法3：尝试使用 stock_zh_a_spot 接口（另一个实时行情接口）
+    try:
+        symbol_clean = symbol.replace('sh', '').replace('sz', '').replace('SH', '').replace('SZ', '').strip()
+        # 构造完整的股票代码
+        if symbol.startswith('sh') or symbol.startswith('SH'):
+            full_code = f"sh{symbol_clean}"
+        elif symbol.startswith('sz') or symbol.startswith('SZ'):
+            full_code = f"sz{symbol_clean}"
+        else:
+            full_code = f"sh{symbol_clean}" if symbol_clean.startswith('6') else f"sz{symbol_clean}"
+        
+        # 尝试使用 stock_zh_a_spot 获取单个股票实时行情
+        try:
+            df_spot = fetch_with_retry(
+                lambda: ak.stock_zh_a_spot(symbol=full_code),
+                f"{symbol} 实时行情（方法3）",
+                retries=2,
+                delay=1.0
+            )
+            if df_spot is not None and not df_spot.empty:
+                print(f"[DEBUG] 方法3：获取到数据，列名: {list(df_spot.columns)}")
+                # 查找换手率字段
+                for col in df_spot.columns:
+                    col_str = str(col).lower()
+                    if '换手' in str(col) or ('turnover' in col_str and 'rate' in col_str):
+                        turnover_rate = df_spot.iloc[0][col]
+                        if pd.notna(turnover_rate):
+                            try:
+                                rate_value = float(str(turnover_rate).replace('%', '').strip())
+                                if 0 <= rate_value <= 1000:
+                                    print(f"[INFO] 方法3成功获取 {symbol} 换手率: {rate_value}%")
+                                    return rate_value
+                            except (ValueError, TypeError):
+                                pass
+        except Exception as e:
+            exc_msg = str(e)
+            if 'Connection' in exc_msg or 'timeout' in exc_msg.lower() or 'urllib3' in exc_msg:
+                print(f"[WARN] 方法3：网络连接失败，跳过")
+            else:
+                print(f"[DEBUG] 方法3尝试失败: {exc_msg[:150]}")
+    except Exception as exc:
+        exc_msg = str(exc)
+        if 'Connection' in exc_msg or 'timeout' in exc_msg.lower() or 'urllib3' in exc_msg:
+            print(f"[WARN] 方法3获取 {symbol} 换手率失败: 网络连接问题")
+        else:
+            print(f"[DEBUG] 方法3获取 {symbol} 换手率失败: {exc_msg[:150]}")
+    
+    # 所有方法都失败
+    print(f"[WARN] 所有方法都无法获取 {symbol} 的换手率")
+    return None
+
+
 def evaluate_stock(candidate: Dict) -> Dict:
     """根据策略规则评估单个股票。"""
     symbol = candidate['stock_code']
@@ -549,8 +797,18 @@ def evaluate_stock(candidate: Dict) -> Dict:
     ma10 = last_row['ma10']
     price_pass = last_row['close'] > ma5 and last_row['close'] > ma10
 
-    turnover = last_row.get('turnover', math.nan)
-    turnover_pass = turnover >= 0.05
+    # 从实时行情API获取换手率（百分比，如5.0表示5%）
+    # 注意：不能使用成交额(turnover)作为换手率，这是错误的！
+    turnover_rate_pct = get_turnover_rate(norm_symbol)
+    if turnover_rate_pct is None:
+        # 如果无法获取换手率，打印警告信息
+        print(f"[WARN] {symbol} 无法获取换手率，换手率条件将不通过")
+        turnover_rate_pct = None
+        turnover_pass = False
+    else:
+        # 换手率已经是百分比形式（如5.0表示5%），判断是否>=5%
+        turnover_pass = turnover_rate_pct >= 5.0
+        print(f"[INFO] {symbol} 换手率: {turnover_rate_pct:.2f}%")
 
     open_px = last_row['open']
     close_px = last_row['close']
@@ -576,7 +834,7 @@ def evaluate_stock(candidate: Dict) -> Dict:
         'trade_date': last_row['date'].date().isoformat(),
         'close': round(close_px, 3),
         'pct_change': round(pct_change, 2) if pct_change is not None else None,
-        'turnover_pct': round(turnover * 100, 2) if pd.notna(turnover) else None,
+        'turnover_pct': round(turnover_rate_pct, 2) if turnover_rate_pct is not None else None,
         'volume_ratio': round(volume_ratio, 2) if not math.isnan(volume_ratio) else None,
         'ma5': round(ma5, 3) if pd.notna(ma5) else None,
         'ma10': round(ma10, 3) if pd.notna(ma10) else None,
