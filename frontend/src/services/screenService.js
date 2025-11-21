@@ -9,7 +9,7 @@ export const screenService = {
         topThemes,
         themeMembers
       },
-      timeout: 180000 // 3分钟，策略调用可能较慢
+      timeout: 300000 // 5分钟，策略调用可能较慢
     })
   }
 }

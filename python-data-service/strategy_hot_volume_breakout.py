@@ -56,8 +56,8 @@ def restore_global_proxy(removed: Dict[str, Optional[str]]) -> None:
             os.environ[key] = value
 
 
-def fetch_with_retry(func, description: str, *args, retries: int = 3, delay: float = 1.5, **kwargs):
-    """统一的重试逻辑。"""
+def fetch_with_retry(func, description: str, *args, retries: int = 5, delay: float = 2.0, **kwargs):
+    """统一的重试逻辑，针对连接错误使用指数退避策略。"""
     last_exc = None
     for attempt in range(1, retries + 1):
         try:
@@ -66,10 +66,42 @@ def fetch_with_retry(func, description: str, *args, retries: int = 3, delay: flo
                 return data
         except Exception as exc:  # pylint: disable=broad-except
             last_exc = exc
-            print(f"[WARN] {description} 失败 (尝试 {attempt}/{retries}): {exc}")
+            exc_str = str(exc)
+            exc_type = type(exc).__name__
+            
+            # 判断是否为连接相关错误
+            is_connection_error = any([
+                'Connection' in exc_type,
+                'Connection aborted' in exc_str,
+                'ConnectionResetError' in exc_str,
+                '10054' in exc_str,  # Windows 连接重置错误码
+                '远程主机强迫关闭' in exc_str,
+                'timeout' in exc_str.lower(),
+                'time out' in exc_str.lower(),
+            ])
+            
+            if is_connection_error:
+                # 连接错误：使用指数退避，延迟时间更长
+                base_delay = delay * 2  # 连接错误的基础延迟更长
+                wait_time = base_delay * (2 ** (attempt - 1))  # 指数退避：4s, 8s, 16s, 32s...
+                wait_time = min(wait_time, 30.0)  # 最多等待30秒
+                if attempt < retries:
+                    print(f"[WARN] {description} 连接错误 (尝试 {attempt}/{retries}): {exc_type} - 等待 {wait_time:.1f}秒后重试")
+                else:
+                    print(f"[WARN] {description} 连接错误 (尝试 {attempt}/{retries}): {exc_type} - 最后一次尝试")
+            else:
+                # 其他错误：使用线性延迟
+                wait_time = delay * attempt
+                if attempt < retries:
+                    print(f"[WARN] {description} 失败 (尝试 {attempt}/{retries}): {exc_type} - {exc_str[:100]} - 等待 {wait_time:.1f}秒后重试")
+                else:
+                    print(f"[WARN] {description} 失败 (尝试 {attempt}/{retries}): {exc_type} - {exc_str[:100]} - 最后一次尝试")
+            
+            # 如果不是最后一次尝试，等待后继续重试
             if attempt < retries:
-                time.sleep(delay * attempt)
-    raise RuntimeError(f"无法获取 {description}") from last_exc
+                time.sleep(wait_time)
+    
+    raise RuntimeError(f"无法获取 {description} (已重试 {retries} 次)") from last_exc
 
 
 def normalize_symbol(code: str) -> str:
@@ -125,12 +157,17 @@ class ConceptInfo:
 def build_hot_concepts(hot_df: pd.DataFrame, top_themes: int, members_per_theme: int) -> List[Dict]:
     """根据个股热词统计热点题材并挑选成员。"""
     concepts: Dict[str, ConceptInfo] = {}
-    for _, row in hot_df.iterrows():
+    total_rows = len(hot_df)
+    for idx, (_, row) in enumerate(hot_df.iterrows(), 1):
         symbol = row['code']
         try:
+            # 在请求之间添加延迟，避免请求过于频繁
+            if idx > 1:
+                time.sleep(0.3)  # 每个关键词请求之间延迟0.3秒
+            
             kw_df = load_stock_keywords(symbol)
         except Exception as exc:  # pylint: disable=broad-except
-            print(f"[WARN] 获取 {symbol} 热点题材失败: {exc}")
+            print(f"[WARN] 获取 {symbol} 热点题材失败 ({idx}/{total_rows}): {exc}")
             continue
         for _, kw in kw_df.iterrows():
             cc = kw['concept_code']
@@ -183,20 +220,305 @@ def build_hot_concepts(hot_df: pd.DataFrame, top_themes: int, members_per_theme:
     return selected_stocks
 
 
-def load_daily_bars(symbol: str, lookback_days: int = 90) -> pd.DataFrame:
-    """拉取指定股票的日线数据并截取最近 lookback_days。"""
-    df = fetch_with_retry(ak.stock_zh_a_daily, f"{symbol} 日线", symbol)
-    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'turnover']
+def _normalize_history_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """标准化不同AKShare接口返回的数据格式。"""
+    df = df.copy()
+    
+    # 标准化列名（支持中英文列名）
+    column_mapping = {
+        '日期': 'date',
+        'Date': 'date',
+        'date': 'date',
+        '开盘': 'open',
+        'Open': 'open',
+        'open': 'open',
+        '最高': 'high',
+        'High': 'high',
+        'high': 'high',
+        '最低': 'low',
+        'Low': 'low',
+        'low': 'low',
+        '收盘': 'close',
+        'Close': 'close',
+        'close': 'close',
+        '成交量': 'volume',
+        'Volume': 'volume',
+        'volume': 'volume',
+        '成交额': 'turnover',
+        'Amount': 'turnover',
+        'amount': 'turnover',
+        '成交金额': 'turnover',
+        'Turnover': 'turnover',
+        'turnover': 'turnover',
+    }
+    
+    # 重命名列
+    for old_name, new_name in column_mapping.items():
+        if old_name in df.columns and new_name not in df.columns:
+            df.rename(columns={old_name: new_name}, inplace=True)
+    
+    # 确保必要的列存在（price相关列是必需的）
+    required_price_cols = ['date', 'open', 'high', 'low', 'close']
+    missing_price_cols = [col for col in required_price_cols if col not in df.columns]
+    if missing_price_cols:
+        raise ValueError(f"数据缺少必要列: {missing_price_cols}, 可用列: {list(df.columns)}")
+    
+    # 数值转换
+    numeric_cols = ['open', 'high', 'low', 'close']
+    if 'turnover' in df.columns:
+        numeric_cols.append('turnover')
+    if 'volume' in df.columns:
+        numeric_cols.append('volume')
+    
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 如果缺少 volume 列，尝试从 turnover 和 close 计算
+    if 'volume' not in df.columns:
+        if 'turnover' in df.columns and 'close' in df.columns:
+            # 使用成交额和收盘价估算成交量：成交量 = 成交额 / 收盘价
+            # 注意：这个估算可能不够精确，但对于策略分析来说可以使用
+            df['volume'] = (df['turnover'] / df['close']).fillna(0)
+            print(f"[INFO] 数据缺少 volume 列，已根据成交额和收盘价估算成交量")
+        else:
+            # 如果既没有 volume 也没有 turnover，设置为 0（会导致成交量相关策略失效）
+            df['volume'] = 0
+            print(f"[WARN] 数据缺少 volume 和 turnover 列，成交量将设为 0")
+    
+    # 日期转换
     df['date'] = pd.to_datetime(df['date'])
+    
+    # 排序
     df.sort_values('date', inplace=True)
-    if lookback_days > 0:
-        df = df.tail(lookback_days)
-    df['ma5'] = df['close'].rolling(5).mean()
-    df['ma10'] = df['close'].rolling(10).mean()
-    return df.reset_index(drop=True)
+    
+    return df
+
+
+def _try_fetch_volume_from_other_sources(symbol: str, target_dates: pd.Series, start_date_str: str, end_date_str: str) -> pd.Series:
+    """尝试从其他数据源获取volume数据来补全缺失的列。
+    
+    返回一个Series，索引为日期，值为volume。如果无法获取，返回空Series。
+    """
+    # 尝试从 stock_zh_a_daily 获取 volume
+    try:
+        df_volume_raw = fetch_with_retry(
+            ak.stock_zh_a_daily,
+            f"{symbol} volume补全 (stock_zh_a_daily)",
+            symbol,
+            retries=2,  # 只重试2次，因为这是补全数据
+            delay=1.5
+        )
+        if df_volume_raw is not None and not df_volume_raw.empty:
+            # 标准化数据（会自动生成 volume 列，如果有 turnover/amount 的话）
+            df_volume = _normalize_history_dataframe(df_volume_raw)
+            # 只取目标日期范围内的数据
+            if 'date' in df_volume.columns and 'volume' in df_volume.columns:
+                df_volume = df_volume[df_volume['date'].isin(target_dates)]
+                # 过滤掉无效的 volume 值（0、NaN）
+                df_volume = df_volume[df_volume['volume'].notna() & (df_volume['volume'] > 0)]
+                if len(df_volume) > 0:
+                    return df_volume.set_index('date')['volume']
+    except Exception as e:
+        print(f"[DEBUG] {symbol} volume补全 (stock_zh_a_daily) 失败: {str(e)[:100]}")
+        pass  # 静默失败，继续尝试其他方法
+    
+    # 尝试从 stock_zh_a_hist 获取 volume
+    for adjust in ['', 'qfq', 'hfq']:
+        try:
+            def fetch_hist_volume():
+                return ak.stock_zh_a_hist(
+                    symbol=symbol,
+                    period="daily",
+                    start_date=start_date_str,
+                    end_date=end_date_str,
+                    adjust=adjust or ""
+                )
+            
+            df_volume_raw = fetch_with_retry(
+                fetch_hist_volume,
+                f"{symbol} volume补全 (stock_zh_a_hist, {adjust})",
+                retries=2,
+                delay=1.5
+            )
+            if df_volume_raw is not None and not df_volume_raw.empty:
+                # 标准化数据（会自动生成 volume 列，如果有 turnover/amount 的话）
+                df_volume = _normalize_history_dataframe(df_volume_raw)
+                if 'date' in df_volume.columns and 'volume' in df_volume.columns:
+                    df_volume = df_volume[df_volume['date'].isin(target_dates)]
+                    # 过滤掉无效的 volume 值（0、NaN）
+                    df_volume = df_volume[df_volume['volume'].notna() & (df_volume['volume'] > 0)]
+                    if len(df_volume) > 0:
+                        return df_volume.set_index('date')['volume']
+        except Exception as e:
+            print(f"[DEBUG] {symbol} volume补全 (stock_zh_a_hist, {adjust}) 失败: {str(e)[:100]}")
+            continue
+    
+    return pd.Series(dtype=float)
+
+
+def load_daily_bars(symbol: str, lookback_days: int = 90) -> pd.DataFrame:
+    """拉取指定股票的日线数据并截取最近 lookback_days。
+    
+    使用多个备用数据源，按顺序尝试：
+    1. stock_zh_a_hist_tx - 优先使用（连接稳定性好）
+    2. stock_zh_a_daily - 备用方案
+    3. stock_zh_a_hist - 备用方案（前复权、无复权、后复权）
+    
+    如果使用 stock_zh_a_hist_tx 但缺少 volume 列，会尝试从其他接口补全。
+    """
+    from datetime import datetime, timedelta
+    
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=lookback_days + 30)  # 多取一些数据确保足够
+    start_date_str = start_date.strftime("%Y%m%d")
+    end_date_str = end_date.strftime("%Y%m%d")
+    
+    # 方案1: 优先尝试 stock_zh_a_hist_tx（腾讯数据源，连接稳定性好）
+    try:
+        def fetch_hist_tx():
+            return ak.stock_zh_a_hist_tx(
+                symbol=symbol,
+                start_date=start_date_str,
+                end_date=end_date_str
+            )
+        
+        df_raw = fetch_with_retry(
+            fetch_hist_tx,
+            f"{symbol} 日线 (stock_zh_a_hist_tx)",
+            retries=3,
+            delay=2.0
+        )
+        
+        # 检查原始数据的列
+        if df_raw is None or df_raw.empty:
+            raise ValueError(f"{symbol} stock_zh_a_hist_tx 返回空数据")
+        
+        print(f"[DEBUG] {symbol} stock_zh_a_hist_tx 原始列: {list(df_raw.columns)}")
+        
+        # 检查是否有 volume 相关的列（支持中英文列名）
+        has_volume = any(col in df_raw.columns for col in ['volume', 'Volume', '成交量'])
+        has_amount_or_turnover = any(col in df_raw.columns for col in ['amount', 'Amount', 'turnover', 'Turnover', '成交额', '成交金额'])
+        
+        # stock_zh_a_hist_tx 返回的列：['date', 'open', 'close', 'high', 'low', 'amount']
+        # amount 是成交额（金额），不是成交量（volume）
+        if not has_volume and has_amount_or_turnover:
+            print(f"[INFO] {symbol} 从 stock_zh_a_hist_tx 获取的数据缺少 volume 列（只有 amount 成交额），尝试从其他接口补全...")
+            
+            # 先标准化以获取日期列，用于匹配（此时会自动从 amount 和 close 估算 volume）
+            df_temp = _normalize_history_dataframe(df_raw.copy())
+            
+            if 'date' in df_temp.columns and len(df_temp) > 0:
+                target_dates = df_temp['date'].copy()
+                
+                # 尝试从其他接口获取真实的 volume 数据
+                try:
+                    volume_data = _try_fetch_volume_from_other_sources(symbol, target_dates, start_date_str, end_date_str)
+                    
+                    if len(volume_data) > 0 and not volume_data.isna().all():
+                        # 成功从其他接口获取到 volume 数据，替换估算值
+                        # 保存原始的估算值作为回退
+                        estimated_volume = df_temp['volume'].copy() if 'volume' in df_temp.columns else None
+                        # 使用真实的 volume 数据（如果日期匹配）
+                        real_volume = df_temp['date'].map(volume_data)
+                        # 对于没有匹配到的日期，使用估算值（已有）
+                        if estimated_volume is not None:
+                            df_temp['volume'] = real_volume.fillna(estimated_volume)
+                        else:
+                            df_temp['volume'] = real_volume.fillna(0)
+                        df = df_temp
+                        print(f"[INFO] {symbol} 成功从其他接口补全了 {len(volume_data)} 条真实 volume 数据")
+                    else:
+                        # 如果其他接口也失败，使用标准化函数自动估算（已在 _normalize_history_dataframe 中完成）
+                        df = df_temp
+                        print(f"[INFO] {symbol} 无法从其他接口获取真实 volume，已使用成交额(amount)和收盘价估算 volume")
+                except Exception as e:
+                    # 如果补全过程出错，使用已标准化的数据（已包含估算的 volume）
+                    df = df_temp
+                    print(f"[WARN] {symbol} 补全 volume 时出错: {str(e)[:100]}，已使用成交额和收盘价估算")
+            else:
+                # 如果标准化失败，直接标准化
+                df = _normalize_history_dataframe(df_raw)
+        elif has_volume:
+            # 有 volume 列，直接标准化
+            df = _normalize_history_dataframe(df_raw)
+        else:
+            # 既没有 volume 也没有 amount/turnover，直接标准化（会设置为 0）
+            df = _normalize_history_dataframe(df_raw)
+        if len(df) > 0:
+            # 过滤日期范围
+            df = df[df['date'] >= start_date]
+            if len(df) > 0:
+                if lookback_days > 0:
+                    df = df.tail(lookback_days)
+                df['ma5'] = df['close'].rolling(5).mean()
+                df['ma10'] = df['close'].rolling(10).mean()
+                print(f"[INFO] {symbol} 成功使用 stock_zh_a_hist_tx 获取日线数据")
+                return df.reset_index(drop=True)
+    except Exception as exc:
+        exc_msg = str(exc)[:200]
+        print(f"[WARN] {symbol} stock_zh_a_hist_tx 失败: {exc_msg}，尝试备用方案...")
+    
+    # 方案2: 尝试 stock_zh_a_daily（一次性获取全量数据）
+    try:
+        df = fetch_with_retry(
+            ak.stock_zh_a_daily,
+            f"{symbol} 日线 (stock_zh_a_daily)",
+            symbol,
+            retries=3,
+            delay=2.5
+        )
+        df = _normalize_history_dataframe(df)
+        if len(df) > 0:
+            # 过滤日期范围
+            df = df[df['date'] >= start_date]
+            if len(df) > 0:
+                if lookback_days > 0:
+                    df = df.tail(lookback_days)
+                df['ma5'] = df['close'].rolling(5).mean()
+                df['ma10'] = df['close'].rolling(10).mean()
+                print(f"[INFO] {symbol} 成功使用 stock_zh_a_daily 获取日线数据")
+                return df.reset_index(drop=True)
+    except Exception as exc:
+        exc_msg = str(exc)[:200]
+        print(f"[WARN] {symbol} stock_zh_a_daily 失败: {exc_msg}，尝试备用方案...")
+    
+    # 方案3: 尝试 stock_zh_a_hist（多个复权选项）
+    adjust_options = ['qfq', '', 'hfq']  # 前复权、无复权、后复权
+    for adjust in adjust_options:
+        try:
+            adjust_label = {'qfq': '前复权', 'hfq': '后复权', '': '无复权'}[adjust]
+            
+            def fetch_hist():
+                return ak.stock_zh_a_hist(
+                    symbol=symbol,
+                    period="daily",
+                    start_date=start_date_str,
+                    end_date=end_date_str,
+                    adjust=adjust or ""
+                )
+            
+            df = fetch_with_retry(
+                fetch_hist,
+                f"{symbol} 日线 (stock_zh_a_hist, {adjust_label})",
+                retries=3,
+                delay=2.0
+            )
+            df = _normalize_history_dataframe(df)
+            if len(df) > 0:
+                if lookback_days > 0:
+                    df = df.tail(lookback_days)
+                df['ma5'] = df['close'].rolling(5).mean()
+                df['ma10'] = df['close'].rolling(10).mean()
+                print(f"[INFO] {symbol} 成功使用 stock_zh_a_hist ({adjust_label}) 获取日线数据")
+                return df.reset_index(drop=True)
+        except Exception as exc:
+            exc_msg = str(exc)[:200]
+            print(f"[WARN] {symbol} stock_zh_a_hist ({adjust}) 失败: {exc_msg}，继续尝试...")
+            continue
+    
+    # 所有方案都失败
+    raise RuntimeError(f"无法获取 {symbol} 的日线数据，所有备用方案都已尝试")
 
 
 def evaluate_stock(candidate: Dict) -> Dict:
@@ -285,12 +607,23 @@ def run_strategy(top_hot: int, top_themes: int, theme_members: int) -> List[Dict
             print("[INFO] 未找到满足热点题材约束的股票。")
             return []
         results = []
-        for candidate in candidates:
+        total = len(candidates)
+        for idx, candidate in enumerate(candidates, 1):
             try:
+                symbol = candidate.get('stock_code', 'unknown')
+                print(f"[INFO] 正在评估 ({idx}/{total}): {symbol}")
+                
+                # 在评估股票前添加短暂延迟，避免请求过于频繁
+                if idx > 1:
+                    time.sleep(0.5)  # 每个股票之间延迟0.5秒
+                
                 evaluated = evaluate_stock(candidate)
             except Exception as exc:  # pylint: disable=broad-except
+                symbol = candidate.get('stock_code', 'unknown')
+                exc_msg = str(exc)[:200]  # 截断过长的错误信息
+                print(f"[WARN] 评估 {symbol} 失败: {exc_msg}")
                 candidate['passed'] = False
-                candidate['fail_reason'] = f'数据获取失败: {exc}'
+                candidate['fail_reason'] = f'数据获取失败: {exc_msg}'
                 evaluated = candidate
             results.append(evaluated)
         return results
