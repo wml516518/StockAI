@@ -4,6 +4,7 @@ using Newtonsoft.Json.Linq;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
+using StockAnalyse.Api.Services.Abstractions;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,18 +18,21 @@ public class ScreenService : IScreenService
     private readonly ILogger<ScreenService> _logger;
     private readonly IStockDataService _stockDataService;
     private readonly IMemoryCache _cache;
+    private readonly IAIService _aiService;
     private const int CacheExpirationMinutes = 10; // 缓存10分钟
 
     public ScreenService(
         StockDbContext context, 
         ILogger<ScreenService> logger,
         IStockDataService stockDataService,
-        IMemoryCache cache)
+        IMemoryCache cache,
+        IAIService aiService)
     {
         _context = context;
         _logger = logger;
         _stockDataService = stockDataService;
         _cache = cache;
+        _aiService = aiService;
     }
 
     /// <summary>
@@ -395,6 +399,172 @@ public class ScreenService : IScreenService
         {
             _logger.LogError(ex, "获取短线策略结果失败");
             throw;
+        }
+    }
+
+    public async Task<ScreenCriteria> ParseNaturalLanguageToCriteriaAsync(string naturalLanguage, int? modelId = null)
+    {
+        if (string.IsNullOrWhiteSpace(naturalLanguage))
+        {
+            _logger.LogWarning("自然语言选股条件为空");
+            return new ScreenCriteria { PageIndex = 1, PageSize = 10 };
+        }
+
+        _logger.LogInformation("开始解析自然语言选股条件: {NaturalLanguage}", naturalLanguage);
+
+        // 构建AI提示词，要求AI将自然语言转换为JSON格式的选股条件
+        var systemPrompt = @"你是一位专业的股票筛选助手。用户会用自然语言描述选股条件，你需要将其转换为结构化的JSON格式。
+
+可用的选股条件字段：
+- Market: 市场类型，可选值：""SH""（上海市场）、""SZ""（深圳市场），空字符串表示全部市场
+- MinPrice/MaxPrice: 价格区间（元）
+- MinChangePercent/MaxChangePercent: 涨跌幅区间（%）
+- MinTurnoverRate/MaxTurnoverRate: 换手率区间（%）
+- MinVolume/MaxVolume: 成交量区间（手）
+- MinMarketValue/MaxMarketValue: 市值区间（万元）
+- MinPE/MaxPE: 市盈率区间
+- MinPB/MaxPB: 市净率区间
+- MinDividendYield/MaxDividendYield: 股息率区间（%）
+
+请仔细分析用户的自然语言描述，提取所有相关的数值和条件，然后返回一个JSON对象，只包含用户明确提到的条件字段。
+如果用户没有提到某个条件，该字段应该为null或省略。
+数值单位要正确转换（例如：换手率5%应该转换为5.0，市值100亿应该转换为1000000万元）。
+
+返回格式必须是纯JSON，不要包含任何解释文字，格式如下：
+{
+  ""Market"": ""SH"" 或 ""SZ"" 或 null,
+  ""MinPrice"": 数值 或 null,
+  ""MaxPrice"": 数值 或 null,
+  ""MinChangePercent"": 数值 或 null,
+  ""MaxChangePercent"": 数值 或 null,
+  ""MinTurnoverRate"": 数值 或 null,
+  ""MaxTurnoverRate"": 数值 或 null,
+  ""MinVolume"": 数值 或 null,
+  ""MaxVolume"": 数值 或 null,
+  ""MinMarketValue"": 数值 或 null,
+  ""MaxMarketValue"": 数值 或 null,
+  ""MinPE"": 数值 或 null,
+  ""MaxPE"": 数值 或 null,
+  ""MinPB"": 数值 或 null,
+  ""MaxPB"": 数值 或 null,
+  ""MinDividendYield"": 数值 或 null,
+  ""MaxDividendYield"": 数值 或 null,
+  ""PageIndex"": 1,
+  ""PageSize"": 10
+}
+
+示例：
+用户输入：""换手率大于5%的股票""
+返回：{""MinTurnoverRate"": 5.0, ""PageIndex"": 1, ""PageSize"": 10}
+
+用户输入：""上海市场，价格在10到50元之间，涨跌幅在-5%到10%之间""
+返回：{""Market"": ""SH"", ""MinPrice"": 10.0, ""MaxPrice"": 50.0, ""MinChangePercent"": -5.0, ""MaxChangePercent"": 10.0, ""PageIndex"": 1, ""PageSize"": 10}";
+
+        var userPrompt = $"请将以下自然语言描述转换为选股条件的JSON格式：\n\n{naturalLanguage}";
+
+        try
+        {
+            // 调用AI服务解析自然语言，使用ChatAsync方法以便传递systemPrompt
+            var messages = new List<AiChatMessage>
+            {
+                new("system", systemPrompt),
+                new("user", userPrompt)
+            };
+
+            var aiResponse = await _aiService.ChatAsync(messages, context: null, modelId: modelId, maxHistory: 2);
+
+            _logger.LogInformation("AI解析结果: {AiResponse}", aiResponse);
+
+            // 检查AI是否返回错误消息
+            if (string.IsNullOrWhiteSpace(aiResponse))
+            {
+                _logger.LogWarning("AI返回空响应");
+                throw new InvalidOperationException("AI返回空响应，请检查AI配置");
+            }
+
+            // 检查是否是错误消息（通常以"请先"、"失败"、"错误"等开头）
+            if (aiResponse.Contains("请先") || 
+                aiResponse.Contains("失败") || 
+                aiResponse.Contains("错误") ||
+                aiResponse.Contains("AI调用失败") ||
+                aiResponse.Contains("AI返回结构异常") ||
+                aiResponse.Contains("配置错误"))
+            {
+                _logger.LogWarning("AI返回错误消息: {AiResponse}", aiResponse);
+                throw new InvalidOperationException($"AI服务错误: {aiResponse}");
+            }
+
+            // 尝试从AI响应中提取JSON
+            var jsonText = ExtractJsonFromResponse(aiResponse);
+            
+            if (string.IsNullOrWhiteSpace(jsonText))
+            {
+                _logger.LogWarning("无法从AI响应中提取JSON，AI响应: {AiResponse}", aiResponse);
+                throw new InvalidOperationException($"无法从AI响应中提取JSON格式的选股条件。AI响应: {aiResponse}");
+            }
+
+            // 反序列化为ScreenCriteria
+            var criteria = System.Text.Json.JsonSerializer.Deserialize<ScreenCriteria>(jsonText, new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                AllowTrailingCommas = true
+            });
+
+            if (criteria == null)
+            {
+                _logger.LogWarning("JSON反序列化失败，JSON文本: {JsonText}", jsonText);
+                throw new InvalidOperationException($"JSON反序列化失败，无法解析选股条件。JSON: {jsonText}");
+            }
+
+            // 确保分页参数有效
+            criteria.PageIndex = Math.Max(1, criteria.PageIndex);
+            criteria.PageSize = Math.Max(1, Math.Min(100, criteria.PageSize));
+
+            _logger.LogInformation("成功解析自然语言选股条件: {Criteria}", 
+                System.Text.Json.JsonSerializer.Serialize(criteria));
+
+            return criteria;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AI解析自然语言选股条件失败: {Message}", ex.Message);
+            // 重新抛出异常，让Controller处理
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 从AI响应中提取JSON内容
+    /// </summary>
+    private string ExtractJsonFromResponse(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return string.Empty;
+
+        // 尝试直接解析整个响应
+        response = response.Trim();
+
+        // 如果响应以{开头，尝试找到第一个{和最后一个}
+        var startIndex = response.IndexOf('{');
+        if (startIndex < 0)
+            return string.Empty;
+
+        var endIndex = response.LastIndexOf('}');
+        if (endIndex < startIndex)
+            return string.Empty;
+
+        var jsonText = response.Substring(startIndex, endIndex - startIndex + 1);
+
+        // 验证是否是有效的JSON
+        try
+        {
+            System.Text.Json.JsonDocument.Parse(jsonText);
+            return jsonText;
+        }
+        catch
+        {
+            _logger.LogWarning("提取的文本不是有效的JSON: {JsonText}", jsonText);
+            return string.Empty;
         }
     }
 }

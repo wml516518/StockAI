@@ -138,6 +138,80 @@
         </div>
       </div>
 
+      <!-- AI选股 -->
+      <div class="card ai-screen-card">
+        <div class="ai-screen-header">
+          <div>
+            <h3>🤖 AI智能选股</h3>
+            <p class="ai-screen-desc">
+              用自然语言描述你的选股条件，AI会自动理解并帮你筛选股票。例如："换手率大于5%的股票"、"价格在10到50元之间，涨跌幅在-5%到10%之间"。
+            </p>
+          </div>
+          <span class="ai-badge">AI</span>
+        </div>
+        <div class="ai-screen-input">
+          <textarea
+            v-model="aiNaturalLanguage"
+            placeholder="请输入选股条件，例如：换手率大于5%的股票、上海市场，价格在10到50元之间..."
+            rows="3"
+            class="ai-input-textarea"
+            :disabled="aiLoading"
+          ></textarea>
+        </div>
+        <div class="ai-screen-actions">
+          <button class="btn btn-ai" @click="handleAISearch" :disabled="aiLoading || !aiNaturalLanguage.trim()">
+            {{ aiLoading ? '🤖 AI正在分析中...' : '🚀 执行AI选股' }}
+          </button>
+          <button class="btn btn-secondary" @click="clearAIConditions" :disabled="aiLoading">🧹 清空</button>
+          <span class="ai-screen-note">AI会理解你的自然语言描述，自动提取选股条件并执行筛选。</span>
+        </div>
+        <div v-if="aiLoading" class="loading">
+          <div>🤖 AI正在解析你的选股条件，请稍候...</div>
+          <div style="font-size: 0.9em; color: #666; margin-top: 10px;">
+            这可能需要几秒钟时间
+          </div>
+        </div>
+        <div v-else-if="aiError" class="warning">{{ aiError }}</div>
+        <div v-else-if="aiParsedCriteria" class="ai-parsed-criteria">
+          <strong>AI解析的条件：</strong>
+          <div class="parsed-criteria-list">
+            <span v-if="aiParsedCriteria.market" class="criteria-tag">
+              市场：{{ aiParsedCriteria.market === 'SH' ? '上海' : aiParsedCriteria.market === 'SZ' ? '深圳' : aiParsedCriteria.market }}
+            </span>
+            <span v-if="aiParsedCriteria.minPrice !== null && aiParsedCriteria.minPrice !== undefined" class="criteria-tag">
+              最低价：{{ aiParsedCriteria.minPrice }}元
+            </span>
+            <span v-if="aiParsedCriteria.maxPrice !== null && aiParsedCriteria.maxPrice !== undefined" class="criteria-tag">
+              最高价：{{ aiParsedCriteria.maxPrice }}元
+            </span>
+            <span v-if="aiParsedCriteria.minChangePercent !== null && aiParsedCriteria.minChangePercent !== undefined" class="criteria-tag">
+              最低涨跌幅：{{ aiParsedCriteria.minChangePercent }}%
+            </span>
+            <span v-if="aiParsedCriteria.maxChangePercent !== null && aiParsedCriteria.maxChangePercent !== undefined" class="criteria-tag">
+              最高涨跌幅：{{ aiParsedCriteria.maxChangePercent }}%
+            </span>
+            <span v-if="aiParsedCriteria.minTurnoverRate !== null && aiParsedCriteria.minTurnoverRate !== undefined" class="criteria-tag">
+              最低换手率：{{ aiParsedCriteria.minTurnoverRate }}%
+            </span>
+            <span v-if="aiParsedCriteria.maxTurnoverRate !== null && aiParsedCriteria.maxTurnoverRate !== undefined" class="criteria-tag">
+              最高换手率：{{ aiParsedCriteria.maxTurnoverRate }}%
+            </span>
+            <span v-if="aiParsedCriteria.minPE !== null && aiParsedCriteria.minPE !== undefined" class="criteria-tag">
+              最低PE：{{ aiParsedCriteria.minPE }}
+            </span>
+            <span v-if="aiParsedCriteria.maxPE !== null && aiParsedCriteria.maxPE !== undefined" class="criteria-tag">
+              最高PE：{{ aiParsedCriteria.maxPE }}
+            </span>
+            <span v-if="aiParsedCriteria.minPB !== null && aiParsedCriteria.minPB !== undefined" class="criteria-tag">
+              最低PB：{{ aiParsedCriteria.minPB }}
+            </span>
+            <span v-if="aiParsedCriteria.maxPB !== null && aiParsedCriteria.maxPB !== undefined" class="criteria-tag">
+              最高PB：{{ aiParsedCriteria.maxPB }}
+            </span>
+          </div>
+        </div>
+      </div>
+
       <!-- 设置选股条件 -->
       <div class="card">
         <h3>设置选股条件</h3>
@@ -446,6 +520,13 @@ const shortTermData = ref(null)
 const shortTermLoading = ref(false)
 const shortTermError = ref('')
 
+// AI选股相关状态
+const aiNaturalLanguage = ref('')
+const aiLoading = ref(false)
+const aiError = ref('')
+const aiParsedCriteria = ref(null)
+const isAISearchMode = ref(false) // 标记当前是否使用AI选股模式
+
 const watchlistStore = useWatchlistStore()
 const watchlistCategories = computed(() => watchlistStore.categories || [])
 
@@ -575,6 +656,7 @@ const handleScreen = async (pageIndex = 1) => {
   loading.value = true
   hasSearched.value = true
   currentPage.value = pageIndex
+  isAISearchMode.value = false // 清除AI选股模式，使用普通选股
   
   try {
     // 清理null值，转换为undefined或空字符串
@@ -694,9 +776,114 @@ const fetchShortTermStrategy = async () => {
   }
 }
 
+const handleAISearch = async (pageIndex = 1) => {
+  if (!aiNaturalLanguage.value.trim()) {
+    alert('请输入选股条件')
+    return
+  }
+
+  aiLoading.value = true
+  aiError.value = ''
+  aiParsedCriteria.value = null
+  hasSearched.value = true
+  currentPage.value = pageIndex
+  isAISearchMode.value = true // 设置AI选股模式
+
+  try {
+    console.log('准备发送AI选股请求:', {
+      naturalLanguage: aiNaturalLanguage.value.trim(),
+      pageIndex: pageIndex,
+      pageSize: pageSize.value
+    })
+    
+    const response = await screenService.aiSearch(
+      aiNaturalLanguage.value.trim(),
+      pageIndex,
+      pageSize.value
+    )
+
+    // 处理分页响应
+    results.value = response?.items || []
+    totalCount.value = response?.totalCount || 0
+    currentPage.value = response?.pageIndex || pageIndex
+    pageSize.value = response?.pageSize || pageSize.value
+    totalPages.value = response?.totalPages || Math.max(1, Math.ceil(totalCount.value / pageSize.value))
+
+    // 尝试从响应中提取解析的条件（如果后端返回了的话）
+    // 这里我们可以通过反向工程来显示AI解析的条件
+    // 或者后端可以在响应中包含解析的条件信息
+    // 暂时留空，后续可以扩展
+
+    // 滚动到结果区域
+    setTimeout(() => {
+      const resultsCard = document.querySelector('.card:has(.results-table)')
+      if (resultsCard) {
+        resultsCard.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    }, 100)
+  } catch (error) {
+    console.error('AI选股失败:', error)
+    console.error('错误详情:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    })
+    
+    // 提取错误信息
+    let errorMessage = 'AI选股失败'
+    if (error.response?.data) {
+      const errorData = error.response.data
+      if (typeof errorData === 'string') {
+        errorMessage = errorData
+      } else if (errorData.message) {
+        errorMessage = errorData.message
+      } else if (errorData.error) {
+        errorMessage = errorData.error
+      } else if (errorData.details && Array.isArray(errorData.details)) {
+        errorMessage = `请求格式错误: ${errorData.details.join(', ')}`
+      }
+    } else if (error.message) {
+      errorMessage = error.message
+    }
+    
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      errorMessage = 'AI选股超时：解析时间过长，请尝试简化选股条件或稍后重试。'
+    } else if (error.response?.status === 400) {
+      if (!errorMessage.includes('请求格式错误')) {
+        errorMessage = `AI选股失败 (400): ${errorMessage}`
+      }
+    }
+    
+    aiError.value = errorMessage
+    results.value = []
+    totalCount.value = 0
+    totalPages.value = 0
+  } finally {
+    aiLoading.value = false
+  }
+}
+
+const clearAIConditions = () => {
+  aiNaturalLanguage.value = ''
+  aiError.value = ''
+  aiParsedCriteria.value = null
+  results.value = []
+  hasSearched.value = false
+  currentPage.value = 1
+  totalCount.value = 0
+  totalPages.value = 0
+  isAISearchMode.value = false // 清除AI选股模式
+}
+
 const goToPage = (page) => {
   if (page >= 1 && page <= totalPages.value && page !== currentPage.value) {
-    handleScreen(page)
+    // 根据当前模式调用相应的方法
+    if (isAISearchMode.value) {
+      handleAISearch(page)
+    } else {
+      handleScreen(page)
+    }
   }
 }
 
@@ -704,7 +891,12 @@ const onPageSizeChange = (event) => {
   // 改变每页数量时，重新从第一页开始查询
   const newSize = Number(event.target.value) || 10
   pageSize.value = newSize
-  handleScreen(1)
+  // 根据当前模式调用相应的方法
+  if (isAISearchMode.value) {
+    handleAISearch(1)
+  } else {
+    handleScreen(1)
+  }
 }
 
 // 计算可见页码范围
@@ -760,6 +952,7 @@ const clearConditions = () => {
   totalCount.value = 0
   totalPages.value = 0
   lastSearchCriteria.value = null // 清空保存的查询条件
+  isAISearchMode.value = false // 清除AI选股模式
 }
 
 const formatPrice = (price) => {
@@ -1296,6 +1489,111 @@ table tr:hover {
   border-radius: 6px;
   color: #9ca3af;
   text-align: center;
+}
+
+.ai-screen-card {
+  border: 1px solid #c7d2fe;
+  background: linear-gradient(135deg, #f0f4ff 0%, #fff 100%);
+}
+
+.ai-screen-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.ai-screen-desc {
+  margin: 4px 0 0;
+  color: #6b7280;
+  line-height: 1.4;
+  font-size: 0.9em;
+}
+
+.ai-badge {
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ai-screen-input {
+  margin-bottom: 12px;
+}
+
+.ai-input-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  font-size: 0.95em;
+  font-family: inherit;
+  resize: vertical;
+  transition: border-color 0.2s;
+}
+
+.ai-input-textarea:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.ai-input-textarea:disabled {
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+.ai-screen-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.btn-ai {
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3);
+}
+
+.btn-ai:hover:not(:disabled) {
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  box-shadow: 0 6px 15px rgba(99, 102, 241, 0.4);
+}
+
+.ai-screen-note {
+  color: #6b7280;
+  font-size: 0.85em;
+  flex: 1;
+}
+
+.ai-parsed-criteria {
+  border-top: 1px dashed #c7d2fe;
+  padding-top: 12px;
+  font-size: 0.9em;
+}
+
+.parsed-criteria-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.criteria-tag {
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: #4f46e5;
+  font-size: 0.85em;
+  font-weight: 500;
 }
 
 @media (max-width: 768px) {

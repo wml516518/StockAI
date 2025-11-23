@@ -19,6 +19,11 @@ public interface IScreenService
     /// 获取热点题材成交量放大短线策略结果（来自Python服务，返回JSON字符串以避免重复序列化问题）
     /// </summary>
     Task<string> GetShortTermHotStrategyAsync(int topHot, int topThemes, int themeMembers);
+
+    /// <summary>
+    /// 使用AI解析自然语言选股条件，转换为ScreenCriteria
+    /// </summary>
+    Task<ScreenCriteria> ParseNaturalLanguageToCriteriaAsync(string naturalLanguage, int? modelId = null);
 }
 
 

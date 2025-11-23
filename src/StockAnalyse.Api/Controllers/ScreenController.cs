@@ -77,6 +77,139 @@ public class ScreenController : ControllerBase
             return StatusCode(500, new { error = "short_term_strategy_failed", message = ex.Message });
         }
     }
+
+    /// <summary>
+    /// AI选股：使用自然语言描述选股条件，AI解析后执行选股
+    /// </summary>
+    [HttpPost("ai-search")]
+    public async Task<ActionResult<PagedResult<Stock>>> AISearch([FromBody] AISearchRequest? request)
+    {
+        try
+        {
+            // 读取原始请求体（用于调试）
+            string? rawBody = null;
+            try
+            {
+                if (Request.Body.CanSeek)
+                {
+                    Request.Body.Position = 0;
+                    using var reader = new StreamReader(Request.Body, System.Text.Encoding.UTF8, leaveOpen: true);
+                    rawBody = await reader.ReadToEndAsync();
+                    Request.Body.Position = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "无法读取原始请求体");
+            }
+
+            // 记录原始请求信息（用于调试）
+            _logger.LogInformation("收到AI选股请求，Raw Body: {RawBody}, Parsed Request: {RequestBody}", 
+                rawBody ?? "无法读取",
+                request != null ? System.Text.Json.JsonSerializer.Serialize(request) : "null");
+            
+            // 检查ModelState验证错误
+            if (!ModelState.IsValid)
+            {
+                var errors = ModelState
+                    .Where(x => x.Value?.Errors.Count > 0)
+                    .SelectMany(x => x.Value!.Errors.Select(e => $"{x.Key}: {e.ErrorMessage}"))
+                    .ToList();
+                
+                _logger.LogWarning("AI选股请求ModelState验证失败: {Errors}, Raw Body: {RawBody}", 
+                    string.Join(", ", errors), rawBody ?? "无法读取");
+                return BadRequest(new { error = "请求格式错误", message = "请求参数验证失败", details = errors, rawBody });
+            }
+
+            if (request == null)
+            {
+                _logger.LogWarning("收到空的AI选股请求（request为null），Raw Body: {RawBody}", rawBody ?? "无法读取");
+                return BadRequest(new { error = "请求参数不能为空", message = "请求体不能为空，请提供自然语言选股条件", rawBody });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.NaturalLanguage))
+            {
+                _logger.LogWarning("收到空的AI选股请求（NaturalLanguage为空），Request: {Request}", 
+                    System.Text.Json.JsonSerializer.Serialize(request));
+                return BadRequest(new { error = "请求参数不能为空", message = "请提供自然语言选股条件" });
+            }
+
+            _logger.LogInformation("收到AI选股请求: NaturalLanguage={NaturalLanguage}, PageIndex={PageIndex}, PageSize={PageSize}, ModelId={ModelId}", 
+                request.NaturalLanguage, request.PageIndex, request.PageSize, request.ModelId);
+
+            // 使用AI解析自然语言为选股条件
+            ScreenCriteria criteria;
+            try
+            {
+                criteria = await _screenService.ParseNaturalLanguageToCriteriaAsync(
+                    request.NaturalLanguage, 
+                    request.ModelId);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // AI解析失败，返回400错误
+                _logger.LogWarning("AI解析自然语言失败: {Message}", ex.Message);
+                return BadRequest(new { error = "AI解析失败", message = ex.Message });
+            }
+
+            // 应用分页参数（如果请求中指定了）
+            if (request.PageIndex.HasValue && request.PageIndex.Value > 0)
+            {
+                criteria.PageIndex = request.PageIndex.Value;
+            }
+            if (request.PageSize.HasValue && request.PageSize.Value > 0)
+            {
+                criteria.PageSize = Math.Min(request.PageSize.Value, 100);
+            }
+
+            // 执行选股
+            var result = await _screenService.ScreenStocksAsync(criteria);
+
+            _logger.LogInformation("AI选股查询完成，总记录数: {TotalCount}, 当前页: {PageIndex}, 返回 {Count} 条结果",
+                result.TotalCount, result.PageIndex, result.Items.Count);
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AI选股查询时发生错误: {Message}", ex.Message);
+            
+            // 如果是InvalidOperationException（AI解析失败），返回400
+            if (ex is InvalidOperationException)
+            {
+                return BadRequest(new { error = "AI解析失败", message = ex.Message });
+            }
+            
+            // 其他错误返回500
+            return StatusCode(500, new { error = "AI选股查询失败", message = ex.Message });
+        }
+    }
+}
+
+/// <summary>
+/// AI选股请求模型
+/// </summary>
+public class AISearchRequest
+{
+    /// <summary>
+    /// 自然语言描述的选股条件
+    /// </summary>
+    public string NaturalLanguage { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 可选：指定使用的AI模型ID
+    /// </summary>
+    public int? ModelId { get; set; }
+
+    /// <summary>
+    /// 可选：页码（默认1）
+    /// </summary>
+    public int? PageIndex { get; set; }
+
+    /// <summary>
+    /// 可选：每页数量（默认10）
+    /// </summary>
+    public int? PageSize { get; set; }
 }
 
 
