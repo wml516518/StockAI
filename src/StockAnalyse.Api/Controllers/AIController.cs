@@ -1476,6 +1476,250 @@ public class AIController : ControllerBase
     }
 
     /// <summary>
+    /// 获取股票操作分析（一日做T、一周操作、一月操作）
+    /// </summary>
+    [HttpPost("analyze/{stockCode}/operation")]
+    public async Task<ActionResult<OperationAnalysisResponse>> GetOperationAnalysis(
+        string stockCode, 
+        [FromBody] OperationAnalysisRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(stockCode))
+        {
+            return BadRequest(new { message = "股票代码不能为空", error = "INVALID_STOCK_CODE" });
+        }
+
+        if (request == null || string.IsNullOrWhiteSpace(request.OperationType))
+        {
+            return BadRequest(new { message = "操作类型不能为空", error = "INVALID_OPERATION_TYPE" });
+        }
+
+        stockCode = stockCode.Trim().ToUpper();
+        var operationType = request.OperationType.Trim().ToLowerInvariant();
+        var forceRefresh = request.ForceRefresh;
+
+        // 验证操作类型
+        if (operationType != "day" && operationType != "week" && operationType != "month")
+        {
+            return BadRequest(new { message = "操作类型无效，必须是 day（一日做T）、week（一周操作）或 month（一月操作）", error = "INVALID_OPERATION_TYPE" });
+        }
+
+        // 构建操作分析缓存键
+        var operationCacheKey = $"operation_analysis_{stockCode}_{operationType}";
+        
+        // 如果不需要强制刷新，先检查缓存
+        if (!forceRefresh)
+        {
+            if (_cache.TryGetValue(operationCacheKey, out CachedOperationAnalysisResult? cachedOperationResult) && cachedOperationResult != null)
+            {
+                // 检查缓存是否过期
+                var cacheExpiry = GetOperationCacheExpiry(operationType);
+                var isExpired = DateTime.Now > cachedOperationResult.CacheTime.Add(cacheExpiry);
+                
+                if (!isExpired)
+                {
+                    _logger.LogInformation("使用缓存的操作分析结果: {StockCode}, {OperationType}, 缓存时间: {CacheTime}", 
+                        stockCode, operationType, cachedOperationResult.CacheTime);
+                    
+                    return Ok(new OperationAnalysisResponse
+                    {
+                        Success = true,
+                        StockCode = cachedOperationResult.StockCode,
+                        StockName = cachedOperationResult.StockName,
+                        OperationType = cachedOperationResult.OperationType,
+                        OperationTypeName = cachedOperationResult.OperationTypeName,
+                        Analysis = cachedOperationResult.Analysis,
+                        AnalysisTime = cachedOperationResult.AnalysisTime,
+                        BaseAnalysisTime = cachedOperationResult.BaseAnalysisTime,
+                        BaseAnalysisType = cachedOperationResult.BaseAnalysisType,
+                        CurrentPrice = cachedOperationResult.CurrentPrice,
+                        ChangePercent = cachedOperationResult.ChangePercent,
+                        Cached = true,
+                        CacheTime = cachedOperationResult.CacheTime
+                    });
+                }
+                else
+                {
+                    _logger.LogInformation("操作分析缓存已过期: {StockCode}, {OperationType}, 缓存时间: {CacheTime}, 过期时间: {Expiry}", 
+                        stockCode, operationType, cachedOperationResult.CacheTime, cacheExpiry);
+                }
+            }
+        }
+
+        // 检查是否有AI分析结果（优先检查comprehensive类型）
+        var analysisTypes = new[] { "comprehensive", "technical", "fundamental" };
+        CachedAnalysisResult? cachedAnalysis = null;
+        string? foundAnalysisType = null;
+
+        foreach (var analysisType in analysisTypes)
+        {
+            var cacheKey = $"ai_analysis_{stockCode}_{analysisType}";
+            if (_cache.TryGetValue(cacheKey, out CachedAnalysisResult? result) && result != null)
+            {
+                cachedAnalysis = result;
+                foundAnalysisType = analysisType;
+                break;
+            }
+        }
+
+        if (cachedAnalysis == null || string.IsNullOrWhiteSpace(cachedAnalysis.Analysis))
+        {
+            return BadRequest(new 
+            { 
+                message = "该股票尚未进行AI分析，请先进行AI分析后再查看操作建议", 
+                error = "NO_AI_ANALYSIS",
+                requiresAnalysis = true
+            });
+        }
+
+        // 获取股票基本信息
+        Stock? stock = null;
+        try
+        {
+            stock = await _stockDataService.GetRealTimeQuoteAsync(stockCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "获取股票信息失败: {StockCode}", stockCode);
+        }
+
+        var stockName = stock?.Name ?? cachedAnalysis.StockName ?? stockCode;
+        var currentPrice = stock?.CurrentPrice ?? 0;
+        var changePercent = stock?.ChangePercent ?? 0;
+
+        // 构建操作分析提示词
+        var operationTypeName = operationType switch
+        {
+            "day" => "一日做T",
+            "week" => "一周操作",
+            "month" => "一月操作",
+            _ => "操作"
+        };
+
+        var timeFrame = operationType switch
+        {
+            "day" => "1个交易日",
+            "week" => "5个交易日（一周）",
+            "month" => "20个交易日（一个月）",
+            _ => "短期"
+        };
+
+        // 根据AI分析结果的实际内容，构建客观的提示词
+        var analysisSummary = cachedAnalysis.Analysis.Length > 1000 
+            ? cachedAnalysis.Analysis.Substring(0, 1000) + "..."
+            : cachedAnalysis.Analysis;
+
+        var ratingInfo = !string.IsNullOrWhiteSpace(cachedAnalysis.Rating) 
+            ? $"评级：{cachedAnalysis.Rating}" 
+            : "";
+        var suggestionInfo = !string.IsNullOrWhiteSpace(cachedAnalysis.ActionSuggestion) 
+            ? $"操作建议：{cachedAnalysis.ActionSuggestion}" 
+            : "";
+
+        var operationPrompt = $@"基于以下AI分析结果，请为股票 {stockName}（代码：{stockCode}）提供{operationTypeName}的具体操作建议。
+
+【当前市场情况】
+- 当前价格：{currentPrice:F2}元
+- 涨跌幅：{changePercent:F2}%
+- 分析时间：{cachedAnalysis.AnalysisTime:yyyy-MM-dd HH:mm:ss}
+{ratingInfo}
+{suggestionInfo}
+
+【AI分析结果摘要】
+{analysisSummary}
+
+【分析要求】
+请基于上述AI分析结果，客观、理性地分析该股票在未来{timeFrame}内的操作策略。要求：
+
+1. **客观评估**：根据AI分析中的实际情况（包括优势、风险、技术指标等），给出客观的操作建议，不得过于乐观或过于悲观。
+
+2. **操作策略**：
+   - 买入时机：如果AI分析显示有买入机会，请说明具体的买入时机和价格区间
+   - 卖出时机：如果AI分析显示有卖出风险，请说明具体的卖出时机和价格区间
+   - 持仓建议：说明是否适合持仓，以及持仓比例建议
+   - 风险控制：明确止损位和止盈位
+
+3. **风险提示**：必须明确指出可能的风险因素，包括但不限于：
+   - 市场风险
+   - 技术面风险
+   - 基本面风险
+   - 消息面风险
+
+4. **操作要点**：
+   - 关键价位：重要的支撑位和阻力位
+   - 操作频率：适合的操作频率（如做T的频率）
+   - 资金管理：建议的资金使用比例
+
+请以结构化的方式输出，确保建议客观、可操作，避免过于乐观或过于悲观的表述。";
+
+        try
+        {
+            var operationAnalysis = await _aiService.ExecutePromptAsync(
+                promptName: null,
+                userPrompt: operationPrompt,
+                placeholders: null,
+                modelId: request.ModelId
+            );
+
+            if (string.IsNullOrWhiteSpace(operationAnalysis))
+            {
+                return StatusCode(500, new { message = "生成操作分析失败，请稍后重试", error = "ANALYSIS_FAILED" });
+            }
+
+            var analysisTime = DateTime.Now;
+            var response = new OperationAnalysisResponse
+            {
+                Success = true,
+                StockCode = stockCode,
+                StockName = stockName,
+                OperationType = operationType,
+                OperationTypeName = operationTypeName,
+                Analysis = operationAnalysis,
+                AnalysisTime = analysisTime,
+                BaseAnalysisTime = cachedAnalysis.AnalysisTime,
+                BaseAnalysisType = foundAnalysisType ?? "comprehensive",
+                CurrentPrice = currentPrice,
+                ChangePercent = changePercent,
+                Cached = false,
+                CacheTime = analysisTime
+            };
+
+            // 缓存操作分析结果
+            var cacheExpiry = GetOperationCacheExpiry(operationType);
+            var cachedResult = new CachedOperationAnalysisResult
+            {
+                StockCode = stockCode,
+                StockName = stockName,
+                OperationType = operationType,
+                OperationTypeName = operationTypeName,
+                Analysis = operationAnalysis,
+                AnalysisTime = analysisTime,
+                BaseAnalysisTime = cachedAnalysis.AnalysisTime,
+                BaseAnalysisType = foundAnalysisType ?? "comprehensive",
+                CurrentPrice = currentPrice,
+                ChangePercent = changePercent,
+                CacheTime = analysisTime
+            };
+
+            var cacheOptions = new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = cacheExpiry,
+                Priority = CacheItemPriority.Normal
+            };
+            _cache.Set(operationCacheKey, cachedResult, cacheOptions);
+
+            _logger.LogInformation("操作分析结果已缓存: {StockCode}, {OperationType}, 缓存时间: {CacheTime}, 过期时间: {Expiry}", 
+                stockCode, operationType, analysisTime, cacheExpiry);
+
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "生成操作分析失败: {StockCode}, {OperationType}", stockCode, operationType);
+            return StatusCode(500, new { message = $"生成操作分析失败: {ex.Message}", error = "ANALYSIS_FAILED" });
+        }
+    }
+
+    /// <summary>
     /// 聊天
     /// </summary>
     [HttpPost("chat")]
@@ -2196,6 +2440,20 @@ public class AIController : ControllerBase
         return result;
     }
 
+    /// <summary>
+    /// 获取操作分析的缓存过期时间
+    /// </summary>
+    private static TimeSpan GetOperationCacheExpiry(string operationType)
+    {
+        return operationType switch
+        {
+            "day" => TimeSpan.FromHours(1),      // 一日做T缓存1小时
+            "week" => TimeSpan.FromDays(1),      // 一周操作缓存1天
+            "month" => TimeSpan.FromDays(7),     // 一月操作缓存1周
+            _ => TimeSpan.FromHours(1)
+        };
+    }
+
     private static string NormalizeStockCode(string? stockCode)
     {
         return string.IsNullOrWhiteSpace(stockCode)
@@ -2364,5 +2622,64 @@ public class BatchAnalyzeItem
     public string? Message { get; set; }
     public string? Analysis { get; set; }
     public object? TechnicalChart { get; set; }
+}
+
+/// <summary>
+/// 操作分析请求
+/// </summary>
+public class OperationAnalysisRequest
+{
+    /// <summary>
+    /// 操作类型：day（一日做T）、week（一周操作）、month（一月操作）
+    /// </summary>
+    public string OperationType { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 可选的模型ID
+    /// </summary>
+    public int? ModelId { get; set; }
+    
+    /// <summary>
+    /// 是否强制刷新（忽略缓存）
+    /// </summary>
+    public bool ForceRefresh { get; set; } = false;
+}
+
+/// <summary>
+/// 操作分析响应
+/// </summary>
+public class OperationAnalysisResponse
+{
+    public bool Success { get; set; }
+    public string StockCode { get; set; } = string.Empty;
+    public string StockName { get; set; } = string.Empty;
+    public string OperationType { get; set; } = string.Empty;
+    public string OperationTypeName { get; set; } = string.Empty;
+    public string Analysis { get; set; } = string.Empty;
+    public DateTime AnalysisTime { get; set; }
+    public DateTime BaseAnalysisTime { get; set; }
+    public string BaseAnalysisType { get; set; } = string.Empty;
+    public decimal CurrentPrice { get; set; }
+    public decimal ChangePercent { get; set; }
+    public bool Cached { get; set; } = false;
+    public DateTime CacheTime { get; set; }
+}
+
+/// <summary>
+/// 缓存的操作分析结果
+/// </summary>
+public class CachedOperationAnalysisResult
+{
+    public string StockCode { get; set; } = string.Empty;
+    public string StockName { get; set; } = string.Empty;
+    public string OperationType { get; set; } = string.Empty;
+    public string OperationTypeName { get; set; } = string.Empty;
+    public string Analysis { get; set; } = string.Empty;
+    public DateTime AnalysisTime { get; set; }
+    public DateTime BaseAnalysisTime { get; set; }
+    public string BaseAnalysisType { get; set; } = string.Empty;
+    public decimal CurrentPrice { get; set; }
+    public decimal ChangePercent { get; set; }
+    public DateTime CacheTime { get; set; }
 }
 

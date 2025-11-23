@@ -73,3 +73,15 @@ export const watchlistService = {
   }
 }
 
+// 操作分析服务
+export const operationAnalysisService = {
+  // 获取操作分析（一日做T、一周操作、一月操作）
+  getOperationAnalysis(stockCode, operationType, forceRefresh = false, modelId = null) {
+    return api.post(`/ai/analyze/${stockCode}/operation`, {
+      operationType,
+      modelId,
+      forceRefresh
+    })
+  }
+}
+

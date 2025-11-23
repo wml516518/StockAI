@@ -314,6 +314,41 @@
                     {{ getStockActionSuggestion(stock) }}
                   </span>
                 </div>
+                <!-- 操作分析按钮区域 -->
+                <div class="operation-buttons-section">
+                  <div class="operation-buttons-header">
+                    <span>操作分析</span>
+                  </div>
+                  <div class="operation-buttons">
+                    <button 
+                      class="btn btn-small btn-operation" 
+                      @click="handleOperationAnalysisClick(stock, 'day', $event)"
+                      @dblclick="handleOperationAnalysisDoubleClick(stock, 'day', $event)"
+                      :disabled="analyzingOperation[stock.id] === 'day'"
+                      title="基于AI分析结果，获取一日做T操作建议（双击强制刷新）"
+                    >
+                      {{ analyzingOperation[stock.id] === 'day' ? '分析中...' : '📈 一日做T' }}
+                    </button>
+                    <button 
+                      class="btn btn-small btn-operation" 
+                      @click="handleOperationAnalysisClick(stock, 'week', $event)"
+                      @dblclick="handleOperationAnalysisDoubleClick(stock, 'week', $event)"
+                      :disabled="analyzingOperation[stock.id] === 'week'"
+                      title="基于AI分析结果，获取一周操作建议（双击强制刷新）"
+                    >
+                      {{ analyzingOperation[stock.id] === 'week' ? '分析中...' : '📊 一周操作' }}
+                    </button>
+                    <button 
+                      class="btn btn-small btn-operation" 
+                      @click="handleOperationAnalysisClick(stock, 'month', $event)"
+                      @dblclick="handleOperationAnalysisDoubleClick(stock, 'month', $event)"
+                      :disabled="analyzingOperation[stock.id] === 'month'"
+                      title="基于AI分析结果，获取一月操作建议（双击强制刷新）"
+                    >
+                      {{ analyzingOperation[stock.id] === 'month' ? '分析中...' : '📅 一月操作' }}
+                    </button>
+                  </div>
+                </div>
                 <div class="price-section">
                   <div class="current-price" :class="getPriceClass(getStockChangePercent(stock))">
                     {{ formatPrice(getStockPrice(stock)) }}
@@ -436,31 +471,35 @@
                     <div v-if="stock.suggestedBuyPrice" class="suggested-price-item buy-price">
                       <span class="price-label">买入:</span>
                       <span class="price-value">{{ formatPrice(stock.suggestedBuyPrice) }}</span>
-                      <span v-if="stock.buyAlertSent" class="alert-badge alert-completed" title="已达到买入价，已提醒">
+                      <span v-if="stock.buyAlertSent" class="alert-badge alert-completed">
                         <svg class="alert-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
                         </svg>
+                        <span class="alert-text">已提醒</span>
                       </span>
-                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) <= stock.suggestedBuyPrice" class="alert-badge alert-triggered" title="当前价格已达到买入价">
+                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) <= stock.suggestedBuyPrice" class="alert-badge alert-triggered">
                         <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
                           <path d="M9 19H15V21H9V19Z" fill="currentColor"/>
                         </svg>
+                        <span class="alert-text">达到买入价</span>
                       </span>
                     </div>
                     <div v-if="stock.suggestedSellPrice" class="suggested-price-item sell-price">
                       <span class="price-label">卖出:</span>
                       <span class="price-value">{{ formatPrice(stock.suggestedSellPrice) }}</span>
-                      <span v-if="stock.sellAlertSent" class="alert-badge alert-completed" title="已达到卖出价，已提醒">
+                      <span v-if="shouldShowSellAlertCompleted(stock)" class="alert-badge alert-completed">
                         <svg class="alert-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
                         </svg>
+                        <span class="alert-text">已提醒</span>
                       </span>
-                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) >= stock.suggestedSellPrice" class="alert-badge alert-triggered" title="当前价格已达到卖出价">
+                      <span v-else-if="shouldShowSellAlertTriggered(stock)" class="alert-badge alert-triggered">
                         <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
                           <path d="M9 19H15V21H9V19Z" fill="currentColor"/>
                         </svg>
+                        <span class="alert-text">达到卖出价</span>
                       </span>
                     </div>
                     <div v-if="!stock.suggestedBuyPrice && !stock.suggestedSellPrice" class="no-suggested-price">
@@ -470,6 +509,30 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 操作分析结果对话框 -->
+      <div v-if="operationAnalysisModal.visible" class="modal" @click.self="closeOperationAnalysisModal">
+        <div class="modal-content operation-analysis-modal">
+          <div class="modal-header">
+            <h3>{{ operationAnalysisModal.stock?.stock?.name || operationAnalysisModal.stock?.stockName || operationAnalysisModal.stock?.stockCode }} - {{ operationAnalysisModal.operationTypeName }}</h3>
+            <span class="close" @click="closeOperationAnalysisModal">&times;</span>
+          </div>
+          <div class="modal-body">
+            <div v-if="operationAnalysisModal.loading" class="loading">分析中...</div>
+            <div v-else-if="operationAnalysisModal.analysis" class="operation-analysis-content">
+              <div v-if="operationAnalysisModal.cached && operationAnalysisModal.cacheTime" class="cache-indicator">
+                <span class="cache-badge">📦 缓存结果</span>
+                <span class="cache-time">缓存时间: {{ formatCacheTime(operationAnalysisModal.cacheTime) }}</span>
+              </div>
+              <div class="analysis-text" v-html="formatAnalysisText(operationAnalysisModal.analysis)"></div>
+            </div>
+            <div v-else class="loading">暂无分析结果</div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" @click="closeOperationAnalysisModal">关闭</button>
           </div>
         </div>
       </div>
@@ -483,6 +546,7 @@ import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { useAiAnalysisStore } from '../stores/aiAnalysis'
 import api from '../services/api'
+import { operationAnalysisService } from '../services/watchlistService'
 import { isTradingTime, getTradingStatusText } from '../utils/tradingTime'
 
 const watchlistStore = useWatchlistStore()
@@ -992,6 +1056,21 @@ const editingCost = ref({})
 const costForm = ref({})
 const savingCost = ref({})
 
+// 操作分析相关
+const analyzingOperation = ref({})
+const operationAnalysisModal = ref({
+  visible: false,
+  stock: null,
+  operationType: '',
+  operationTypeName: '',
+  analysis: '',
+  loading: false,
+  cached: false,
+  cacheTime: null
+})
+const lastClickTime = ref({}) // 用于检测双击
+const clickTimer = ref({}) // 用于延迟处理单击
+
 // 组件挂载时加载数据
 onMounted(async () => {
   // 从localStorage加载设置
@@ -1049,6 +1128,15 @@ onUnmounted(() => {
   if (highlightTimer) {
     clearTimeout(highlightTimer)
     highlightTimer = null
+  }
+  // 确保恢复背景页面滚动
+  enableBodyScroll()
+})
+
+// 监听模态框状态，确保关闭时恢复滚动
+watch(() => operationAnalysisModal.value.visible, (visible) => {
+  if (!visible) {
+    enableBodyScroll()
   }
 })
 
@@ -1412,6 +1500,261 @@ const getStockLow = (stock) => {
     return currentPrice
   }
   return 0
+}
+
+// 判断是否应该显示卖出提醒的"已提醒"状态
+const shouldShowSellAlertCompleted = (stock) => {
+  if (!stock.suggestedSellPrice) return false
+  
+  const currentPrice = getStockPrice(stock)
+  const highPrice = getStockHigh(stock)
+  const sellPrice = stock.suggestedSellPrice
+  
+  // 如果已经标记为已提醒，显示"已提醒"
+  if (stock.sellAlertSent) {
+    return true
+  }
+  
+  // 如果当前价格低于卖出价，但当天最高价曾经达到过卖出价，也应该显示"已提醒"
+  // 因为这意味着今天曾经达到过卖出价，即使现在跌下来了
+  if (currentPrice < sellPrice && highPrice >= sellPrice && highPrice > 0) {
+    return true
+  }
+  
+  return false
+}
+
+// 判断是否应该显示卖出提醒的"正在提醒"状态
+const shouldShowSellAlertTriggered = (stock) => {
+  if (!stock.suggestedSellPrice) return false
+  
+  const currentPrice = getStockPrice(stock)
+  const sellPrice = stock.suggestedSellPrice
+  
+  // 如果已经标记为已提醒，不显示"正在提醒"
+  if (stock.sellAlertSent) {
+    return false
+  }
+  
+  // 只有当当前价格仍然在卖出价之上时，才显示"正在提醒"
+  // 如果价格跌下来了，应该显示"已提醒"（由shouldShowSellAlertCompleted处理）
+  if (currentPrice > 0 && currentPrice >= sellPrice) {
+    return true
+  }
+  
+  return false
+}
+
+// 处理单击操作分析按钮
+const handleOperationAnalysisClick = (stock, operationType, event) => {
+  event.preventDefault()
+  const key = `${stock.id}_${operationType}`
+  const now = Date.now()
+  const lastClick = lastClickTime.value[key] || 0
+  const timeDiff = now - lastClick
+
+  // 如果两次点击间隔小于300ms，认为是双击，不处理单击
+  if (timeDiff < 300 && timeDiff > 0) {
+    return
+  }
+
+  lastClickTime.value[key] = now
+
+  // 延迟处理单击，等待可能的双击
+  if (clickTimer.value[key]) {
+    clearTimeout(clickTimer.value[key])
+  }
+
+  clickTimer.value[key] = setTimeout(() => {
+    handleOperationAnalysis(stock, operationType, false)
+  }, 300)
+}
+
+// 处理双击操作分析按钮（强制刷新）
+const handleOperationAnalysisDoubleClick = (stock, operationType, event) => {
+  event.preventDefault()
+  const key = `${stock.id}_${operationType}`
+  
+  // 清除单击的延迟处理
+  if (clickTimer.value[key]) {
+    clearTimeout(clickTimer.value[key])
+    delete clickTimer.value[key]
+  }
+  
+  // 立即执行强制刷新
+  handleOperationAnalysis(stock, operationType, true)
+}
+
+// 操作分析处理
+const handleOperationAnalysis = async (stock, operationType, forceRefresh = false) => {
+  if (!stock || !stock.stockCode) {
+    alert('股票信息不完整')
+    return
+  }
+
+  const stockId = stock.id
+  analyzingOperation.value[stockId] = operationType
+
+  try {
+    const response = await operationAnalysisService.getOperationAnalysis(
+      stock.stockCode,
+      operationType,
+      forceRefresh
+    )
+
+    if (response && response.success) {
+      const operationTypeName = operationType === 'day' ? '一日做T' 
+        : operationType === 'week' ? '一周操作' 
+        : '一月操作'
+      
+      operationAnalysisModal.value = {
+        visible: true,
+        stock: stock,
+        operationType: operationType,
+        operationTypeName: operationTypeName,
+        analysis: response.analysis || '',
+        loading: false,
+        cached: response.cached || false,
+        cacheTime: response.cacheTime ? new Date(response.cacheTime) : null
+      }
+      
+      // 禁止背景页面滚动
+      disableBodyScroll()
+    } else {
+      alert(response?.message || '获取操作分析失败')
+    }
+  } catch (error) {
+    console.error('操作分析失败:', error)
+    
+    // 检查是否是缺少AI分析的错误
+    if (error.response?.status === 400) {
+      const errorData = error.response.data
+      if (errorData?.error === 'NO_AI_ANALYSIS' || errorData?.requiresAnalysis) {
+        const stockName = stock.stock?.name || stock.stockName || stock.stockCode
+        if (confirm(`该股票（${stockName}）尚未进行AI分析。\n\n是否现在进行AI分析？`)) {
+          handleAIAnalyze(stock)
+        }
+      } else {
+        alert(errorData?.message || '获取操作分析失败，请稍后重试')
+      }
+    } else {
+      alert(error?.message || '获取操作分析失败，请稍后重试')
+    }
+  } finally {
+    analyzingOperation.value[stockId] = null
+  }
+}
+
+const closeOperationAnalysisModal = () => {
+  operationAnalysisModal.value = {
+    visible: false,
+    stock: null,
+    operationType: '',
+    operationTypeName: '',
+    analysis: '',
+    loading: false,
+    cached: false,
+    cacheTime: null
+  }
+  
+  // 恢复背景页面滚动
+  enableBodyScroll()
+}
+
+// 禁止背景页面滚动
+const disableBodyScroll = () => {
+  const scrollY = window.scrollY
+  document.body.style.position = 'fixed'
+  document.body.style.top = `-${scrollY}px`
+  document.body.style.width = '100%'
+  document.body.style.overflow = 'hidden'
+}
+
+// 恢复背景页面滚动
+const enableBodyScroll = () => {
+  const scrollY = document.body.style.top
+  document.body.style.position = ''
+  document.body.style.top = ''
+  document.body.style.width = ''
+  document.body.style.overflow = ''
+  if (scrollY) {
+    window.scrollTo(0, parseInt(scrollY || '0') * -1)
+  }
+}
+
+// 格式化缓存时间
+const formatCacheTime = (cacheTime) => {
+  if (!cacheTime) return ''
+  const now = new Date()
+  const diff = now - cacheTime
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  
+  if (days > 0) {
+    return `${days}天前`
+  } else if (hours > 0) {
+    return `${hours}小时前`
+  } else if (minutes > 0) {
+    return `${minutes}分钟前`
+  } else {
+    return '刚刚'
+  }
+}
+
+// 格式化分析文本（将换行转换为HTML）
+const formatAnalysisText = (text) => {
+  if (!text) return ''
+  
+  // 转义HTML特殊字符，防止XSS攻击
+  const escapeHtml = (str) => {
+    const div = document.createElement('div')
+    div.textContent = str
+    return div.innerHTML
+  }
+  
+  let formatted = escapeHtml(text)
+  
+  // 处理标题（## 标题 或 ### 标题）
+  formatted = formatted.replace(/^###\s+(.+?)$/gm, '<h4>$1</h4>')
+  formatted = formatted.replace(/^##\s+(.+?)$/gm, '<h3>$1</h3>')
+  
+  // 处理粗体（**文本**）
+  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  
+  // 处理列表项（- 或 • 开头）
+  const lines = formatted.split('\n')
+  let inList = false
+  let result = []
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const isListItem = /^[-•]\s+(.+)$/.test(line)
+    
+    if (isListItem) {
+      if (!inList) {
+        result.push('<ul>')
+        inList = true
+      }
+      result.push(line.replace(/^[-•]\s+(.+)$/, '<li>$1</li>'))
+    } else {
+      if (inList) {
+        result.push('</ul>')
+        inList = false
+      }
+      if (line.trim()) {
+        result.push(`<p>${line}</p>`)
+      } else {
+        result.push('<br>')
+      }
+    }
+  }
+  
+  if (inList) {
+    result.push('</ul>')
+  }
+  
+  return result.join('')
 }
 </script>
 
@@ -1889,18 +2232,30 @@ const getStockLow = (stock) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   margin-left: 8px;
-  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 500;
 }
 
 .alert-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   display: block;
+  flex-shrink: 0;
+}
+
+.alert-text {
+  white-space: nowrap;
+  line-height: 1;
 }
 
 .alert-badge.alert-completed {
   color: #4caf50;
+  background: rgba(76, 175, 80, 0.1);
+  border: 1px solid rgba(76, 175, 80, 0.3);
 }
 
 .alert-badge.alert-completed .alert-icon {
@@ -1909,6 +2264,8 @@ const getStockLow = (stock) => {
 
 .alert-badge.alert-triggered {
   color: #ff6b35;
+  background: rgba(255, 107, 53, 0.1);
+  border: 1px solid rgba(255, 107, 53, 0.3);
 }
 
 .alert-badge.alert-triggered .bell-icon {
@@ -1983,6 +2340,8 @@ const getStockLow = (stock) => {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .modal-content {
@@ -2128,6 +2487,137 @@ const getStockLow = (stock) => {
   color: #5f6c7b;
 }
 
+.operation-buttons-section {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.operation-buttons-header {
+  font-weight: bold;
+  font-size: 0.9em;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.operation-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-operation {
+  flex: 1;
+  min-width: 100px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  transition: all 0.3s;
+}
+
+.btn-operation:hover:not(:disabled) {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+}
+
+.btn-operation:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.operation-analysis-modal {
+  max-width: 800px;
+  width: 92%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.operation-analysis-content {
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cache-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #f0f7ff;
+  border: 1px solid #b3d9ff;
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+.cache-badge {
+  color: #1890ff;
+  font-weight: 600;
+}
+
+.cache-time {
+  color: #666;
+}
+
+.operation-analysis-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.operation-analysis-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.operation-analysis-content::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 3px;
+}
+
+.operation-analysis-content::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.analysis-text {
+  line-height: 1.8;
+  color: #333;
+  font-size: 0.95em;
+}
+
+.analysis-text p {
+  margin: 10px 0;
+}
+
+.analysis-text h4 {
+  margin: 15px 0 10px;
+  color: #667eea;
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.analysis-text ul {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.analysis-text li {
+  margin: 5px 0;
+  list-style-type: disc;
+}
+
+.analysis-text strong {
+  color: #764ba2;
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .content {
     padding: 15px;
@@ -2135,6 +2625,14 @@ const getStockLow = (stock) => {
   
   .stock-grid {
     grid-template-columns: 1fr;
+  }
+
+  .operation-buttons {
+    flex-direction: column;
+  }
+
+  .btn-operation {
+    width: 100%;
   }
 }
 </style>
