@@ -70,6 +70,19 @@ export const watchlistService = {
     return api.post(`/watchlist/${id}/reset-alerts`, {
       currentPrice
     })
+  },
+
+  // 开启/关闭一键做T
+  toggleAutoTrading(id, enabled, intervalMinutes = 30) {
+    return api.put(`/watchlist/${id}/auto-trading`, {
+      enabled,
+      intervalMinutes
+    })
+  },
+
+  // 手动刷新做T方案
+  refreshTradingPlan(id) {
+    return api.post(`/watchlist/${id}/trading-plan/refresh`)
   }
 }
 

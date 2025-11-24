@@ -837,12 +837,66 @@ configure_python_service() {
 
 initialize_database() {
     log_step "数据库初始化"
-    if [[ -f "$BACKEND_PUBLISH_DIR/StockAnalyse.Api.dll" ]]; then
+    
+    # 首先尝试使用 dotnet ef database update（推荐方式）
+    if [[ -d "$PROJECT_ROOT/src/StockAnalyse.Api" ]]; then
+        log_info "执行数据库迁移 (使用 dotnet ef)..."
+        
+        # 检查 dotnet ef 工具是否已安装
+        if ! run_as_service_user "cd '$PROJECT_ROOT/src/StockAnalyse.Api' && dotnet ef --version" >/dev/null 2>&1; then
+            log_info "安装 dotnet ef 工具..."
+            run_as_service_user "dotnet tool install --global dotnet-ef" 2>&1 || {
+                log_info "⚠️  dotnet ef 工具安装失败，尝试使用备用方法"
+            }
+        fi
+        
         # 确保端口未被占用（数据库迁移可能会启动临时服务）
         free_port "$BACKEND_PORT"
         
-        log_info "执行数据库迁移..."
         # 使用 set +e 允许迁移失败时继续
+        set +e
+        log_info "执行: dotnet ef database update"
+        local migrate_output
+        migrate_output=$(run_as_service_user "cd '$PROJECT_ROOT/src/StockAnalyse.Api' && dotnet ef database update" 2>&1)
+        local migrate_status=$?
+        set -e
+        
+        if [[ $migrate_status -eq 0 ]]; then
+            log_ok "数据库迁移完成 (dotnet ef)"
+            # 显示迁移输出的最后几行（通常包含成功信息）
+            echo "$migrate_output" | tail -5 | sed 's/^/   /' || true
+        else
+            log_info "⚠️  dotnet ef 迁移失败，尝试备用方法..."
+            echo "$migrate_output" | tail -10 | sed 's/^/   /' || true
+            
+            # 备用方法：使用 DLL 的迁移参数（如果支持）
+            if [[ -f "$BACKEND_PUBLISH_DIR/StockAnalyse.Api.dll" ]]; then
+                log_info "尝试使用备用迁移方法..."
+                free_port "$BACKEND_PORT"
+                set +e
+                run_as_service_user "cd '$BACKEND_PUBLISH_DIR' && timeout 60 dotnet StockAnalyse.Api.dll --migrate-database" 2>&1 | head -20 || true
+                local backup_migrate_status=$?
+                set -e
+                
+                if [[ $backup_migrate_status -eq 0 ]]; then
+                    log_ok "数据库迁移完成 (备用方法)"
+                else
+                    log_info "⚠️  数据库迁移可能失败，但继续部署流程"
+                    log_info "提示: 可以稍后手动运行迁移命令: cd $PROJECT_ROOT/src/StockAnalyse.Api && dotnet ef database update"
+                fi
+            else
+                log_info "⚠️  未找到后端可执行文件，跳过数据库迁移"
+                log_info "提示: 可以稍后手动运行迁移命令: cd $PROJECT_ROOT/src/StockAnalyse.Api && dotnet ef database update"
+            fi
+        fi
+        
+        # 迁移后再次清理端口，确保没有残留进程
+        free_port "$BACKEND_PORT"
+    elif [[ -f "$BACKEND_PUBLISH_DIR/StockAnalyse.Api.dll" ]]; then
+        # 如果项目目录不存在，但发布目录存在，尝试使用 DLL 方式
+        log_info "项目目录不存在，使用发布目录执行迁移..."
+        free_port "$BACKEND_PORT"
+        
         set +e
         run_as_service_user "cd '$BACKEND_PUBLISH_DIR' && timeout 60 dotnet StockAnalyse.Api.dll --migrate-database" 2>&1 | head -20 || true
         local migrate_status=$?
@@ -855,10 +909,10 @@ initialize_database() {
             log_info "提示: 可以稍后手动运行迁移命令"
         fi
         
-        # 迁移后再次清理端口，确保没有残留进程
         free_port "$BACKEND_PORT"
     else
-        log_info "未找到后端可执行文件，跳过数据库迁移"
+        log_info "未找到后端项目目录或可执行文件，跳过数据库迁移"
+        log_info "提示: 可以稍后手动运行迁移命令: cd $PROJECT_ROOT/src/StockAnalyse.Api && dotnet ef database update"
     fi
 }
 

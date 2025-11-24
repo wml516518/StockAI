@@ -88,6 +88,7 @@ builder.Services.AddScoped<INewsService, NewsService>();
 builder.Services.AddScoped<IStockDataCacheService, StockDataCacheService>();
 builder.Services.AddScoped<IAIService, AIService>();
 builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
+builder.Services.AddScoped<ITradingPlanService, TradingPlanService>();
 
 // 量化交易服务
 builder.Services.AddScoped<IQuantTradingService, QuantTradingService>();
@@ -95,6 +96,9 @@ builder.Services.AddScoped<ITechnicalIndicatorService, TechnicalIndicatorService
 builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IStrategyConfigService, StrategyConfigService>();
 builder.Services.AddScoped<IStrategyOptimizationService, StrategyOptimizationService>();
+
+// 注册后台服务（做T方案定时更新）
+builder.Services.AddHostedService<TradingPlanBackgroundService>();
 
 // 添加HttpClient，为AI服务配置专门的HttpClient，设置更长的超时时间（5分钟）
 builder.Services.AddHttpClient("AIService", client =>

@@ -314,6 +314,50 @@
                     {{ getStockActionSuggestion(stock) }}
                   </span>
                 </div>
+                <!-- 一键做T区域 -->
+                <div class="auto-trading-section">
+                  <div class="auto-trading-header">
+                    <span>一键做T</span>
+                    <label class="toggle-switch">
+                      <input 
+                        type="checkbox" 
+                        :checked="stock.autoTradingEnabled"
+                        @change="handleToggleAutoTrading(stock, $event.target.checked)"
+                        :disabled="togglingAutoTrading[stock.id]"
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                  <div v-if="stock.autoTradingEnabled && getTradingPlan(stock)" class="trading-plan-display">
+                    <div class="trading-plan-item">
+                      <span class="plan-label">买入:</span>
+                      <span class="plan-value buy-price">{{ getTradingPlan(stock)?.buyPriceRange || '-' }}</span>
+                    </div>
+                    <div class="trading-plan-item">
+                      <span class="plan-label">卖出:</span>
+                      <span class="plan-value sell-price">{{ getTradingPlan(stock)?.sellPriceRange || '-' }}</span>
+                    </div>
+                    <div v-if="getTradingPlan(stock)?.suggestion" class="trading-plan-suggestion">
+                      {{ getTradingPlan(stock)?.suggestion }}
+                    </div>
+                    <div class="trading-plan-footer">
+                      <span class="plan-update-time" v-if="stock.tradingPlanUpdateTime">
+                        更新: {{ formatRelativeTime(stock.tradingPlanUpdateTime) }}
+                      </span>
+                      <button 
+                        class="btn-refresh-plan" 
+                        @click="handleRefreshTradingPlan(stock.id)"
+                        :disabled="refreshingPlan[stock.id]"
+                        title="手动刷新做T方案"
+                      >
+                        {{ refreshingPlan[stock.id] ? '刷新中...' : '🔄' }}
+                      </button>
+                    </div>
+                  </div>
+                  <div v-else-if="stock.autoTradingEnabled" class="trading-plan-loading">
+                    正在生成做T方案...
+                  </div>
+                </div>
                 <!-- 操作分析按钮区域 -->
                 <div class="operation-buttons-section">
                   <div class="operation-buttons-header">
@@ -546,7 +590,7 @@ import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { useAiAnalysisStore } from '../stores/aiAnalysis'
 import api from '../services/api'
-import { operationAnalysisService } from '../services/watchlistService'
+import { operationAnalysisService, watchlistService } from '../services/watchlistService'
 import { isTradingTime, getTradingStatusText } from '../utils/tradingTime'
 
 const watchlistStore = useWatchlistStore()
@@ -1070,6 +1114,10 @@ const operationAnalysisModal = ref({
 })
 const lastClickTime = ref({}) // 用于检测双击
 const clickTimer = ref({}) // 用于延迟处理单击
+
+// 一键做T相关
+const togglingAutoTrading = ref({})
+const refreshingPlan = ref({})
 
 // 组件挂载时加载数据
 onMounted(async () => {
@@ -1699,6 +1747,60 @@ const formatCacheTime = (cacheTime) => {
     return `${minutes}分钟前`
   } else {
     return '刚刚'
+  }
+}
+
+// 格式化相对时间
+const formatRelativeTime = (time) => {
+  if (!time) return ''
+  const date = typeof time === 'string' ? new Date(time) : time
+  return formatCacheTime(date)
+}
+
+// 获取做T方案
+const getTradingPlan = (stock) => {
+  if (!stock.tradingPlan) return null
+  try {
+    return typeof stock.tradingPlan === 'string' 
+      ? JSON.parse(stock.tradingPlan) 
+      : stock.tradingPlan
+  } catch {
+    return null
+  }
+}
+
+// 切换一键做T
+const handleToggleAutoTrading = async (stock, enabled) => {
+  const stockId = stock.id
+  togglingAutoTrading.value[stockId] = true
+  
+  try {
+    await watchlistService.toggleAutoTrading(stockId, enabled, 30)
+    // 刷新自选股列表
+    await watchlistStore.fetchWatchlist()
+  } catch (error) {
+    console.error('切换做T状态失败:', error)
+    alert(error?.response?.data?.message || '切换做T状态失败，请稍后重试')
+    // 恢复原状态
+    await watchlistStore.fetchWatchlist()
+  } finally {
+    togglingAutoTrading.value[stockId] = false
+  }
+}
+
+// 手动刷新做T方案
+const handleRefreshTradingPlan = async (stockId) => {
+  refreshingPlan.value[stockId] = true
+  
+  try {
+    await watchlistService.refreshTradingPlan(stockId)
+    // 刷新自选股列表
+    await watchlistStore.fetchWatchlist()
+  } catch (error) {
+    console.error('刷新做T方案失败:', error)
+    alert(error?.response?.data?.message || '刷新做T方案失败，请稍后重试')
+  } finally {
+    refreshingPlan.value[stockId] = false
   }
 }
 
@@ -2485,6 +2587,160 @@ const formatAnalysisText = (text) => {
   margin-top: 12px;
   font-size: 0.9em;
   color: #5f6c7b;
+}
+
+.auto-trading-section {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f0f7ff;
+  border-radius: 6px;
+  border: 1px solid #b3d9ff;
+}
+
+.auto-trading-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: bold;
+  font-size: 0.9em;
+  color: #333;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.3s;
+  border-radius: 24px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #4caf50;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+}
+
+.toggle-switch input:disabled + .toggle-slider {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.trading-plan-display {
+  margin-top: 10px;
+  padding: 10px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #d0e7ff;
+}
+
+.trading-plan-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.9em;
+}
+
+.plan-label {
+  min-width: 50px;
+  color: #666;
+  font-weight: 500;
+}
+
+.plan-value {
+  font-weight: bold;
+  font-size: 1.05em;
+}
+
+.plan-value.buy-price {
+  color: #4caf50;
+}
+
+.plan-value.sell-price {
+  color: #f44336;
+}
+
+.trading-plan-suggestion {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  font-size: 0.85em;
+  color: #555;
+  line-height: 1.5;
+}
+
+.trading-plan-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.plan-update-time {
+  font-size: 0.75em;
+  color: #999;
+}
+
+.btn-refresh-plan {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.2em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.btn-refresh-plan:hover:not(:disabled) {
+  background: #e0e0e0;
+}
+
+.btn-refresh-plan:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.trading-plan-loading {
+  margin-top: 10px;
+  padding: 10px;
+  text-align: center;
+  color: #666;
+  font-size: 0.85em;
 }
 
 .operation-buttons-section {

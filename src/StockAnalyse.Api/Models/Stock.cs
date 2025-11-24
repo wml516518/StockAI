@@ -69,6 +69,12 @@ public class WatchlistStock
     public bool BuyAlertSent { get; set; } // 买入提醒已发送
     public bool SellAlertSent { get; set; } // 卖出提醒已发送
     
+    // 一键做T相关
+    public bool AutoTradingEnabled { get; set; } // 是否启用一键做T
+    public int AutoTradingIntervalMinutes { get; set; } = 30; // 做T方案更新间隔（分钟），默认30分钟
+    public string? TradingPlan { get; set; } // 做T方案（JSON格式存储：买入价、卖出价、建议等）
+    public DateTime? TradingPlanUpdateTime { get; set; } // 做T方案最后更新时间
+    
     public DateTime AddTime { get; set; }
     public DateTime LastUpdate { get; set; }
     

@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 
@@ -9,11 +11,19 @@ namespace StockAnalyse.Api.Controllers;
 public class WatchlistController : ControllerBase
 {
     private readonly IWatchlistService _watchlistService;
+    private readonly ITradingPlanService _tradingPlanService;
+    private readonly StockDbContext _context;
     private readonly ILogger<WatchlistController> _logger;
 
-    public WatchlistController(IWatchlistService watchlistService, ILogger<WatchlistController> logger)
+    public WatchlistController(
+        IWatchlistService watchlistService, 
+        ITradingPlanService tradingPlanService,
+        StockDbContext context,
+        ILogger<WatchlistController> logger)
     {
         _watchlistService = watchlistService;
+        _tradingPlanService = tradingPlanService;
+        _context = context;
         _logger = logger;
     }
 
@@ -239,6 +249,82 @@ public class WatchlistController : ControllerBase
             return NotFound(ex.Message);
         }
     }
+
+    /// <summary>
+    /// 开启/关闭一键做T
+    /// </summary>
+    [HttpPut("{id}/auto-trading")]
+    public async Task<ActionResult<WatchlistStock>> ToggleAutoTrading(int id, [FromBody] ToggleAutoTradingRequest request)
+    {
+        try
+        {
+            var stock = await _context.WatchlistStocks.FindAsync(id);
+            if (stock == null)
+            {
+                return NotFound("自选股不存在");
+            }
+
+            stock.AutoTradingEnabled = request.Enabled;
+            stock.AutoTradingIntervalMinutes = request.IntervalMinutes ?? 30;
+            
+            // 如果开启做T，立即生成一次方案
+            if (request.Enabled)
+            {
+                var plan = await _tradingPlanService.GenerateTradingPlanAsync(stock.StockCode);
+                if (plan.Success)
+                {
+                    stock.TradingPlan = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        buyPriceRange = plan.BuyPriceRange,
+                        sellPriceRange = plan.SellPriceRange,
+                        suggestion = plan.Suggestion,
+                        currentPrice = plan.CurrentPrice,
+                        updateTime = plan.UpdateTime
+                    });
+                    stock.TradingPlanUpdateTime = plan.UpdateTime;
+                }
+            }
+            else
+            {
+                // 关闭时清空方案
+                stock.TradingPlan = null;
+                stock.TradingPlanUpdateTime = null;
+            }
+
+            stock.LastUpdate = DateTime.Now;
+            await _context.SaveChangesAsync();
+
+            return Ok(stock);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "切换做T状态失败: {Id}", id);
+            return StatusCode(500, new { message = $"切换做T状态失败: {ex.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// 手动更新做T方案
+    /// </summary>
+    [HttpPost("{id}/trading-plan/refresh")]
+    public async Task<ActionResult> RefreshTradingPlan(int id)
+    {
+        try
+        {
+            await _tradingPlanService.UpdateTradingPlanForStockAsync(id, force: true);
+            var stock = await _context.WatchlistStocks.FindAsync(id);
+            if (stock == null)
+            {
+                return NotFound("自选股不存在");
+            }
+            return Ok(new { message = "做T方案已更新", tradingPlan = stock.TradingPlan });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "刷新做T方案失败: {Id}", id);
+            return StatusCode(500, new { message = $"刷新做T方案失败: {ex.Message}" });
+        }
+    }
 }
 
 public class AddWatchlistRequest
@@ -282,5 +368,11 @@ public class UpdateSuggestedPriceRequest
 public class ResetAlertFlagsRequest
 {
     public decimal CurrentPrice { get; set; }
+}
+
+public class ToggleAutoTradingRequest
+{
+    public bool Enabled { get; set; }
+    public int? IntervalMinutes { get; set; } // 可选，默认30分钟
 }
 

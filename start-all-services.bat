@@ -27,6 +27,15 @@ if exist "python-data-service\stock_data_service.py" (
 REM 启动后端API服务
 if exist "src\StockAnalyse.Api\StockAnalyse.Api.csproj" (
     echo [2/3] 启动后端API服务...
+    echo   先执行数据库迁移，确保结构最新...
+    pushd "%~dp0src\StockAnalyse.Api" >nul
+    call dotnet ef database update
+    if errorlevel 1 (
+        echo   ⚠️ 数据库迁移失败，请检查错误信息后再启动服务。
+        popd >nul
+        goto :END
+    )
+    popd >nul
     start "后端API服务" cmd /k "cd /d %~dp0src\StockAnalyse.Api && dotnet run"
     timeout /t 2 /nobreak >nul
     echo   后端API服务已启动 ^(http://localhost:5000^)
@@ -73,4 +82,5 @@ echo   - 关闭对应窗口即可停止服务
 echo   - 按任意键关闭此窗口（不会停止服务）
 echo.
 pause
+:END
 endlocal
