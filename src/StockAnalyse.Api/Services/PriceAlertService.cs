@@ -53,36 +53,46 @@ public class PriceAlertService : IPriceAlertService
                     continue;
                 }
                 
+                bool needSave = false;
+                
                 // 检查买入价提醒
-                if (watchlistStock.SuggestedBuyPrice.HasValue && 
-                    !watchlistStock.BuyAlertSent && 
-                    stock.CurrentPrice <= watchlistStock.SuggestedBuyPrice.Value)
+                // 如果之前已经提醒过（BuyAlertSent = true），即使价格再次 <= 买入价，也不再提醒
+                // 如果之前提醒过，且当前价格 > 买入价，说明已经从触发状态恢复，永久禁用提醒
+                if (watchlistStock.SuggestedBuyPrice.HasValue && !watchlistStock.BuyAlertSent)
                 {
-                    watchlistStock.BuyAlertSent = true;
-                    watchlistStock.LastUpdate = DateTime.Now;
-                    
-                    var buyMessage = $"🟢 买入提醒: {stock.Name}({watchlistStock.StockCode}) 当前价格 {stock.CurrentPrice:F2} 已达到建议买入价 {watchlistStock.SuggestedBuyPrice.Value:F2}";
-                    
-                    _logger.LogWarning("买入提醒触发: {Message}", buyMessage);
-                    await SendNotificationAsync(buyMessage);
+                    if (stock.CurrentPrice <= watchlistStock.SuggestedBuyPrice.Value)
+                    {
+                        watchlistStock.BuyAlertSent = true;
+                        watchlistStock.LastUpdate = DateTime.Now;
+                        needSave = true;
+                        
+                        var buyMessage = $"🟢 买入提醒: {stock.Name}({watchlistStock.StockCode}) 当前价格 {stock.CurrentPrice:F2} 已达到建议买入价 {watchlistStock.SuggestedBuyPrice.Value:F2}";
+                        
+                        _logger.LogWarning("买入提醒触发: {Message}", buyMessage);
+                        await SendNotificationAsync(buyMessage);
+                    }
                 }
                 
                 // 检查卖出价提醒
-                if (watchlistStock.SuggestedSellPrice.HasValue && 
-                    !watchlistStock.SellAlertSent && 
-                    stock.CurrentPrice >= watchlistStock.SuggestedSellPrice.Value)
+                // 如果之前已经提醒过（SellAlertSent = true），即使价格再次 >= 卖出价，也不再提醒
+                // 如果之前提醒过，且当前价格 < 卖出价，说明已经从触发状态恢复，永久禁用提醒
+                if (watchlistStock.SuggestedSellPrice.HasValue && !watchlistStock.SellAlertSent)
                 {
-                    watchlistStock.SellAlertSent = true;
-                    watchlistStock.LastUpdate = DateTime.Now;
-                    
-                    var sellMessage = $"🔴 卖出提醒: {stock.Name}({watchlistStock.StockCode}) 当前价格 {stock.CurrentPrice:F2} 已达到建议卖出价 {watchlistStock.SuggestedSellPrice.Value:F2}";
-                    
-                    _logger.LogWarning("卖出提醒触发: {Message}", sellMessage);
-                    await SendNotificationAsync(sellMessage);
+                    if (stock.CurrentPrice >= watchlistStock.SuggestedSellPrice.Value)
+                    {
+                        watchlistStock.SellAlertSent = true;
+                        watchlistStock.LastUpdate = DateTime.Now;
+                        needSave = true;
+                        
+                        var sellMessage = $"🔴 卖出提醒: {stock.Name}({watchlistStock.StockCode}) 当前价格 {stock.CurrentPrice:F2} 已达到建议卖出价 {watchlistStock.SuggestedSellPrice.Value:F2}";
+                        
+                        _logger.LogWarning("卖出提醒触发: {Message}", sellMessage);
+                        await SendNotificationAsync(sellMessage);
+                    }
                 }
                 
                 // 保存更改
-                if (watchlistStock.BuyAlertSent || watchlistStock.SellAlertSent)
+                if (needSave)
                 {
                     await _context.SaveChangesAsync();
                 }

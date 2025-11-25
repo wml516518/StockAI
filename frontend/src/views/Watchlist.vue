@@ -21,12 +21,20 @@
           </div>
         </div>
         <div class="form-group">
-          <label>成本价（可选）</label>
-          <input v-model.number="form.costPrice" type="number" step="0.01" placeholder="输入成本价">
-        </div>
-        <div class="form-group">
-          <label>持仓数量（可选）</label>
-          <input v-model.number="form.quantity" type="number" placeholder="输入持仓数量">
+          <div class="optional-fields-header" @click="toggleOptionalFields">
+            <span>成本信息（可选）</span>
+            <span class="expand-icon">{{ showOptionalFields ? '▼' : '▶' }}</span>
+          </div>
+          <div v-show="showOptionalFields" class="optional-fields-content">
+            <div class="form-group">
+              <label>成本价</label>
+              <input v-model.number="form.costPrice" type="number" step="0.01" placeholder="输入成本价">
+            </div>
+            <div class="form-group">
+              <label>持仓数量</label>
+              <input v-model.number="form.quantity" type="number" placeholder="输入持仓数量">
+            </div>
+          </div>
         </div>
         <button class="btn" @click="handleAddStock" :disabled="loading">添加到自选股</button>
       </div>
@@ -318,15 +326,28 @@
                 <div class="auto-trading-section">
                   <div class="auto-trading-header">
                     <span>一键做T</span>
-                    <label class="toggle-switch">
-                      <input 
-                        type="checkbox" 
-                        :checked="stock.autoTradingEnabled"
-                        @change="handleToggleAutoTrading(stock, $event.target.checked)"
+                    <div class="auto-trading-controls">
+                      <select 
+                        v-if="stock.autoTradingEnabled"
+                        :value="stock.autoTradingIntervalMinutes || 30"
+                        @change="handleIntervalChange(stock.id, parseInt($event.target.value))"
+                        class="interval-select"
                         :disabled="togglingAutoTrading[stock.id]"
-                      />
-                      <span class="toggle-slider"></span>
-                    </label>
+                        title="更新间隔"
+                      >
+                        <option :value="10">10分钟</option>
+                        <option :value="30">30分钟</option>
+                      </select>
+                      <label class="toggle-switch">
+                        <input 
+                          type="checkbox" 
+                          :checked="stock.autoTradingEnabled"
+                          @change="handleToggleAutoTrading(stock, $event.target.checked)"
+                          :disabled="togglingAutoTrading[stock.id]"
+                        />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
                   </div>
                   <div v-if="stock.autoTradingEnabled && getTradingPlan(stock)" class="trading-plan-display">
                     <div class="trading-plan-item">
@@ -342,7 +363,7 @@
                     </div>
                     <div class="trading-plan-footer">
                       <span class="plan-update-time" v-if="stock.tradingPlanUpdateTime">
-                        更新: {{ formatRelativeTime(stock.tradingPlanUpdateTime) }}
+                        更新: {{ getRelativeTimeText(stock.tradingPlanUpdateTime) }}
                       </span>
                       <button 
                         class="btn-refresh-plan" 
@@ -515,35 +536,23 @@
                     <div v-if="stock.suggestedBuyPrice" class="suggested-price-item buy-price">
                       <span class="price-label">买入:</span>
                       <span class="price-value">{{ formatPrice(stock.suggestedBuyPrice) }}</span>
-                      <span v-if="stock.buyAlertSent" class="alert-badge alert-completed">
-                        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
-                        </svg>
-                        <span class="alert-text">已提醒</span>
-                      </span>
-                      <span v-else-if="getStockPrice(stock) > 0 && getStockPrice(stock) <= stock.suggestedBuyPrice" class="alert-badge alert-triggered">
+                      <span v-if="shouldShowBuyAlert(stock)" class="alert-badge alert-triggered">
                         <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
                           <path d="M9 19H15V21H9V19Z" fill="currentColor"/>
                         </svg>
-                        <span class="alert-text">达到买入价</span>
+                        <span class="alert-text">买入提醒</span>
                       </span>
                     </div>
                     <div v-if="stock.suggestedSellPrice" class="suggested-price-item sell-price">
                       <span class="price-label">卖出:</span>
                       <span class="price-value">{{ formatPrice(stock.suggestedSellPrice) }}</span>
-                      <span v-if="shouldShowSellAlertCompleted(stock)" class="alert-badge alert-completed">
-                        <svg class="alert-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
-                        </svg>
-                        <span class="alert-text">已提醒</span>
-                      </span>
-                      <span v-else-if="shouldShowSellAlertTriggered(stock)" class="alert-badge alert-triggered">
+                      <span v-if="shouldShowSellAlert(stock)" class="alert-badge alert-triggered">
                         <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
                           <path d="M9 19H15V21H9V19Z" fill="currentColor"/>
                         </svg>
-                        <span class="alert-text">达到卖出价</span>
+                        <span class="alert-text">卖出提醒</span>
                       </span>
                     </div>
                     <div v-if="!stock.suggestedBuyPrice && !stock.suggestedSellPrice" class="no-suggested-price">
@@ -1100,6 +1109,9 @@ const editingCost = ref({})
 const costForm = ref({})
 const savingCost = ref({})
 
+// 表单可选字段折叠控制
+const showOptionalFields = ref(false)
+
 // 操作分析相关
 const analyzingOperation = ref({})
 const operationAnalysisModal = ref({
@@ -1118,6 +1130,26 @@ const clickTimer = ref({}) // 用于延迟处理单击
 // 一键做T相关
 const togglingAutoTrading = ref({})
 const refreshingPlan = ref({})
+const currentTime = ref(new Date()) // 用于实时更新相对时间显示
+
+// 定时器，每秒更新一次当前时间，用于实时刷新相对时间显示
+let timeUpdateTimer = null
+
+// 启动时间更新定时器
+const startTimeUpdateTimer = () => {
+  if (timeUpdateTimer) return
+  timeUpdateTimer = setInterval(() => {
+    currentTime.value = new Date()
+  }, 1000) // 每秒更新一次
+}
+
+// 停止时间更新定时器
+const stopTimeUpdateTimer = () => {
+  if (timeUpdateTimer) {
+    clearInterval(timeUpdateTimer)
+    timeUpdateTimer = null
+  }
+}
 
 // 组件挂载时加载数据
 onMounted(async () => {
@@ -1126,6 +1158,9 @@ onMounted(async () => {
   await watchlistStore.fetchWatchlist()
   await watchlistStore.fetchCategories()
   startAutoRefresh()
+  
+  // 启动时间更新定时器，用于实时刷新相对时间显示
+  startTimeUpdateTimer()
   
   // 监听store中的refreshInterval变化，重新创建定时器
   watch(() => watchlistStore.refreshInterval, (newInterval) => {
@@ -1158,6 +1193,12 @@ onActivated(() => {
   updateTradingStatus()
   // 只恢复自动刷新，不重新获取数据
   startAutoRefresh()
+  // 启动时间更新定时器
+  startTimeUpdateTimer()
+  // 重新连接SSE（如果未连接）
+  if (!sseConnection || sseConnection.readyState === EventSource.CLOSED) {
+    connectTradingPlanSSE()
+  }
 
   // 恢复滚动位置
   nextTick(() => {
@@ -1173,6 +1214,7 @@ onActivated(() => {
 
 onUnmounted(() => {
   stopAutoRefresh()
+  stopTimeUpdateTimer() // 停止时间更新定时器
   if (highlightTimer) {
     clearTimeout(highlightTimer)
     highlightTimer = null
@@ -1211,6 +1253,9 @@ const loadSettings = () => {
   }
 }
 
+// SSE连接（用于接收做T方案更新推送）
+let sseConnection = null
+
 const startAutoRefresh = () => {
   // 先清除现有定时器，避免重复创建
   if (refreshTimer) {
@@ -1236,6 +1281,82 @@ const startAutoRefresh = () => {
       updateTradingStatus()
     }, 60000) // 每分钟更新一次
   }
+  
+  // 连接SSE以接收做T方案更新推送（替代定时刷新）
+  if (!sseConnection || sseConnection.readyState === EventSource.CLOSED) {
+    connectTradingPlanSSE()
+  }
+}
+
+// 连接SSE以接收做T方案更新推送
+const connectTradingPlanSSE = () => {
+  // 如果已有连接，先关闭
+  if (sseConnection) {
+    sseConnection.close()
+    sseConnection = null
+  }
+
+  try {
+    // 连接到SSE端点
+    const eventSource = new EventSource('/api/watchlist/trading-plan/events')
+    sseConnection = eventSource
+
+    eventSource.onopen = () => {
+      console.log('✅ 做T方案更新推送连接已建立')
+    }
+
+    eventSource.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        
+        if (data.type === 'tradingPlanUpdated') {
+          // 接收到做T方案更新事件，获取该股票的完整数据并更新
+          const watchlistStockId = data.watchlistStockId
+          const updateTime = new Date(data.updateTime)
+          
+          console.log(`📢 收到做T方案更新推送: 股票ID=${watchlistStockId}, 更新时间=${updateTime.toLocaleString()}`)
+          
+          // 获取该股票的完整数据
+          const allStocks = await watchlistService.getWatchlist()
+          const updatedStocksArray = Array.isArray(allStocks) ? allStocks : (allStocks?.data || [])
+          const updatedStock = updatedStocksArray.find(s => s.id === watchlistStockId)
+          
+          if (updatedStock) {
+            // 使用 updateSingleStock 函数更新，确保触发 Vue 响应式更新
+            updateSingleStock(updatedStock)
+            
+            // 强制更新 currentTime 以触发时间文本重新计算
+            // 使用 nextTick 确保 DOM 更新完成后再更新时间
+            await nextTick()
+            currentTime.value = new Date()
+            
+            console.log(`✅ 已更新股票 ${updatedStock.stockCode} 的做T方案数据，更新时间: ${updatedStock.tradingPlanUpdateTime}`)
+          }
+        } else if (data.type === 'connected') {
+          console.log('✅ SSE连接已确认:', data.clientId)
+        } else if (data.type === 'heartbeat') {
+          // 心跳包，不做处理
+        }
+      } catch (error) {
+        console.error('处理SSE消息失败:', error)
+      }
+    }
+
+    eventSource.onerror = (error) => {
+      console.error('❌ SSE连接错误:', error)
+      // 连接断开后，5秒后尝试重连
+      setTimeout(() => {
+        if (!sseConnection || sseConnection.readyState === EventSource.CLOSED) {
+          console.log('🔄 尝试重新连接SSE...')
+          connectTradingPlanSSE()
+        }
+      }, 5000)
+    }
+  } catch (error) {
+    console.error('❌ 创建SSE连接失败:', error)
+    // 如果浏览器不支持EventSource，降级到定时刷新
+    console.warn('⚠️ 浏览器不支持SSE，将使用定时刷新作为降级方案')
+  }
 }
 
 const updateTradingStatus = () => {
@@ -1251,6 +1372,11 @@ const stopAutoRefresh = () => {
   if (tradingStatusTimer) {
     clearInterval(tradingStatusTimer)
     tradingStatusTimer = null
+  }
+  // 关闭SSE连接
+  if (sseConnection) {
+    sseConnection.close()
+    sseConnection = null
   }
 }
 
@@ -1430,6 +1556,10 @@ const toggleCostEdit = (stockId) => {
   }
 }
 
+const toggleOptionalFields = () => {
+  showOptionalFields.value = !showOptionalFields.value
+}
+
 const handleSaveCost = async (stockId) => {
   try {
     savingCost.value[stockId] = true
@@ -1550,47 +1680,38 @@ const getStockLow = (stock) => {
   return 0
 }
 
-// 判断是否应该显示卖出提醒的"已提醒"状态
-const shouldShowSellAlertCompleted = (stock) => {
-  if (!stock.suggestedSellPrice) return false
+// 判断是否应该显示买入提醒
+// 只用当前价跟买入价做对比：如果当前价 < 买入价，则提醒
+const shouldShowBuyAlert = (stock) => {
+  if (!stock.suggestedBuyPrice) return false
   
   const currentPrice = getStockPrice(stock)
-  const highPrice = getStockHigh(stock)
-  const sellPrice = stock.suggestedSellPrice
+  const buyPrice = stock.suggestedBuyPrice
   
-  // 如果已经标记为已提醒，显示"已提醒"
-  if (stock.sellAlertSent) {
-    return true
-  }
-  
-  // 如果当前价格低于卖出价，但当天最高价曾经达到过卖出价，也应该显示"已提醒"
-  // 因为这意味着今天曾经达到过卖出价，即使现在跌下来了
-  if (currentPrice < sellPrice && highPrice >= sellPrice && highPrice > 0) {
-    return true
-  }
-  
-  return false
-}
-
-// 判断是否应该显示卖出提醒的"正在提醒"状态
-const shouldShowSellAlertTriggered = (stock) => {
-  if (!stock.suggestedSellPrice) return false
-  
-  const currentPrice = getStockPrice(stock)
-  const sellPrice = stock.suggestedSellPrice
-  
-  // 如果已经标记为已提醒，不显示"正在提醒"
-  if (stock.sellAlertSent) {
+  // 如果当前价格无效，不显示提醒
+  if (!currentPrice || currentPrice <= 0) {
     return false
   }
   
-  // 只有当当前价格仍然在卖出价之上时，才显示"正在提醒"
-  // 如果价格跌下来了，应该显示"已提醒"（由shouldShowSellAlertCompleted处理）
-  if (currentPrice > 0 && currentPrice >= sellPrice) {
-    return true
+  // 当前价格 < 买入价时，显示买入提醒
+  return currentPrice < buyPrice
+}
+
+// 判断是否应该显示卖出提醒
+// 只用当前价跟卖出价做对比：如果当前价 > 卖出价，则提醒
+const shouldShowSellAlert = (stock) => {
+  if (!stock.suggestedSellPrice) return false
+  
+  const currentPrice = getStockPrice(stock)
+  const sellPrice = stock.suggestedSellPrice
+  
+  // 如果当前价格无效，不显示提醒
+  if (!currentPrice || currentPrice <= 0) {
+    return false
   }
   
-  return false
+  // 当前价格 > 卖出价时，显示卖出提醒
+  return currentPrice > sellPrice
 }
 
 // 处理单击操作分析按钮
@@ -1750,11 +1871,31 @@ const formatCacheTime = (cacheTime) => {
   }
 }
 
-// 格式化相对时间
-const formatRelativeTime = (time) => {
+// 格式化相对时间（使用响应式当前时间，实时更新）
+const getRelativeTimeText = (time) => {
   if (!time) return ''
+  // 使用响应式的当前时间，这样当 currentTime 更新时，显示也会自动更新
+  const now = currentTime.value
   const date = typeof time === 'string' ? new Date(time) : time
-  return formatCacheTime(date)
+  const diff = now - date
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  
+  if (days > 0) {
+    return `${days}天前`
+  } else if (hours > 0) {
+    return `${hours}小时前`
+  } else if (minutes > 0) {
+    return `${minutes}分钟前`
+  } else {
+    return '刚刚'
+  }
+}
+
+// 格式化相对时间（保持向后兼容）
+const formatRelativeTime = (time) => {
+  return getRelativeTimeText(time)
 }
 
 // 获取做T方案
@@ -1769,20 +1910,58 @@ const getTradingPlan = (stock) => {
   }
 }
 
+// 更新单个股票的数据（只更新当前卡片，不刷新整个列表）
+const updateSingleStock = (updatedStock) => {
+  const index = stocks.value.findIndex(s => s.id === updatedStock.id)
+  if (index !== -1) {
+    // 保留原有的stock对象（包含实时价格数据），只更新做T相关字段
+    const existingStock = stocks.value[index]
+    // 更新做T相关字段
+    existingStock.autoTradingEnabled = updatedStock.autoTradingEnabled
+    existingStock.autoTradingIntervalMinutes = updatedStock.autoTradingIntervalMinutes
+    existingStock.tradingPlan = updatedStock.tradingPlan
+    existingStock.tradingPlanUpdateTime = updatedStock.tradingPlanUpdateTime
+    existingStock.lastUpdate = updatedStock.lastUpdate
+  }
+}
+
 // 切换一键做T
 const handleToggleAutoTrading = async (stock, enabled) => {
   const stockId = stock.id
   togglingAutoTrading.value[stockId] = true
   
   try {
-    await watchlistService.toggleAutoTrading(stockId, enabled, 30)
-    // 刷新自选股列表
-    await watchlistStore.fetchWatchlist()
+    // 使用股票当前的间隔设置，如果没有则默认30分钟
+    const intervalMinutes = stock.autoTradingIntervalMinutes || 30
+    const updatedStock = await watchlistService.toggleAutoTrading(stockId, enabled, intervalMinutes)
+    // 只更新当前股票的数据，不刷新整个列表
+    if (updatedStock) {
+      updateSingleStock(updatedStock)
+    }
   } catch (error) {
     console.error('切换做T状态失败:', error)
     alert(error?.response?.data?.message || '切换做T状态失败，请稍后重试')
-    // 恢复原状态
-    await watchlistStore.fetchWatchlist()
+  } finally {
+    togglingAutoTrading.value[stockId] = false
+  }
+}
+
+// 修改更新间隔
+const handleIntervalChange = async (stockId, intervalMinutes) => {
+  try {
+    // 获取当前股票信息
+    const stock = stocks.value.find(s => s.id === stockId)
+    if (!stock || !stock.autoTradingEnabled) return
+    
+    togglingAutoTrading.value[stockId] = true
+    const updatedStock = await watchlistService.toggleAutoTrading(stockId, true, intervalMinutes)
+    // 只更新当前股票的数据，不刷新整个列表
+    if (updatedStock) {
+      updateSingleStock(updatedStock)
+    }
+  } catch (error) {
+    console.error('修改更新间隔失败:', error)
+    alert(error?.response?.data?.message || '修改更新间隔失败，请稍后重试')
   } finally {
     togglingAutoTrading.value[stockId] = false
   }
@@ -1793,9 +1972,11 @@ const handleRefreshTradingPlan = async (stockId) => {
   refreshingPlan.value[stockId] = true
   
   try {
-    await watchlistService.refreshTradingPlan(stockId)
-    // 刷新自选股列表
-    await watchlistStore.fetchWatchlist()
+    const updatedStock = await watchlistService.refreshTradingPlan(stockId)
+    // 只更新当前股票的数据，不刷新整个列表
+    if (updatedStock) {
+      updateSingleStock(updatedStock)
+    }
   } catch (error) {
     console.error('刷新做T方案失败:', error)
     alert(error?.response?.data?.message || '刷新做T方案失败，请稍后重试')
@@ -2204,6 +2385,47 @@ const formatAnalysisText = (text) => {
   color: #333;
 }
 
+.optional-fields-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 12px;
+  margin: -8px -12px;
+  border-radius: 4px;
+  transition: background-color 0.2s, color 0.2s;
+  font-weight: 500;
+  color: #666;
+}
+
+.optional-fields-header:hover {
+  background-color: #f5f5f5;
+  color: #1890ff;
+}
+
+.optional-fields-header .expand-icon {
+  font-size: 0.9em;
+  transition: transform 0.2s;
+}
+
+.optional-fields-content {
+  margin-top: 12px;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
 .cost-info-edit {
   display: flex;
   flex-direction: column;
@@ -2607,6 +2829,37 @@ const formatAnalysisText = (text) => {
   color: #333;
 }
 
+.auto-trading-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.interval-select {
+  padding: 4px 8px;
+  font-size: 0.85em;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.interval-select:hover:not(:disabled) {
+  border-color: #1890ff;
+}
+
+.interval-select:focus {
+  outline: none;
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
+.interval-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .toggle-switch {
   position: relative;
   display: inline-block;
@@ -2892,4 +3145,5 @@ const formatAnalysisText = (text) => {
   }
 }
 </style>
+
 

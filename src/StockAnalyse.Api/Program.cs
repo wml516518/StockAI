@@ -90,6 +90,9 @@ builder.Services.AddScoped<IAIService, AIService>();
 builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
 builder.Services.AddScoped<ITradingPlanService, TradingPlanService>();
 
+// 注册做T方案事件通知服务（单例，用于SSE推送）
+builder.Services.AddSingleton<TradingPlanEventService>();
+
 // 量化交易服务
 builder.Services.AddScoped<IQuantTradingService, QuantTradingService>();
 builder.Services.AddScoped<ITechnicalIndicatorService, TechnicalIndicatorService>();

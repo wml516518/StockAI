@@ -6,7 +6,7 @@ public class TradingPlanBackgroundService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<TradingPlanBackgroundService> _logger;
-    private readonly TimeSpan _updateInterval = TimeSpan.FromMinutes(10); // 每10分钟检查一次
+    private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(1); // 每1分钟检查一次，确保能及时响应不同的更新间隔设置
 
     public TradingPlanBackgroundService(
         IServiceProvider serviceProvider,
@@ -18,7 +18,10 @@ public class TradingPlanBackgroundService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("做T方案后台服务已启动，更新间隔: {Interval} 分钟", _updateInterval.TotalMinutes);
+        _logger.LogInformation("做T方案后台服务已启动，检查间隔: {Interval} 分钟", _checkInterval.TotalMinutes);
+
+        // 首次延迟1分钟后再开始，避免服务启动时立即执行大量更新
+        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -35,7 +38,7 @@ public class TradingPlanBackgroundService : BackgroundService
             }
 
             // 等待指定时间后再次执行
-            await Task.Delay(_updateInterval, stoppingToken);
+            await Task.Delay(_checkInterval, stoppingToken);
         }
 
         _logger.LogInformation("做T方案后台服务已停止");

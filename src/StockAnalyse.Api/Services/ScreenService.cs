@@ -380,7 +380,7 @@ public class ScreenService : IScreenService
 
             using var pythonClient = new HttpClient
             {
-                Timeout = TimeSpan.FromSeconds(180)
+                Timeout = TimeSpan.FromSeconds(300)
             };
             pythonClient.DefaultRequestHeaders.Add("User-Agent", "StockAnalyse.Api/1.0");
 

@@ -577,31 +577,10 @@ public class WatchlistService : IWatchlistService
             throw new KeyNotFoundException("自选股不存在");
         }
         
-        bool needSave = false;
-        
-        // 如果当前价格高于建议买入价，重置买入提醒标志
-        if (item.SuggestedBuyPrice.HasValue && 
-            item.BuyAlertSent && 
-            currentPrice > item.SuggestedBuyPrice.Value)
-        {
-            item.BuyAlertSent = false;
-            needSave = true;
-        }
-        
-        // 如果当前价格低于建议卖出价，重置卖出提醒标志
-        if (item.SuggestedSellPrice.HasValue && 
-            item.SellAlertSent && 
-            currentPrice < item.SuggestedSellPrice.Value)
-        {
-            item.SellAlertSent = false;
-            needSave = true;
-        }
-        
-        if (needSave)
-        {
-            item.LastUpdate = DateTime.Now;
-            await _context.SaveChangesAsync();
-        }
+        // 注意：不再重置提醒标志
+        // 一旦提醒被触发（BuyAlertSent/SellAlertSent = true），即使价格恢复到非触发状态，
+        // 也保持标志为 true，这样就不会再次触发提醒
+        // 只有用户修改建议价格时才会重置标志（在 UpdateSuggestedPriceAsync 中处理）
         
         return item;
     }

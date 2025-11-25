@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
+using StockAnalyse.Api.Services;
 using StockAnalyse.Api.Services.Interfaces;
 
 namespace StockAnalyse.Api.Controllers;
@@ -14,17 +15,20 @@ public class WatchlistController : ControllerBase
     private readonly ITradingPlanService _tradingPlanService;
     private readonly StockDbContext _context;
     private readonly ILogger<WatchlistController> _logger;
+    private readonly TradingPlanEventService _eventService;
 
     public WatchlistController(
         IWatchlistService watchlistService, 
         ITradingPlanService tradingPlanService,
         StockDbContext context,
-        ILogger<WatchlistController> logger)
+        ILogger<WatchlistController> logger,
+        TradingPlanEventService eventService)
     {
         _watchlistService = watchlistService;
         _tradingPlanService = tradingPlanService;
         _context = context;
         _logger = logger;
+        _eventService = eventService;
     }
 
     /// <summary>
@@ -307,22 +311,76 @@ public class WatchlistController : ControllerBase
     /// 手动更新做T方案
     /// </summary>
     [HttpPost("{id}/trading-plan/refresh")]
-    public async Task<ActionResult> RefreshTradingPlan(int id)
+    public async Task<ActionResult<WatchlistStock>> RefreshTradingPlan(int id)
     {
         try
         {
             await _tradingPlanService.UpdateTradingPlanForStockAsync(id, force: true);
-            var stock = await _context.WatchlistStocks.FindAsync(id);
+            // 重新加载完整的股票数据（包含导航属性）
+            var stock = await _context.WatchlistStocks
+                .Include(w => w.Stock)
+                .Include(w => w.Category)
+                .FirstOrDefaultAsync(w => w.Id == id);
             if (stock == null)
             {
                 return NotFound("自选股不存在");
             }
-            return Ok(new { message = "做T方案已更新", tradingPlan = stock.TradingPlan });
+            return Ok(stock);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "刷新做T方案失败: {Id}", id);
             return StatusCode(500, new { message = $"刷新做T方案失败: {ex.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// SSE端点：接收做T方案更新通知
+    /// </summary>
+    [HttpGet("trading-plan/events")]
+    public async Task TradingPlanEvents()
+    {
+        Response.ContentType = "text/event-stream";
+        Response.Headers["Cache-Control"] = "no-cache";
+        Response.Headers["Connection"] = "keep-alive";
+        Response.Headers["X-Accel-Buffering"] = "no";
+
+        var writer = new StreamWriter(Response.Body);
+        var clientId = _eventService.AddClient(writer);
+
+        try
+        {
+            // 发送初始连接确认
+            await writer.WriteAsync($"data: {{\"type\":\"connected\",\"clientId\":\"{clientId}\"}}\n\n");
+            await writer.FlushAsync();
+
+            // 保持连接，等待客户端断开
+            var cancellationToken = HttpContext.RequestAborted;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(30000, cancellationToken); // 每30秒发送一次心跳
+                    await _eventService.SendHeartbeatAsync();
+                }
+                catch (OperationCanceledException)
+                {
+                    // 客户端断开连接，正常退出
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 客户端断开连接，正常退出，不记录为错误
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SSE连接异常: {ClientId}", clientId);
+        }
+        finally
+        {
+            _eventService.RemoveClient(clientId);
         }
     }
 }

@@ -842,10 +842,10 @@ public class AIController : ControllerBase
                 
                 // 创建独立的HttpClient，设置更长的超时时间（Python分析需要获取数据并计算指标，可能需要较长时间）
                 using var pythonClient = new HttpClient();
-                pythonClient.Timeout = TimeSpan.FromSeconds(180); // 增加到180秒（3分钟），因为需要获取历史数据+分析
+                pythonClient.Timeout = TimeSpan.FromSeconds(300); // 增加到300秒（5分钟），因为需要获取历史数据+分析
                 pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
                 
-                _logger.LogDebug("正在调用Python分析服务（超时时间：180秒）");
+                _logger.LogDebug("正在调用Python分析服务（超时时间：300秒）");
                 var analyzeResponse = await pythonClient.GetAsync(analyzeUrl);
                 
                 if (analyzeResponse.IsSuccessStatusCode)
