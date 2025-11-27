@@ -446,13 +446,24 @@
                 <div class="cost-info-section">
                   <div class="cost-info-header">
                     <span>成本信息</span>
-                    <button 
-                      class="btn-icon" 
-                      @click="toggleCostEdit(stock.id)"
-                      :title="editingCost[stock.id] ? '取消编辑' : '编辑成本信息'"
-                    >
-                      {{ editingCost[stock.id] ? '✕' : '✎' }}
-                    </button>
+                    <div class="header-buttons">
+                      <button 
+                        v-if="stock.costPrice && !editingCost[stock.id]"
+                        class="btn-icon btn-clear" 
+                        @click="handleClearCost(stock.id)"
+                        :disabled="savingCost[stock.id]"
+                        title="清空成本信息"
+                      >
+                        🗑️
+                      </button>
+                      <button 
+                        class="btn-icon" 
+                        @click="toggleCostEdit(stock.id)"
+                        :title="editingCost[stock.id] ? '取消编辑' : '编辑成本信息'"
+                      >
+                        {{ editingCost[stock.id] ? '✕' : '✎' }}
+                      </button>
+                    </div>
                   </div>
                   <div v-if="editingCost[stock.id]" class="cost-info-edit">
                     <div class="price-input-group">
@@ -495,13 +506,24 @@
                 <div class="suggested-price-section">
                   <div class="suggested-price-header">
                     <span>建议价格</span>
-                    <button 
-                      class="btn-icon" 
-                      @click="toggleSuggestedPriceEdit(stock.id)"
-                      :title="editingSuggestedPrice[stock.id] ? '取消编辑' : '编辑建议价格'"
-                    >
-                      {{ editingSuggestedPrice[stock.id] ? '✕' : '✎' }}
-                    </button>
+                    <div class="header-buttons">
+                      <button 
+                        v-if="(stock.suggestedBuyPrice || stock.suggestedSellPrice) && !editingSuggestedPrice[stock.id]"
+                        class="btn-icon btn-clear" 
+                        @click="handleClearSuggestedPrice(stock.id)"
+                        :disabled="savingSuggestedPrice[stock.id]"
+                        title="清空建议价格"
+                      >
+                        🗑️
+                      </button>
+                      <button 
+                        class="btn-icon" 
+                        @click="toggleSuggestedPriceEdit(stock.id)"
+                        :title="editingSuggestedPrice[stock.id] ? '取消编辑' : '编辑建议价格'"
+                      >
+                        {{ editingSuggestedPrice[stock.id] ? '✕' : '✎' }}
+                      </button>
+                    </div>
                   </div>
                   <div v-if="editingSuggestedPrice[stock.id]" class="suggested-price-edit">
                     <div class="price-input-group">
@@ -1540,6 +1562,19 @@ const handleSaveSuggestedPrice = async (stockId) => {
   }
 }
 
+const handleClearSuggestedPrice = async (stockId) => {
+  if (!confirm('确定要清空建议价格吗？')) return
+  
+  try {
+    savingSuggestedPrice.value[stockId] = true
+    await watchlistStore.updateSuggestedPrice(stockId, null, null)
+  } catch (error) {
+    alert('清空建议价格失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    delete savingSuggestedPrice.value[stockId]
+  }
+}
+
 const toggleCostEdit = (stockId) => {
   if (editingCost.value[stockId]) {
     // 取消编辑
@@ -1574,6 +1609,19 @@ const handleSaveCost = async (stockId) => {
     delete costForm.value[stockId]
   } catch (error) {
     alert('保存成本信息失败: ' + (error.response?.data?.message || error.message))
+  } finally {
+    delete savingCost.value[stockId]
+  }
+}
+
+const handleClearCost = async (stockId) => {
+  if (!confirm('确定要清空成本信息吗？')) return
+  
+  try {
+    savingCost.value[stockId] = true
+    await watchlistStore.updateStock(stockId, null, null)
+  } catch (error) {
+    alert('清空成本信息失败: ' + (error.response?.data?.message || error.message))
   } finally {
     delete savingCost.value[stockId]
   }
@@ -1937,6 +1985,9 @@ const handleToggleAutoTrading = async (stock, enabled) => {
     // 只更新当前股票的数据，不刷新整个列表
     if (updatedStock) {
       updateSingleStock(updatedStock)
+      // 强制更新 currentTime 以触发时间显示重新计算
+      await nextTick()
+      currentTime.value = new Date()
     }
   } catch (error) {
     console.error('切换做T状态失败:', error)
@@ -1958,6 +2009,9 @@ const handleIntervalChange = async (stockId, intervalMinutes) => {
     // 只更新当前股票的数据，不刷新整个列表
     if (updatedStock) {
       updateSingleStock(updatedStock)
+      // 强制更新 currentTime 以触发时间显示重新计算
+      await nextTick()
+      currentTime.value = new Date()
     }
   } catch (error) {
     console.error('修改更新间隔失败:', error)
