@@ -313,7 +313,7 @@
                     v-if="getStockRating(stock)"
                     :class="getRatingBadgeClass(getStockRating(stock))"
                   >
-                    {{ getStockRating(stock) }}
+                    {{ getStockRating(stock) }}分
                   </span>
                   <span
                     v-if="getStockActionSuggestion(stock)"
@@ -1085,17 +1085,23 @@ const hasAiInsight = (stock) => {
 }
 
 const getRatingBadgeClass = (rating) => {
-  switch (rating) {
-    case '优':
-      return 'rating-badge excellence'
-    case '良':
-      return 'rating-badge good'
-    case '中':
-      return 'rating-badge neutral'
-    case '差':
-      return 'rating-badge risk'
-    default:
-      return 'rating-badge neutral'
+  // 将评级转换为数字（支持字符串和数字类型）
+  const score = typeof rating === 'string' ? parseInt(rating, 10) : rating
+  
+  // 如果不是有效数字，返回默认样式
+  if (isNaN(score)) {
+    return 'rating-badge neutral'
+  }
+  
+  // 根据分数范围返回对应的CSS类
+  if (score >= 80) {
+    return 'rating-badge excellence'
+  } else if (score >= 60) {
+    return 'rating-badge good'
+  } else if (score >= 40) {
+    return 'rating-badge neutral'
+  } else {
+    return 'rating-badge risk'
   }
 }
 
