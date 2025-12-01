@@ -90,6 +90,13 @@ builder.Services.AddScoped<IAIService, AIService>();
 builder.Services.AddScoped<IPriceAlertService, PriceAlertService>();
 builder.Services.AddScoped<ITradingPlanService, TradingPlanService>();
 
+// 注册行业和市场服务
+builder.Services.AddScoped<IIndustryService, IndustryService>();
+builder.Services.AddScoped<IMarketService, MarketService>();
+
+// 注册自动选股服务
+builder.Services.AddScoped<IAutoSelectionService, AutoSelectionService>();
+
 // 注册做T方案事件通知服务（单例，用于SSE推送）
 builder.Services.AddSingleton<TradingPlanEventService>();
 
@@ -102,6 +109,9 @@ builder.Services.AddScoped<IStrategyOptimizationService, StrategyOptimizationSer
 
 // 注册后台服务（做T方案定时更新）
 builder.Services.AddHostedService<TradingPlanBackgroundService>();
+
+// 注册自动选股后台服务
+builder.Services.AddHostedService<AutoSelectionJob>();
 
 // 添加HttpClient，为AI服务配置专门的HttpClient，设置更长的超时时间（5分钟）
 builder.Services.AddHttpClient("AIService", client =>

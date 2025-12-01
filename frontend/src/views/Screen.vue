@@ -283,6 +283,9 @@
         </div>
         <div class="form-actions">
           <button class="btn" @click="handleScreen" :disabled="loading">🔍 开始选股</button>
+          <button class="btn btn-auto-selection" @click="handleAutoSelection" :disabled="autoSelectionLoading">
+            {{ autoSelectionLoading ? '🤖 自动选股中...' : '🤖 执行自动选股' }}
+          </button>
           <button class="btn btn-secondary" @click="clearConditions">🧹 清空条件</button>
         </div>
       </div>
@@ -355,6 +358,8 @@
                   <th>市盈率</th>
                   <th>市净率</th>
                   <th>成交量</th>
+                  <th v-if="autoSelectionResults">AI评分</th>
+                  <th v-if="autoSelectionResults">行业</th>
                 </tr>
               </thead>
               <tbody>
@@ -377,9 +382,31 @@
                   <td>{{ stock.pe ? stock.pe.toFixed(2) : '-' }}</td>
                   <td>{{ stock.pb ? stock.pb.toFixed(2) : '-' }}</td>
                   <td>{{ formatVolume(stock.volume) }}</td>
+                  <td v-if="autoSelectionResults">
+                    <span class="ai-score" :class="getAIScoreClass(stock.aiScore)">
+                      {{ stock.aiScore !== undefined ? stock.aiScore : '-' }}
+                    </span>
+                  </td>
+                  <td v-if="autoSelectionResults">{{ stock.industryName || '-' }}</td>
                 </tr>
               </tbody>
             </table>
+          </div>
+          
+          <!-- 自动选股结果摘要 -->
+          <div v-if="autoSelectionResults" class="auto-selection-summary">
+            <div class="summary-item">
+              <strong>总股票数：</strong>{{ autoSelectionResults.totalStocks }}
+            </div>
+            <div class="summary-item">
+              <strong>筛选后：</strong>{{ autoSelectionResults.filteredCount }}
+            </div>
+            <div class="summary-item">
+              <strong>AI评分：</strong>{{ autoSelectionResults.scoredCount }}
+            </div>
+            <div class="summary-item">
+              <strong>最终选中：</strong>{{ autoSelectionResults.selectedCount }}
+            </div>
           </div>
           
           <!-- 分页控件 -->
@@ -471,6 +498,10 @@ const selectedTemplateId = ref('')
 const showSaveDialog = ref(false)
 const editingTemplateId = ref(null)
 const hasSearched = ref(false)
+
+// 自动选股相关状态
+const autoSelectionLoading = ref(false)
+const autoSelectionResults = ref(null)
 
 // 分页相关状态
 const currentPage = ref(1)
@@ -953,6 +984,65 @@ const clearConditions = () => {
   totalPages.value = 0
   lastSearchCriteria.value = null // 清空保存的查询条件
   isAISearchMode.value = false // 清除AI选股模式
+  autoSelectionResults.value = null // 清空自动选股结果
+}
+
+// 手动执行自动选股服务
+const handleAutoSelection = async () => {
+  autoSelectionLoading.value = true
+  autoSelectionResults.value = null
+  hasSearched.value = true
+  
+  try {
+    const response = await api.post('/screen/auto-selection/execute', {}, {
+      timeout: 900000 // 15分钟超时，因为AI评分可能需要较长时间（已优化为并行处理）
+    })
+    
+    autoSelectionResults.value = response
+    
+    // 将自动选股结果转换为普通选股结果格式，显示在页面上
+    if (response.selectedStocks && response.selectedStocks.length > 0) {
+      results.value = response.selectedStocks.map(stock => ({
+        code: stock.stockCode,
+        name: stock.stockName,
+        currentPrice: stock.currentPrice,
+        changePercent: stock.changePercent,
+        turnoverRate: stock.turnoverRate,
+        volume: stock.volume,
+        pe: null,
+        pb: null,
+        aiScore: stock.aiScore,
+        industryName: stock.industryName,
+        hotRank: stock.hotRank
+      }))
+      
+      totalCount.value = response.selectedCount
+      currentPage.value = 1
+      pageSize.value = 10
+      totalPages.value = Math.max(1, Math.ceil(totalCount.value / pageSize.value))
+      
+      // 滚动到结果区域
+      setTimeout(() => {
+        const resultsCard = document.querySelector('.card:has(.results-table)')
+        if (resultsCard) {
+          resultsCard.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+      }, 100)
+    } else {
+      results.value = []
+      totalCount.value = 0
+      totalPages.value = 0
+      alert('自动选股未找到符合条件的股票')
+    }
+  } catch (error) {
+    console.error('执行自动选股失败:', error)
+    alert('执行自动选股失败: ' + (error.response?.data?.message || error.message))
+    results.value = []
+    totalCount.value = 0
+    totalPages.value = 0
+  } finally {
+    autoSelectionLoading.value = false
+  }
 }
 
 const formatPrice = (price) => {
@@ -982,6 +1072,13 @@ const formatDateTime = (value) => {
 const getPriceClass = (value) => {
   if (!value) return ''
   return value > 0 ? 'price-up' : value < 0 ? 'price-down' : ''
+}
+
+const getAIScoreClass = (score) => {
+  if (score === undefined || score === null) return ''
+  if (score >= 8) return 'ai-score-high'
+  if (score >= 6) return 'ai-score-medium'
+  return 'ai-score-low'
 }
 
 const toggleSelectAll = (event) => {
@@ -1104,6 +1201,65 @@ watch(watchlistCategories, () => {
 .form-actions {
   display: flex;
   gap: 10px;
+}
+
+.btn-auto-selection {
+  background: linear-gradient(90deg, #ff9800, #ffb74d);
+  color: white;
+  border: none;
+  box-shadow: 0 2px 4px rgba(255, 152, 0, 0.3);
+}
+
+.btn-auto-selection:hover:not(:disabled) {
+  background: linear-gradient(90deg, #f57c00, #ff9800);
+  box-shadow: 0 4px 8px rgba(255, 152, 0, 0.4);
+}
+
+.btn-auto-selection:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auto-selection-summary {
+  display: flex;
+  gap: 20px;
+  padding: 15px;
+  background: #fff8e1;
+  border: 1px solid #ffcc80;
+  border-radius: 6px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+}
+
+.summary-item {
+  font-size: 0.95em;
+  color: #e65100;
+}
+
+.summary-item strong {
+  color: #bf360c;
+}
+
+.ai-score {
+  font-weight: bold;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.ai-score-high {
+  background: #c8e6c9;
+  color: #2e7d32;
+}
+
+.ai-score-medium {
+  background: #fff9c4;
+  color: #f57f17;
+}
+
+.ai-score-low {
+  background: #ffcdd2;
+  color: #c62828;
 }
 
 .results-table {

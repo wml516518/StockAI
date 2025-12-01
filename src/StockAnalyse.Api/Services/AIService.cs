@@ -125,8 +125,6 @@ public class AIService : IAIService
 
         var finalUserPrompt = ApplyPlaceholders(userPrompt ?? string.Empty, placeholders);
 
-        _logger.LogInformation("执行AI提示词: PromptName={PromptName}, 用户提示长度={Length}", promptName ?? "默认提示", finalUserPrompt.Length);
-
         var messages = new List<AiChatMessage>
         {
             new("user", finalUserPrompt)

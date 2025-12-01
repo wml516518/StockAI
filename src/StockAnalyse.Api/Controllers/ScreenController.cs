@@ -9,11 +9,16 @@ namespace StockAnalyse.Api.Controllers;
 public class ScreenController : ControllerBase
 {
     private readonly IScreenService _screenService;
+    private readonly IAutoSelectionService _autoSelectionService;
     private readonly ILogger<ScreenController> _logger;
 
-    public ScreenController(IScreenService screenService, ILogger<ScreenController> logger)
+    public ScreenController(
+        IScreenService screenService,
+        IAutoSelectionService autoSelectionService,
+        ILogger<ScreenController> logger)
     {
         _screenService = screenService;
+        _autoSelectionService = autoSelectionService;
         _logger = logger;
     }
 
@@ -182,6 +187,30 @@ public class ScreenController : ControllerBase
             
             // 其他错误返回500
             return StatusCode(500, new { error = "AI选股查询失败", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 手动执行自动选股服务（不保存到自选股，只返回结果）
+    /// </summary>
+    [HttpPost("auto-selection/execute")]
+    public async Task<ActionResult<AutoSelectionResult>> ExecuteAutoSelection()
+    {
+        try
+        {
+            _logger.LogInformation("收到手动执行自动选股请求");
+            
+            var result = await _autoSelectionService.ExecuteSelectionAsync();
+            
+            _logger.LogInformation("手动执行自动选股完成 - 总股票: {Total}, 筛选: {Filtered}, 评分: {Scored}, 选中: {Selected}",
+                result.TotalStocks, result.FilteredCount, result.ScoredCount, result.SelectedCount);
+            
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "手动执行自动选股时发生错误");
+            return StatusCode(500, new { error = "执行自动选股失败", message = ex.Message });
         }
     }
 }

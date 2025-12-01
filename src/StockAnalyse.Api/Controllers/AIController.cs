@@ -23,19 +23,16 @@ public class AIController : ControllerBase
     private readonly IMemoryCache _cache;
     private readonly IWatchlistService _watchlistService;
 
-    private sealed class IndustryInfoResult
-    {
-        public string InfoText { get; set; } = string.Empty;
-        public string? IndustryName { get; set; }
-        public string? IndustryCode { get; set; }
-        public List<string> Keywords { get; set; } = new();
-    }
+    private readonly IIndustryService _industryService;
+    private readonly IMarketService _marketService;
 
     public AIController(
         IAIService aiService,
         IStockDataService stockDataService,
         INewsService newsService,
         IWatchlistService watchlistService,
+        IIndustryService industryService,
+        IMarketService marketService,
         ILogger<AIController> logger,
         IHttpClientFactory httpClientFactory,
         IMemoryCache cache)
@@ -44,6 +41,8 @@ public class AIController : ControllerBase
         _stockDataService = stockDataService;
         _newsService = newsService;
         _watchlistService = watchlistService;
+        _industryService = industryService;
+        _marketService = marketService;
         _logger = logger;
         _httpClient = httpClientFactory.CreateClient();
         _httpClient.Timeout = TimeSpan.FromSeconds(60);
@@ -422,6 +421,8 @@ public class AIController : ControllerBase
             {
                 _logger.LogInformation("成功获取基本面信息 - 数据来源: {DataSource}, 股票: {StockName}, 报告期: {ReportDate}", 
                     dataSource ?? "未知", fundamentalInfo.StockName, fundamentalInfo.ReportDate);
+                _logger.LogInformation("基本面详情: 营收={Revenue}, 净利={NetProfit}, EPS={EPS}, ROE={ROE}, PE={PE}, PB={PB}", 
+                    fundamentalInfo.TotalRevenue, fundamentalInfo.NetProfit, fundamentalInfo.EPS, fundamentalInfo.ROE, fundamentalInfo.PE, fundamentalInfo.PB);
             }
             else
             {
@@ -435,7 +436,7 @@ public class AIController : ControllerBase
                 _logger.LogInformation("步骤2: 正在从AKShare获取行业详情...");
                 _logger.LogInformation("🤖 [AIController] 步骤2: 正在从AKShare获取行业详情");
                 
-                industryInfoResult = await GetIndustryInfoFromAKShareAsync(stockCode);
+                industryInfoResult = await _industryService.GetIndustryInfoFromAKShareAsync(stockCode);
                 industryInfoText = industryInfoResult?.InfoText ?? string.Empty;
                 industryNameForNews = industryInfoResult?.IndustryName;
                 if (industryInfoResult?.Keywords?.Count > 0)
@@ -451,6 +452,7 @@ public class AIController : ControllerBase
                 {
                     _logger.LogInformation("成功获取行业详情，数据长度: {Length} 字符", industryInfoText.Length);
                     _logger.LogInformation("🤖 [AIController] ✅ 成功获取行业详情，长度: {Length} 字符", industryInfoText.Length);
+                    _logger.LogInformation("行业详情内容: {Content}", industryInfoText);
                     if (!string.IsNullOrWhiteSpace(industryNameForNews))
                     {
                         _logger.LogInformation("行业名称: {IndustryName}, 关键词: {Keywords}", industryNameForNews, string.Join("/", industryKeywords));
@@ -476,12 +478,13 @@ public class AIController : ControllerBase
                 _logger.LogInformation("步骤3: 正在从AKShare获取个股人气榜数据...");
                 _logger.LogInformation("🤖 [AIController] 步骤3: 正在从AKShare获取个股人气榜数据");
                 
-                hotRankText = await GetHotRankFromAKShareAsync(stockCode);
+                hotRankText = await _marketService.GetHotRankFromAKShareAsync(stockCode);
                 
                 if (!string.IsNullOrEmpty(hotRankText))
                 {
                     _logger.LogInformation("成功获取个股人气榜数据，数据长度: {Length} 字符", hotRankText.Length);
                     _logger.LogInformation("🤖 [AIController] ✅ 成功获取个股人气榜数据，长度: {Length} 字符", hotRankText.Length);
+                    _logger.LogInformation("个股人气榜内容: {Content}", hotRankText);
                 }
                 else
                 {
@@ -506,6 +509,8 @@ public class AIController : ControllerBase
             {
                 _logger.LogInformation("成功获取实时行情 - 股票: {StockName}, 价格: {Price}, 涨跌幅: {ChangePercent}%", 
                 effectiveStockName, stock.CurrentPrice, stock.ChangePercent);
+                _logger.LogInformation("实时行情详情: 开={Open}, 高={High}, 低={Low}, 量={Volume}, 额={Turnover}", 
+                    stock.OpenPrice, stock.HighPrice, stock.LowPrice, stock.Volume, stock.Turnover);
             }
             else
             {
@@ -578,6 +583,13 @@ public class AIController : ControllerBase
                     
                     _logger.LogInformation("成功获取 {Count} 条历史交易数据（时间范围：{FirstDate} 至 {LastDate}，完整度：{Completeness:F1}%）", 
                         historyData.Count, firstDate, lastDate, completenessRatio);
+                    if (historyData.Count > 0)
+                    {
+                        var first = historyData.OrderBy(h => h.TradeDate).First();
+                        var last = historyData.OrderBy(h => h.TradeDate).Last();
+                        _logger.LogInformation("历史数据首条: {Date} Close={Close}", first.TradeDate, first.Close);
+                        _logger.LogInformation("历史数据末条: {Date} Close={Close}", last.TradeDate, last.Close);
+                    }
                     
                     if (gaps > 0)
                     {
@@ -809,6 +821,7 @@ public class AIController : ControllerBase
                                     
                                     _logger.LogDebug("交易数据获取完成，数据长度: {Length} 字符", tradeDataText.Length);
                                     _logger.LogInformation("🤖 [AIController] ✅ 交易数据获取完成，已缓存");
+                                    _logger.LogInformation("交易数据片段: {Snippet}", tradeDataText.Length > 200 ? tradeDataText.Substring(0, 200) + "..." : tradeDataText);
                                 }
                             }
                         }
@@ -965,6 +978,7 @@ public class AIController : ControllerBase
                             
                             _logger.LogInformation("Python大数据分析完成，分析结果长度: {Length} 字符", pythonAnalysisText.Length);
                             _logger.LogInformation("🤖 [AIController] ✅ Python大数据分析完成，结果长度: {Length} 字符", pythonAnalysisText.Length);
+                            _logger.LogInformation("Python分析结果片段: {Snippet}", pythonAnalysisText.Length > 200 ? pythonAnalysisText.Substring(0, 200) + "..." : pythonAnalysisText);
                         }
                     }
                     else
@@ -1212,6 +1226,10 @@ public class AIController : ControllerBase
             {
                 var stockNewsList = await _newsService.GetNewsByStockAsync(stockCode, request?.ForceRefresh ?? false) ?? new List<FinancialNews>();                                             
             _logger.LogInformation("获取到与股票 {StockName} 直接相关的新闻 {Count} 条", stockNameForLog, stockNewsList.Count);                                
+                foreach(var news in stockNewsList.Take(3))
+                {
+                    _logger.LogInformation("新闻: {Title} ({Time})", news.Title, news.PublishTime);
+                }
 
                 if (stockNewsList.Count > 0)
                 {
@@ -1247,6 +1265,7 @@ public class AIController : ControllerBase
             
             _logger.LogInformation("步骤5: 调用AI服务进行分析");
             _logger.LogInformation("🤖 [AIController] 步骤5: 调用AI服务进行分析");
+            _logger.LogInformation("发送给AI的完整上下文: {Context}", enhancedContext);
             
             var placeholders = new Dictionary<string, string?>
             {
@@ -1372,6 +1391,7 @@ public class AIController : ControllerBase
 
             _logger.LogInformation("AI分析完成，结果长度: {Length} 字符", finalResult?.Length ?? 0);
             _logger.LogInformation("🤖 [AIController] ✅ AI分析完成，结果长度: {Length} 字符", finalResult?.Length ?? 0);
+            _logger.LogInformation("AI分析原始结果: {Result}", finalResult);
 
             if (string.IsNullOrWhiteSpace(finalResult))
             {
@@ -1932,444 +1952,6 @@ public class AIController : ControllerBase
         _logger.LogDebug("行业新闻搜索功能已停用，仅保留按股票代码获取新闻。");
         return new List<FinancialNews>();
     }
-    
-    /// <summary>
-    /// 从AKShare获取行业详情
-    /// </summary>
-    private async Task<IndustryInfoResult?> GetIndustryInfoFromAKShareAsync(string stockCode)
-    {
-        try
-        {
-            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL")
-                ?? "http://localhost:5001";
-
-            var url = $"{pythonServiceUrl}/api/stock/industry/{stockCode}";
-
-            _logger.LogDebug("尝试从Python服务获取行业详情: {Url}", url);
-
-            using var pythonClient = new HttpClient();
-            pythonClient.Timeout = TimeSpan.FromSeconds(120);
-            pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-
-            var response = await pythonClient.GetAsync(url);
-
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                _logger.LogInformation("Python服务(AKShare)无法获取股票 {StockCode} 的行业数据", stockCode);
-                return null;
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                _logger.LogWarning("Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
-                return null;
-            }
-
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(responseContent);
-
-            if (jsonData["success"]?.ToString() == "True" && jsonData["data"] != null)
-            {
-                var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
-                if (data != null)
-                {
-                    var industryName = data["industryName"]?.ToString() ?? "未知";
-                    var industryCode = data["industryCode"]?.ToString() ?? string.Empty;
-                    var industryDescription = data["description"]?.ToString() ?? string.Empty;
-                    var industryStocks = data["stocks"] as Newtonsoft.Json.Linq.JArray;
-                    var industryTrends = data["trends"]?.ToString() ?? string.Empty;
-                    var industryPerformance = data["performance"] as Newtonsoft.Json.Linq.JObject;
-                    var industryMarketData = data["marketData"] as Newtonsoft.Json.Linq.JObject;
-
-                    var builder = new StringBuilder();
-                    builder.AppendLine();
-                    builder.AppendLine("【行业详情】（数据来源：AKShare - stock_board_industry_name_em）");
-                    builder.AppendLine();
-                    builder.AppendLine("**行业基本信息：**");
-                    builder.AppendLine($"- 行业名称：{industryName}");
-                    builder.AppendLine($"- 行业代码：{industryCode}");
-                    if (!string.IsNullOrEmpty(industryDescription))
-                    {
-                        builder.AppendLine($"- 行业描述：{industryDescription}");
-                    }
-                    builder.AppendLine();
-
-                    var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                    static string? NormalizeKeyword(string? value)
-                    {
-                        if (string.IsNullOrWhiteSpace(value))
-                        {
-                            return null;
-                        }
-
-                        var normalized = value.Replace("（", "(").Replace("）", ")");
-                        var index = normalized.IndexOf('(');
-                        if (index > 0)
-                        {
-                            normalized = normalized[..index];
-                        }
-
-                        normalized = normalized.Trim();
-                        return normalized.Length >= 2 ? normalized : null;
-                    }
-
-                    void AddKeyword(string? value)
-                    {
-                        var normalized = NormalizeKeyword(value);
-                        if (!string.IsNullOrWhiteSpace(normalized))
-                        {
-                            keywords.Add(normalized);
-                        }
-                    }
-
-                    void AddSplitKeywords(string? value)
-                    {
-                        if (string.IsNullOrWhiteSpace(value))
-                        {
-                            return;
-                        }
-
-                        var separators = new[] { '/', '、', '-', '，', ',', ' ' };
-                        foreach (var token in value.Split(separators, StringSplitOptions.RemoveEmptyEntries))
-                        {
-                            AddKeyword(token);
-                        }
-                    }
-
-                    if (!string.Equals(industryName, "未知", StringComparison.OrdinalIgnoreCase))
-                    {
-                        AddKeyword(industryName);
-                        AddSplitKeywords(industryName);
-                    }
-
-                    AddKeyword(industryCode);
-
-                    if (industryMarketData != null && industryMarketData.Count > 0)
-                    {
-                        builder.AppendLine("**行业板块实时市场数据：**");
-
-                        var latestPrice = industryMarketData["latestPrice"]?.ToString();
-                        var changeAmount = industryMarketData["changeAmount"]?.ToString();
-                        var changePercent = industryMarketData["changePercent"]?.ToString();
-                        var totalMarketCap = industryMarketData["totalMarketCap"]?.ToString();
-                        var turnoverRate = industryMarketData["turnoverRate"]?.ToString();
-                        var risingCount = industryMarketData["risingCount"]?.ToString();
-                        var fallingCount = industryMarketData["fallingCount"]?.ToString();
-                        var leaderStock = industryMarketData["leaderStock"]?.ToString();
-                        var leaderChangePercent = industryMarketData["leaderChangePercent"]?.ToString();
-
-                        if (!string.IsNullOrEmpty(latestPrice) && latestPrice != "null")
-                        {
-                            builder.AppendLine($"- 行业板块指数：{latestPrice}");
-                        }
-
-                        if (!string.IsNullOrEmpty(changeAmount) && changeAmount != "null")
-                        {
-                            builder.AppendLine($"- 涨跌额：{changeAmount}");
-                        }
-
-                        if (!string.IsNullOrEmpty(changePercent) && changePercent != "null")
-                        {
-                            builder.AppendLine($"- 涨跌幅：{changePercent}%");
-                        }
-
-                        if (!string.IsNullOrEmpty(totalMarketCap) && totalMarketCap != "null")
-                        {
-                            if (decimal.TryParse(totalMarketCap, out var marketCapDecimal))
-                            {
-                                var marketCapBillion = marketCapDecimal / 1_000_000_000M;
-                                builder.AppendLine($"- 行业总市值：{marketCapBillion:F2}亿元");
-                            }
-                            else
-                            {
-                                builder.AppendLine($"- 行业总市值：{totalMarketCap}");
-                            }
-                        }
-
-                        if (!string.IsNullOrEmpty(turnoverRate) && turnoverRate != "null")
-                        {
-                            builder.AppendLine($"- 换手率：{turnoverRate}%");
-                        }
-
-                        if (!string.IsNullOrEmpty(risingCount) && risingCount != "null" &&
-                            !string.IsNullOrEmpty(fallingCount) && fallingCount != "null")
-                        {
-                            builder.AppendLine($"- 上涨家数：{risingCount}，下跌家数：{fallingCount}");
-                        }
-
-                        if (!string.IsNullOrEmpty(leaderStock))
-                        {
-                            AddKeyword(leaderStock);
-                            var leaderInfo = $"- 领涨股票：{leaderStock}";
-                            if (!string.IsNullOrEmpty(leaderChangePercent) && leaderChangePercent != "null")
-                            {
-                                leaderInfo += $"（涨跌幅：{leaderChangePercent}%）";
-                            }
-                            builder.AppendLine(leaderInfo);
-                        }
-
-                        builder.AppendLine();
-                    }
-
-                    if (industryPerformance != null)
-                    {
-                        var avgPE = industryPerformance["avgPE"]?.ToString() ?? "N/A";
-                        var avgPB = industryPerformance["avgPB"]?.ToString() ?? "N/A";
-                        var avgROE = industryPerformance["avgROE"]?.ToString() ?? "N/A";
-                        var totalMarketCapPerformance = industryPerformance["totalMarketCap"]?.ToString() ?? "N/A";
-                        var avgChangePercent = industryPerformance["avgChangePercent"]?.ToString() ?? "N/A";
-
-                        builder.AppendLine("**行业表现指标：**");
-                        builder.AppendLine($"- 行业平均市盈率(PE)：{avgPE}");
-                        builder.AppendLine($"- 行业平均市净率(PB)：{avgPB}");
-                        builder.AppendLine($"- 行业平均ROE：{avgROE}");
-                        builder.AppendLine($"- 行业总市值：{totalMarketCapPerformance}");
-                        builder.AppendLine($"- 行业平均涨跌幅：{avgChangePercent}%");
-                        builder.AppendLine();
-                    }
-
-                    if (!string.IsNullOrEmpty(industryTrends))
-                    {
-                        builder.AppendLine("**行业趋势分析：**");
-                        builder.AppendLine(industryTrends);
-                        builder.AppendLine();
-                    }
-
-                    if (industryStocks != null && industryStocks.Count > 0)
-                    {
-                        builder.AppendLine($"**行业内主要股票（共{industryStocks.Count}只）：**");
-                        int displayCount = Math.Min(industryStocks.Count, 20);
-                        for (int i = 0; i < displayCount; i++)
-                        {
-                            var stock = industryStocks[i] as Newtonsoft.Json.Linq.JObject;
-                            if (stock != null)
-                            {
-                                var code = stock["code"]?.ToString() ?? string.Empty;
-                                var name = stock["name"]?.ToString() ?? string.Empty;
-                                var price = stock["price"]?.ToString() ?? "N/A";
-                                var changePercent = stock["changePercent"]?.ToString() ?? "N/A";
-
-                                if (!string.IsNullOrWhiteSpace(name))
-                                {
-                                    AddKeyword(name);
-                                }
-
-                                if (!string.IsNullOrWhiteSpace(code))
-                                {
-                                    AddKeyword(code);
-                                }
-
-                                builder.AppendLine($"- {name}({code}) 价格：{price}元 涨跌幅：{changePercent}%");
-                            }
-                        }
-
-                        if (industryStocks.Count > displayCount)
-                        {
-                            builder.AppendLine($"... 还有{industryStocks.Count - displayCount}只股票未显示");
-                        }
-
-                        builder.AppendLine();
-                    }
-
-                    builder.AppendLine("**提示：请结合以上行业数据，分析该股票在所属行业中的地位、行业整体发展趋势，以及行业对该股票的影响。**");
-
-                    var keywordList = keywords
-                        .Where(k => !string.IsNullOrWhiteSpace(k))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .Take(12)
-                        .ToList();
-
-                    return new IndustryInfoResult
-                    {
-                        InfoText = builder.ToString(),
-                        IndustryName = string.Equals(industryName, "未知", StringComparison.OrdinalIgnoreCase) ? null : industryName,
-                        IndustryCode = string.IsNullOrWhiteSpace(industryCode) ? null : industryCode,
-                        Keywords = keywordList
-                    };
-                }
-            }
-
-            return null;
-        }
-        catch (System.Net.Http.HttpRequestException ex)
-        {
-            if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
-            {
-                _logger.LogDebug(ex, "Python服务返回404 - 股票代码 {StockCode} 的行业数据未找到", stockCode);
-            }
-            else
-            {
-                _logger.LogDebug(ex, "Python服务不可用（可能未启动）");
-            }
-            return null;
-        }
-        catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
-        {
-            _logger.LogWarning(ex, "Python服务请求超时");
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Python服务调用失败");
-            return null;
-        }
-    }
-    
-    /// <summary>
-    /// 从AKShare获取个股人气榜数据
-    /// </summary>
-    private async Task<string> GetHotRankFromAKShareAsync(string stockCode)
-    {
-        try
-        {
-            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") 
-                ?? "http://localhost:5001";
-            
-            var normalizedStockCode = (stockCode ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(normalizedStockCode))
-            {
-                return string.Empty;
-            }
-
-            var encodedStockCode = Uri.EscapeDataString(normalizedStockCode);
-            var url = $"{pythonServiceUrl}/api/stock/hot-rank/{encodedStockCode}";
-            
-            _logger.LogDebug("尝试从Python服务获取个股人气榜数据: {Url}", url);
-            
-            using var pythonClient = new HttpClient();
-            pythonClient.Timeout = TimeSpan.FromSeconds(120);
-            pythonClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            
-            var response = await pythonClient.GetAsync(url);
-            
-            // 如果返回404，说明数据未找到，返回空字符串
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                _logger.LogInformation("Python服务(AKShare)无法获取个股人气榜数据");
-                return "";
-            }
-            
-            if (!response.IsSuccessStatusCode)
-            {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                _logger.LogWarning("Python服务返回错误状态码: {StatusCode} - {Error}", response.StatusCode, errorContent);
-                return "";
-            }
-            
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var jsonData = Newtonsoft.Json.Linq.JObject.Parse(responseContent);
-            
-            if (jsonData["success"]?.ToObject<bool>() == true)
-            {
-                var data = jsonData["data"] as Newtonsoft.Json.Linq.JObject;
-                if (data == null)
-                {
-                    _logger.LogInformation("未从Python服务获取到有效的人气榜数据");
-                    return "";
-                }
-
-                static string FormatChange(string? label, int? value)
-                {
-                    if (!value.HasValue)
-                    {
-                        return $"{label}: 暂无数据";
-                    }
-
-                    var sign = value.Value > 0 ? "+" : string.Empty;
-                    return $"{label}: {sign}{value}";
-                }
-
-                int? ParseNullableInt(Newtonsoft.Json.Linq.JToken? token)
-                {
-                    if (token == null)
-                    {
-                        return null;
-                    }
-
-                    if (int.TryParse(token.ToString(), out var parsedInt))
-                    {
-                        return parsedInt;
-                    }
-
-                    if (double.TryParse(token.ToString(), out var parsedDouble))
-                    {
-                        return (int)Math.Round(parsedDouble);
-                    }
-
-                    return null;
-                }
-
-                var rank = ParseNullableInt(data["rank"]);
-                var rankChange = ParseNullableInt(data["rankChange"]);
-                var hisRankChange = ParseNullableInt(data["hisRankChange"]);
-                var marketAllCount = ParseNullableInt(data["marketAllCount"]);
-                var calcTime = data["calcTime"]?.ToString();
-                var symbol = data["symbol"]?.ToString() ?? normalizedStockCode;
-                var innerCode = data["innerCode"]?.ToString();
-
-                var builder = new StringBuilder();
-                builder.AppendLine();
-                builder.AppendLine("【个股人气榜数据】（数据来源：AKShare - stock_hot_rank_latest_em）");
-                if (!string.IsNullOrWhiteSpace(calcTime))
-                {
-                    builder.AppendLine($"更新时间：{calcTime}");
-                }
-
-                builder.AppendLine();
-
-                if (rank.HasValue)
-                {
-                    var totalText = marketAllCount.HasValue ? $"/ 共{marketAllCount}只股票" : string.Empty;
-                    builder.AppendLine($"**股票 {symbol} 当前人气排名: 第{rank}{totalText}**");
-                    builder.AppendLine();
-                    builder.AppendLine("**排名变化信息：**");
-                    builder.AppendLine($"- {FormatChange("与上一期相比的排名变化", rankChange)}");
-                    builder.AppendLine($"- {FormatChange("历史区间排名变化", hisRankChange)}");
-                }
-                else
-                {
-                    builder.AppendLine("当前未能获取到该股票的人气排名数据。");
-                }
-
-                if (!string.IsNullOrWhiteSpace(innerCode))
-                {
-                    builder.AppendLine();
-                    builder.AppendLine($"内部代码：{innerCode}");
-                }
-
-                builder.AppendLine();
-                builder.AppendLine("**提示：请结合人气排名及其变化，分析市场关注度与情绪趋势，对投资决策进行辅助判断。**");
-
-                return builder.ToString();
-            }
-
-            return "";
-        }
-        catch (System.Net.Http.HttpRequestException ex)
-        {
-            if (ex.Message.Contains("404") || ex.Message.Contains("NOT FOUND"))
-            {
-                _logger.LogDebug(ex, "Python服务返回404 - 个股人气榜数据未找到");
-            }
-            else
-            {
-                _logger.LogDebug(ex, "Python服务不可用（可能未启动）");
-            }
-            return "";
-        }
-        catch (System.Threading.Tasks.TaskCanceledException ex) when (ex.InnerException is System.TimeoutException || ex.Message.Contains("Timeout"))
-        {
-            _logger.LogWarning(ex, "Python服务请求超时");
-            return "";
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Python服务调用失败");
-            return "";
-        }
-    }
 
     private static string TrimContent(string? content, int maxLength)
     {
@@ -2390,41 +1972,90 @@ public class AIController : ControllerBase
 
     private static string BuildFundamentalPrompt(string context)
     {
-        return $@"请基于以下关于股票{{stockCode}}的基本面、行业及市场数据进行分析，并提供结构化投资建议：
+        return $@"你是一名专业的证券分析师，请基于我提供的财务数据、行业信息和公司资料，
+对一只A股股票进行【七日短线策略背景下的基本面分析】。
+
+相关数据如下：
 {context}
 
-请按以下结构输出：
-1. 核心观点
-2. 财务与成长性
-3. 行业竞争与公司地位
-4. 主要风险
-5. 操作建议";
+请按照以下结构化格式输出：
+
+1. 公司核心业务概况（不超过80字）
+2. 行业景气度（高 / 中 / 低，并解释原因）
+3. 公司竞争优势（列出1–3条）
+4. 风险因素（列出1–3条，如负债高、行业衰退等）
+5. 财务稳健性评分（0-10）
+   - 盈利能力
+   - 偿债能力
+   - 成长性
+   - 现金流质量
+   - 机构持仓趋势
+6. 是否适合作为短线标的（是 / 否）
+   - 不是预测未来股价，而是判断其短线安全性（流动性、行业热度、机构关注等）
+7. 最终结论（简要总结一句）
+
+请务必避免预测未来涨跌，只做数据分析和风险判断。";
     }
 
     private static string BuildNewsPrompt(string context)
     {
-        return $@"以下是与股票{{stockCode}}相关的新闻及舆论信息，请分析市场情绪与潜在影响，并给出风险提示：
+        return $@"你是一名证券舆情分析师。
+我将提供一条与某只A股相关的新闻、公告、研报或政策内容。
+
+相关信息如下：
 {context}
 
-请按以下结构输出：
-1. 市场情绪与舆论方向
-2. 关键事件及潜在影响
-3. 行业或政策因素
-4. 机会点
-5. 风险提示与建议";
+请按照以下结构化格式输出分析结果：
+
+1. 事件类型（利好 / 利空 / 中性）
+2. 事件所属类别：
+   - 业绩类（预增、预亏）
+   - 产能类（扩产、投产）
+   - 订单类（新增订单）
+   - 政策类（产业支持、监管）
+   - 股权类（减持、增持）
+   - 其他（请说明）
+3. 对公司基本面的影响（实质 / 偏弱 / 无实质，请解释）
+4. 对行业情绪的影响（提升 / 较弱 / 中性）
+5. 是否属于短期炒作题材（是 / 否，并说明逻辑）
+6. 风险点（监管、兑现预期、数据不实、情绪过度等）
+7. 新闻情绪评分（0-10）
+8. 是否适合作为短线辅助判断（是 / 否；不是预测股价）
+
+请只做事件影响分析，不进行任何形式的涨跌预测。";
     }
 
     private static string BuildTechnicalPrompt(string context)
     {
-        return $@"以下是股票{{stockCode}}的技术面与交易数据，请结合趋势、指标与量能进行分析，并给出操作建议：
+        return $@"你是一名专业的短线交易技术面分析师。
+我将提供某只A股最近N日的K线（开盘价、收盘价、最高价、最低价、成交量）、
+以及MA5/10/20、MACD、RSI、换手率等基础指标。
+
+相关数据如下：
 {context}
 
-请按以下结构输出：
-1. 价格趋势与关键价位
-2. 技术指标信号
-3. 成交量与资金动向
-4. 买卖信号与风险
-5. 操作建议";
+请按照以下格式输出技术分析结果：
+
+1. 当前短期趋势方向（上涨 / 震荡 / 下跌，并给出逻辑）
+2. 突破/跌破关键信号：
+   - 是否突破MA5 / MA10
+   - 是否回踩确认成功
+   - MACD是否金叉/死叉
+   - RSI是否处在超买或超卖区域
+3. 成交量结构判断：
+   - 最近3日 vs 最近10日（成交量放大或萎缩）
+   - 主力资金活跃度（从成交量变化和换手率推断）
+4. 形态结构（若存在）：
+   - 突破、回踩、加速、缩量、双底、箱体、趋势线等
+5. 短线风险（列1–3条，如缩量、加速、高位、阴包阳等）
+6. 短线参与评分（0-10）
+   - 趋势强度
+   - 量价配合
+   - 波动结构
+   - 热点匹配度（如有输入）
+7. 短线策略建议（不预测股价；只说明更偏向观察/跟踪/轻仓试错）
+
+请严格避免做未来价格预测，只分析当前结构和风险。";
     }
 
     private static string ApplyPlaceholders(string template, IDictionary<string, string?> placeholders)
