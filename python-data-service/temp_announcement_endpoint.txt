@@ -1,0 +1,120 @@
+
+@app.route('/api/stock/announcements/<stock_code>', methods=['GET'])
+def get_announcements(stock_code):
+    """
+    获取股票公告数据
+    
+    Args:
+        stock_code: 股票代码
+        days: 获取天数，默认30天
+    
+    Returns:
+        JSON格式的公告数据，包含负面关键词标记
+    """
+    try:
+        from announcement_keywords import detect_negative_keywords
+        
+        days = int(request.args.get('days', 30))
+        clean_code = stock_code.strip().zfill(6)
+        
+        print(f"[{datetime.now()}] 请求公告数据: {stock_code}, 天数: {days}")
+        
+        # 尝试获取公告数据
+        df = None
+        try:
+            # AKShare的公告接口
+            df = ak.stock_notice_report(symbol=clean_code)
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ stock_notice_report失败: {str(e)}")
+            # 如果失败，返回空结果而不是错误
+            return jsonify({
+                'success': True,
+                'data': {
+                    'stockCode': stock_code,
+                    'days': 0,
+                    'announcements': [],
+                    'negativeCount': 0,
+                    'warning': '暂无公告数据或数据源不可用'
+                }
+            })
+        
+        if df is None or df.empty:
+            print(f"[{datetime.now()}] ⚠️ 未获取到公告数据: {stock_code}")
+            return jsonify({
+                'success': True,
+                'data': {
+                    'stockCode': stock_code,
+                    'days': 0,
+                    'announcements': [],
+                    'negativeCount': 0
+                }
+            })
+        
+        # 处理公告数据
+        announcements = []
+        negative_count = 0
+        
+        # 过滤最近N天的公告
+        cutoff_date = datetime.now() - timedelta(days=days)
+        
+        for _, row in df.iterrows():
+            # 提取公告信息
+            title = str(row.get('公告标题', '') or row.get('标题', ''))
+            pub_date_str = str(row.get('公告日期', '') or row.get('日期', ''))
+            notice_type = str(row.get('公告类型', '') or row.get('类型', ''))
+            
+            # 解析日期
+            try:
+                if pub_date_str:
+                    pub_date = pd.to_datetime(pub_date_str)
+                    if pub_date < cutoff_date:
+                        continue  # 跳过超出时间范围的公告
+                    pub_date_formatted = pub_date.strftime('%Y-%m-%d')
+                else:
+                    pub_date_formatted = ''
+            except:
+                pub_date_formatted = pub_date_str
+            
+            # 检测负面关键词
+            is_negative, matched_keywords = detect_negative_keywords(title)
+            
+            if is_negative:
+                negative_count += 1
+            
+            announcements.append({
+                'title': title,
+                'publishDate': pub_date_formatted,
+                'type': notice_type,
+                'isNegative': is_negative,
+                'keywords': matched_keywords
+            })
+        
+        # 按日期降序排序
+        announcements.sort(key=lambda x: x['publishDate'], reverse=True)
+        
+        # 只返回最近的公告
+        announcements = announcements[:50]  # 最多返回50条
+        
+        result = {
+            'stockCode': stock_code,
+            'days': days,
+            'count': len(announcements),
+            'negativeCount': negative_count,
+            'announcements': announcements,
+            'lastUpdate': datetime.now().isoformat()
+        }
+        
+        print(f"[{datetime.now()}] ✅ 成功获取公告: {stock_code}, 共{len(announcements)}条, 负面{negative_count}条")
+        return jsonify({'success': True, 'data': result})
+        
+    except Exception as e:
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        print(f"[{datetime.now()}] ❌ 获取公告失败: {error_msg}")
+        print(error_trace)
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'trace': error_trace if os.getenv('FLASK_ENV') == 'development' else None
+        }), 500
+

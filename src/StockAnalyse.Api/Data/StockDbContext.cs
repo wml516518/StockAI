@@ -29,6 +29,10 @@ public class StockDbContext : DbContext
     // 策略优化相关表
     public DbSet<StrategyOptimizationResult> StrategyOptimizationResults { get; set; }
     public DbSet<ParameterTestResult> ParameterTestResults { get; set; }
+    
+    // 高级数据源相关表
+    public DbSet<StockTechnical> StockTechnicals { get; set; }
+    public DbSet<StockAnnouncement> StockAnnouncements { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -92,6 +96,17 @@ public class StockDbContext : DbContext
         modelBuilder.Entity<StockDataCache>()
             .HasIndex(c => new { c.StockCode, c.DataType })
             .IsUnique();
+        
+        // 高级数据源相关索引
+        modelBuilder.Entity<StockTechnical>()
+            .HasIndex(t => new { t.StockCode, t.TradeDate })
+            .IsUnique();
+        
+        modelBuilder.Entity<StockAnnouncement>()
+            .HasIndex(a => new { a.StockCode, a.PublishDate });
+        
+        modelBuilder.Entity<StockAnnouncement>()
+            .HasIndex(a => a.IsNegative);
     }
 }
 

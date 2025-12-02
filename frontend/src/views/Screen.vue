@@ -989,13 +989,19 @@ const clearConditions = () => {
 
 // 手动执行自动选股服务
 const handleAutoSelection = async () => {
+  // 防止重复调用
+  if (autoSelectionLoading.value) {
+    console.warn('自动选股正在执行中，请勿重复点击')
+    return
+  }
+  
   autoSelectionLoading.value = true
   autoSelectionResults.value = null
   hasSearched.value = true
   
   try {
     const response = await api.post('/screen/auto-selection/execute', {}, {
-      timeout: 900000 // 15分钟超时，因为AI评分可能需要较长时间（已优化为并行处理）
+      timeout: 1200000 // 15分钟超时，因为AI评分可能需要较长时间（已优化为并行处理）
     })
     
     autoSelectionResults.value = response

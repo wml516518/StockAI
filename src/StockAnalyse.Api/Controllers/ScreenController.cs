@@ -199,21 +199,27 @@ public class ScreenController : ControllerBase
     [HttpPost("auto-selection/execute")]
     public async Task<ActionResult<AutoSelectionResult>> ExecuteAutoSelection()
     {
+        var requestId = Guid.NewGuid().ToString("N")[..8]; // 生成请求ID用于追踪
+        var requestTime = DateTime.Now;
+        
         try
         {
-            _logger.LogInformation("收到手动执行自动选股请求");
+            _logger.LogInformation("[请求ID: {RequestId}] 收到手动执行自动选股请求 - 时间: {RequestTime:yyyy-MM-dd HH:mm:ss.fff}, 来源IP: {RemoteIp}", 
+                requestId, requestTime, HttpContext.Connection.RemoteIpAddress);
             
             var result = await _autoSelectionService.ExecuteSelectionAsync();
             
-            _logger.LogInformation("手动执行自动选股完成 - 总股票: {Total}, 筛选: {Filtered}, 评分: {Scored}, 选中: {Selected}",
-                result.TotalStocks, result.FilteredCount, result.ScoredCount, result.SelectedCount);
+            var elapsed = (DateTime.Now - requestTime).TotalSeconds;
+            _logger.LogInformation("[请求ID: {RequestId}] 手动执行自动选股完成 - 耗时: {Elapsed:F2}秒, 总股票: {Total}, 筛选: {Filtered}, 评分: {Scored}, 选中: {Selected}",
+                requestId, elapsed, result.TotalStocks, result.FilteredCount, result.ScoredCount, result.SelectedCount);
             
             return Ok(result);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "手动执行自动选股时发生错误");
-            return StatusCode(500, new { error = "执行自动选股失败", message = ex.Message });
+            var elapsed = (DateTime.Now - requestTime).TotalSeconds;
+            _logger.LogError(ex, "[请求ID: {RequestId}] 手动执行自动选股时发生错误 - 耗时: {Elapsed:F2}秒", requestId, elapsed);
+            return StatusCode(500, new { error = "执行自动选股失败", message = ex.Message, requestId = requestId });
         }
     }
 

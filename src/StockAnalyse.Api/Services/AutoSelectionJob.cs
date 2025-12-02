@@ -12,11 +12,11 @@ public class AutoSelectionJob : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AutoSelectionJob> _logger;
-    private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(1); // 每分钟检查一次
+    private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(10); // 每10分钟检查一次
 
-    // 配置：执行时间（每个工作日的9:15和14:30）
+    // 配置：执行时间（每个工作日的9:15和14:15）
     private readonly TimeSpan _morningExecutionTime = new TimeSpan(9, 15, 0);
-    private readonly TimeSpan _afternoonExecutionTime = new TimeSpan(14, 30, 0);
+    private readonly TimeSpan _afternoonExecutionTime = new TimeSpan(14, 15, 0);
     private DateTime? _lastMorningExecution = null;
     private DateTime? _lastAfternoonExecution = null;
 
@@ -53,10 +53,10 @@ public class AutoSelectionJob : BackgroundService
                         _logger.LogInformation("检测到早上执行时间（9:15），开始执行自动选股任务...");
                         await ExecuteSelectionWithSaveAsync(stoppingToken);
                     }
-                    // 检查是否到了下午14:30的执行时间
+                    // 检查是否到了下午14:15的执行时间
                     else if (IsTimeToExecute(currentTime, _afternoonExecutionTime, ref _lastAfternoonExecution, now))
                     {
-                        _logger.LogInformation("检测到下午执行时间（14:30），开始执行自动选股任务...");
+                        _logger.LogInformation("检测到下午执行时间（14:15），开始执行自动选股任务...");
                         await ExecuteSelectionWithSaveAsync(stoppingToken);
                     }
                 }
@@ -78,16 +78,20 @@ public class AutoSelectionJob : BackgroundService
     /// </summary>
     private bool IsTimeToExecute(TimeSpan currentTime, TimeSpan targetTime, ref DateTime? lastExecution, DateTime now)
     {
-        // 检查当前时间是否在目标时间的1分钟窗口内
-        var timeDiff = Math.Abs((currentTime - targetTime).TotalMinutes);
-        
-        if (timeDiff <= 1.0) // 在目标时间的1分钟内
+        // 检查当前时间是否已经超过目标时间（允许在目标时间之后执行）
+        if (currentTime >= targetTime)
         {
             // 检查今天是否已经执行过
             if (lastExecution == null || lastExecution.Value.Date != now.Date)
             {
-                lastExecution = now;
-                return true;
+                // 检查是否在合理的时间范围内（目标时间到目标时间+2小时之间）
+                // 这样可以确保即使检查间隔较长，也能在时间点之后执行
+                var timeDiff = (currentTime - targetTime).TotalMinutes;
+                if (timeDiff <= 120) // 在目标时间后2小时内
+                {
+                    lastExecution = now;
+                    return true;
+                }
             }
         }
         

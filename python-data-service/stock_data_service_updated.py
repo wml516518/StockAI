@@ -106,6 +106,86 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
+def safe_akshare_call(func, *args, max_retries=3, retry_delay=2, **kwargs):
+    """
+    安全地调用AKShare函数，处理JSONDecodeError和其他异常
+    
+    Args:
+        func: AKShare函数
+        *args: 位置参数
+        max_retries: 最大重试次数
+        retry_delay: 重试延迟（秒）
+        **kwargs: 关键字参数
+    
+    Returns:
+        函数返回的结果，如果失败则返回None
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            result = func(*args, **kwargs)
+            return result
+        except json.JSONDecodeError as json_err:
+            last_error = json_err
+            error_msg = str(json_err)
+            print(f"[{datetime.now()}] ⚠️ [尝试 {attempt + 1}/{max_retries}] AKShare JSON解析失败: {error_msg}")
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1)
+                print(f"[{datetime.now()}] 等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+            else:
+                print(f"[{datetime.now()}] ❌ 所有重试均失败，返回None")
+        except TypeError as type_err:
+            # 参数错误，不需要重试，直接返回None
+            error_msg = str(type_err)
+            print(f"[{datetime.now()}] ⚠️ AKShare参数错误: {error_msg}")
+            return None
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+            error_type = type(e).__name__
+            print(f"[{datetime.now()}] ⚠️ [尝试 {attempt + 1}/{max_retries}] AKShare调用失败: {error_type}: {error_msg}")
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1)
+                print(f"[{datetime.now()}] 等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+            else:
+                print(f"[{datetime.now()}] ❌ 所有重试均失败，返回None")
+    
+    return None
+
+def try_akshare_with_params(func, stock_code, param_names=['symbol', 'stock']):
+    """
+    尝试使用不同的参数名调用AKShare函数
+    
+    Args:
+        func: AKShare函数
+        stock_code: 股票代码
+        param_names: 要尝试的参数名列表
+    
+    Returns:
+        函数返回的结果，如果所有参数名都失败则返回None
+    """
+    # 首先尝试作为位置参数
+    try:
+        result = safe_akshare_call(func, stock_code)
+        if result is not None:
+            return result
+    except:
+        pass
+    
+    # 然后尝试不同的关键字参数名
+    for param_name in param_names:
+        try:
+            kwargs = {param_name: stock_code}
+            result = safe_akshare_call(func, **kwargs)
+            if result is not None:
+                return result
+        except:
+            continue
+    
+    return None
+
 @app.route('/health', methods=['GET'])
 def health():
     """健康检查"""
@@ -319,54 +399,22 @@ def get_stock_news(stock_code):
         df_news = None
         last_error = None
         
-        for attempt in range(max_retries):
-            try:
-                df_news = ak.stock_news_em(symbol=clean_code)
-                break  # 成功获取数据，退出重试循环
-            except json.JSONDecodeError as json_err:
-                last_error = json_err
-                error_msg = str(json_err)
-                print(f"[{datetime.now()}] ⚠️ [尝试 {attempt + 1}/{max_retries}] AKShare stock_news_em JSON解析失败: {error_msg}")
-                if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2  # 递增等待时间：2秒、4秒、6秒
-                    print(f"[{datetime.now()}] 等待 {wait_time} 秒后重试...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"[{datetime.now()}] ❌ 所有重试均失败，返回空结果")
-                    # 最后一次重试失败，返回空结果而不是抛出异常
-                    return jsonify({
-                        'success': True,
-                        'data': {
-                            'stockCode': stock_code,
-                            'normalizedCode': clean_code,
-                            'count': 0,
-                            'fetchedAt': datetime.now().isoformat(),
-                            'items': [],
-                            'warning': '数据源暂时不可用，请稍后重试'
-                        }
-                    })
-            except Exception as e:
-                last_error = e
-                error_msg = str(e)
-                error_type = type(e).__name__
-                print(f"[{datetime.now()}] ⚠️ [尝试 {attempt + 1}/{max_retries}] AKShare stock_news_em 调用失败: {error_type}: {error_msg}")
-                if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2
-                    print(f"[{datetime.now()}] 等待 {wait_time} 秒后重试...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"[{datetime.now()}] ❌ 所有重试均失败，返回空结果")
-                    return jsonify({
-                        'success': True,
-                        'data': {
-                            'stockCode': stock_code,
-                            'normalizedCode': clean_code,
-                            'count': 0,
-                            'fetchedAt': datetime.now().isoformat(),
-                            'items': [],
-                            'warning': f'获取新闻数据失败: {error_type}'
-                        }
-                    })
+        # 使用安全的AKShare调用函数
+        df_news = safe_akshare_call(ak.stock_news_em, symbol=clean_code, max_retries=max_retries)
+        
+        if df_news is None:
+            print(f"[{datetime.now()}] ❌ 所有重试均失败，返回空结果")
+            return jsonify({
+                'success': True,
+                'data': {
+                    'stockCode': stock_code,
+                    'normalizedCode': clean_code,
+                    'count': 0,
+                    'fetchedAt': datetime.now().isoformat(),
+                    'items': [],
+                    'warning': '数据源暂时不可用，请稍后重试'
+                }
+            })
 
         if df_news is None or df_news.empty:
             print(f"[{datetime.now()}] ⚠️ AKShare stock_news_em 返回空数据: {clean_code}")
@@ -541,22 +589,19 @@ def get_fundamental(stock_code):
             print(f"[{datetime.now()}] 方法1: 使用stock_financial_abstract，股票代码: {clean_code}")
             
             # 获取财务摘要数据（返回格式：行是指标，列是日期）
-            df = ak.stock_financial_abstract(symbol=clean_code)
+            df = safe_akshare_call(ak.stock_financial_abstract, symbol=clean_code)
             
             if df is None or df.empty:
-                print(f"[{datetime.now()}] ⚠️ 方法1: AKShare返回空数据")
+                print(f"[{datetime.now()}] ⚠️ 方法1: AKShare返回空数据，继续尝试其他方法")
                 raise ValueError(f"AKShare返回空数据，股票代码 {clean_code} 可能没有财务数据")
             
             # 获取股票基本信息
-            try:
-                df_info = ak.stock_individual_info_em(symbol=clean_code)
-                stock_name = '未知'
-                if df_info is not None and not df_info.empty:
-                    name_row = df_info[df_info['item'] == '股票简称']
-                    if not name_row.empty:
-                        stock_name = name_row.iloc[0]['value']
-            except:
-                stock_name = '未知'
+            df_info = safe_akshare_call(ak.stock_individual_info_em, symbol=clean_code)
+            stock_name = '未知'
+            if df_info is not None and not df_info.empty:
+                name_row = df_info[df_info['item'] == '股票简称']
+                if not name_row.empty:
+                    stock_name = name_row.iloc[0]['value']
             
             # 找到最新的报告期（第一列是'选项'，第二列是'指标'，后面是日期列）
             date_columns = [col for col in df.columns if col not in ['选项', '指标']]
@@ -635,6 +680,9 @@ def get_fundamental(stock_code):
             
             print(f"[{datetime.now()}] ✅ 成功获取数据: {stock_code} ({stock_name})")
             return jsonify({'success': True, 'data': result})
+        except ValueError as e1:
+            # 这是预期的错误（数据不可用），不需要详细堆栈，继续尝试其他方法
+            print(f"[{datetime.now()}] ⚠️ 方法1失败: {str(e1)}")
         except Exception as e1:
             print(f"[{datetime.now()}] ⚠️ 方法1失败: {str(e1)}")
             print(f"[{datetime.now()}] 错误详情: {traceback.format_exc()}")
@@ -647,19 +695,16 @@ def get_fundamental(stock_code):
             
             # 尝试不同的利润表函数名（AKShare版本可能不同）
             df_profit = None
-            try:
-                # 尝试新版本函数名
-                if hasattr(ak, 'stock_profit_em'):
-                    df_profit = ak.stock_profit_em(symbol=clean_code)
-                elif hasattr(ak, 'stock_lrb_em'):
-                    df_profit = ak.stock_lrb_em(symbol=clean_code)
-                elif hasattr(ak, 'stock_profit_sheet_by_report_em'):
-                    df_profit = ak.stock_profit_sheet_by_report_em(symbol=clean_code)
-            except Exception as e:
-                print(f"[{datetime.now()}] ⚠️ 方法2: 无法找到利润表函数: {str(e)}")
+            # 尝试新版本函数名，使用智能参数尝试
+            if hasattr(ak, 'stock_profit_em'):
+                df_profit = try_akshare_with_params(ak.stock_profit_em, clean_code)
+            elif hasattr(ak, 'stock_lrb_em'):
+                df_profit = try_akshare_with_params(ak.stock_lrb_em, clean_code)
+            elif hasattr(ak, 'stock_profit_sheet_by_report_em'):
+                df_profit = try_akshare_with_params(ak.stock_profit_sheet_by_report_em, clean_code)
             
             if df_profit is None:
-                print(f"[{datetime.now()}] ⚠️ 方法2: AKShare返回None或函数不存在")
+                print(f"[{datetime.now()}] ⚠️ 方法2: 无法找到利润表函数或调用失败，继续尝试其他方法")
                 raise ValueError("利润表函数不可用或返回None")
             
             if not df_profit.empty:
@@ -690,19 +735,16 @@ def get_fundamental(stock_code):
             
             # 尝试获取资产负债表
             df_balance = None
-            try:
-                # 尝试不同的资产负债表函数名
-                if hasattr(ak, 'stock_balance_sheet_by_report_em'):
-                    df_balance = ak.stock_balance_sheet_by_report_em(symbol=clean_code)
-                elif hasattr(ak, 'stock_zcfz_em'):
-                    df_balance = ak.stock_zcfz_em(symbol=clean_code)
-                elif hasattr(ak, 'stock_balance_sheet_em'):
-                    df_balance = ak.stock_balance_sheet_em(symbol=clean_code)
-            except Exception as e:
-                print(f"[{datetime.now()}] ⚠️ 方法3: 无法找到资产负债表函数: {str(e)}")
+            # 尝试不同的资产负债表函数名，使用智能参数尝试
+            if hasattr(ak, 'stock_balance_sheet_by_report_em'):
+                df_balance = try_akshare_with_params(ak.stock_balance_sheet_by_report_em, clean_code)
+            elif hasattr(ak, 'stock_zcfz_em'):
+                df_balance = try_akshare_with_params(ak.stock_zcfz_em, clean_code)
+            elif hasattr(ak, 'stock_balance_sheet_em'):
+                df_balance = try_akshare_with_params(ak.stock_balance_sheet_em, clean_code)
             
             if df_balance is None:
-                print(f"[{datetime.now()}] ⚠️ 方法3: AKShare返回None或函数不存在")
+                print(f"[{datetime.now()}] ⚠️ 方法3: 无法找到资产负债表函数或调用失败，继续尝试其他方法")
                 raise ValueError("资产负债表函数不可用或返回None")
             
             if not df_balance.empty:
@@ -819,6 +861,126 @@ def get_technical_indicators(stock_code):
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
         
         # 获取最新一天的数据作为摘要
+
+@app.route('/api/stock/announcements/<stock_code>', methods=['GET'])
+def get_announcements(stock_code):
+    """
+    获取股票公告数据
+    
+    Args:
+        stock_code: 股票代码
+        days: 获取天数，默认30天
+    
+    Returns:
+        JSON格式的公告数据，包含负面关键词标记
+    """
+    try:
+        from announcement_keywords import detect_negative_keywords
+        
+        days = int(request.args.get('days', 30))
+        clean_code = stock_code.strip().zfill(6)
+        
+        print(f"[{datetime.now()}] 请求公告数据: {stock_code}, 天数: {days}")
+        
+        # 尝试获取公告数据
+        df = None
+        try:
+            # AKShare的公告接口
+            df = ak.stock_notice_report(symbol=clean_code)
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ stock_notice_report失败: {str(e)}")
+            # 如果失败，返回空结果而不是错误
+            return jsonify({
+                'success': True,
+                'data': {
+                    'stockCode': stock_code,
+                    'days': 0,
+                    'announcements': [],
+                    'negativeCount': 0,
+                    'warning': '暂无公告数据或数据源不可用'
+                }
+            })
+        
+        if df is None or df.empty:
+            print(f"[{datetime.now()}] ⚠️ 未获取到公告数据: {stock_code}")
+            return jsonify({
+                'success': True,
+                'data': {
+                    'stockCode': stock_code,
+                    'days': 0,
+                    'announcements': [],
+                    'negativeCount': 0
+                }
+            })
+        
+        # 处理公告数据
+        announcements = []
+        negative_count = 0
+        
+        # 过滤最近N天的公告
+        cutoff_date = datetime.now() - timedelta(days=days)
+        
+        for _, row in df.iterrows():
+            # 提取公告信息
+            title = str(row.get('公告标题', '') or row.get('标题', ''))
+            pub_date_str = str(row.get('公告日期', '') or row.get('日期', ''))
+            notice_type = str(row.get('公告类型', '') or row.get('类型', ''))
+            
+            # 解析日期
+            try:
+                if pub_date_str:
+                    pub_date = pd.to_datetime(pub_date_str)
+                    if pub_date < cutoff_date:
+                        continue  # 跳过超出时间范围的公告
+                    pub_date_formatted = pub_date.strftime('%Y-%m-%d')
+                else:
+                    pub_date_formatted = ''
+            except:
+                pub_date_formatted = pub_date_str
+            
+            # 检测负面关键词
+            is_negative, matched_keywords = detect_negative_keywords(title)
+            
+            if is_negative:
+                negative_count += 1
+            
+            announcements.append({
+                'title': title,
+                'publishDate': pub_date_formatted,
+                'type': notice_type,
+                'isNegative': is_negative,
+                'keywords': matched_keywords
+            })
+        
+        # 按日期降序排序
+        announcements.sort(key=lambda x: x['publishDate'], reverse=True)
+        
+        # 只返回最近的公告
+        announcements = announcements[:50]  # 最多返回50条
+        
+        result = {
+            'stockCode': stock_code,
+            'days': days,
+            'count': len(announcements),
+            'negativeCount': negative_count,
+            'announcements': announcements,
+            'lastUpdate': datetime.now().isoformat()
+        }
+        
+        print(f"[{datetime.now()}] ✅ 成功获取公告: {stock_code}, 共{len(announcements)}条, 负面{negative_count}条")
+        return jsonify({'success': True, 'data': result})
+        
+    except Exception as e:
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        print(f"[{datetime.now()}] ❌ 获取公告失败: {error_msg}")
+        print(error_trace)
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'trace': error_trace if os.getenv('FLASK_ENV') == 'development' else None
+        }), 500
+
         latest = df.iloc[-1] if not df.empty else {}
         
         result = {

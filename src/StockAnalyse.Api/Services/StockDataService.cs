@@ -7,6 +7,18 @@ using StockAnalyse.Api.Services.Interfaces;
 
 namespace StockAnalyse.Api.Services;
 
+/// <summary>
+/// 股票数据源枚举
+/// </summary>
+public enum StockDataSource
+{
+    EastMoney,      // 东方财富
+    Tencent,        // 腾讯财经
+    Sina,           // 新浪财经
+    AKShare,        // AKShare (通过Python服务)
+    TUShare         // TUShare (通过Python服务)
+}
+
 public class StockDataService : IStockDataService
 {
     private readonly StockDbContext _context;
@@ -16,6 +28,18 @@ public class StockDataService : IStockDataService
 
     private const string FundamentalCacheType = "fundamental";
     private static readonly TimeSpan FundamentalCacheDuration = TimeSpan.FromHours(12);
+    
+    /// <summary>
+    /// 数据源优先级顺序（按顺序尝试）
+    /// </summary>
+    private static readonly StockDataSource[] DataSourcePriority = new[]
+    {
+        StockDataSource.EastMoney,   // 优先使用东方财富
+        StockDataSource.Tencent,     // 其次腾讯财经
+        StockDataSource.Sina,         // 再次新浪财经
+        StockDataSource.AKShare,     // 然后AKShare
+        StockDataSource.TUShare       // 最后TUShare
+    };
 
     public StockDataService(StockDbContext context, ILogger<StockDataService> logger, HttpClient httpClient, IStockDataCacheService cacheService)
     {
@@ -113,18 +137,18 @@ public class StockDataService : IStockDataService
     {
         try
         {
-            // 优先尝试从东方财富获取
-            var stock = await FetchEastMoneyDataAsync(stockCode);
-            
-            // 如果东方财富失败，尝试新浪财经
-            if (stock == null)
-            {
-                stock = await FetchSinaDataAsync(stockCode);
-            }
+            // 使用多数据源自动切换机制
+            var stock = await FetchWithMultipleSourcesAsync(stockCode);
             
             if (stock != null)
             {
                 await SaveStockDataAsync(stock);
+            }
+            else
+            {
+                // 如果所有数据源都失败，从数据库获取最新数据
+                _logger.LogWarning("所有数据源均失败，从数据库获取股票 {StockCode} 的最新数据", stockCode);
+                stock = await _context.Stocks.FirstOrDefaultAsync(s => s.Code == stockCode);
             }
             
             return stock;
@@ -137,22 +161,63 @@ public class StockDataService : IStockDataService
             return await _context.Stocks.FirstOrDefaultAsync(s => s.Code == stockCode);
         }
     }
+    
+    /// <summary>
+    /// 使用多数据源自动切换机制获取股票数据
+    /// </summary>
+    private async Task<Stock?> FetchWithMultipleSourcesAsync(string stockCode)
+    {
+        Exception? lastException = null;
+        
+        foreach (var dataSource in DataSourcePriority)
+        {
+            try
+            {
+                _logger.LogDebug("尝试从 {DataSource} 获取股票 {StockCode} 数据", dataSource, stockCode);
+                
+                Stock? stock = dataSource switch
+                {
+                    StockDataSource.EastMoney => await FetchEastMoneyDataAsync(stockCode),
+                    StockDataSource.Tencent => await FetchTencentDataAsync(stockCode),
+                    StockDataSource.Sina => await FetchSinaDataAsync(stockCode),
+                    StockDataSource.AKShare => await FetchAKShareDataAsync(stockCode),
+                    StockDataSource.TUShare => await FetchTUShareDataAsync(stockCode),
+                    _ => null
+                };
+                
+                if (stock != null)
+                {
+                    _logger.LogInformation("成功从 {DataSource} 获取股票 {StockCode} 数据", dataSource, stockCode);
+                    return stock;
+                }
+                else
+                {
+                    _logger.LogDebug("{DataSource} 返回空数据，尝试下一个数据源", dataSource);
+                }
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                _logger.LogWarning(ex, "{DataSource} 获取股票 {StockCode} 数据失败，尝试下一个数据源", dataSource, stockCode);
+                // 继续尝试下一个数据源
+            }
+        }
+        
+        // 所有数据源都失败
+        if (lastException != null)
+        {
+            _logger.LogError(lastException, "所有数据源均无法获取股票 {StockCode} 数据", stockCode);
+        }
+        
+        return null;
+    }
 
     public async Task<Stock?> GetWatchlistRealTimeQuoteAsync(string stockCode)
     {
         try
         {
-            // 优先尝试从东方财富获取
-            var stock = await FetchEastMoneyDataAsync(stockCode);
-            
-            // 如果东方财富失败，尝试新浪财经
-            if (stock == null)
-            {
-                stock = await FetchSinaDataAsync(stockCode);
-            }
-            
-            // 注意：这里不保存到数据库，确保总是获取最新数据
-            return stock;
+            // 使用多数据源自动切换机制（不保存到数据库）
+            return await FetchWithMultipleSourcesAsync(stockCode);
         }
         catch (Exception ex)
         {
@@ -401,9 +466,13 @@ public class StockDataService : IStockDataService
             // 补充PE(PETTM f162)与PB(f167)字段，避免PE/PB一直为0导致筛选结果为空
             var url = $"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f58,f107,f137,f43,f46,f44,f45,f47,f48,f168,f60,f170,f116,f171,f117,f172,f169,f162,f167&fltt=2";
             
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.Add("Referer", "http://quote.eastmoney.com/");
             
-            var response = await _httpClient.GetStringAsync(url);
+            using var responseMsg = await _httpClient.SendAsync(request);
+            responseMsg.EnsureSuccessStatusCode();
+            var response = await responseMsg.Content.ReadAsStringAsync();
             
             dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
             
@@ -462,6 +531,154 @@ public class StockDataService : IStockDataService
     }
     
     /// <summary>
+    /// 从腾讯财经获取单个股票数据
+    /// </summary>
+    private async Task<Stock?> FetchTencentDataAsync(string stockCode)
+    {
+        try
+        {
+            // 使用批量方法获取单个股票
+            var stocks = await FetchBatchFromTencentAsync(new List<string> { stockCode });
+            return stocks.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "腾讯财经获取失败: {Code}", stockCode);
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 从AKShare获取单个股票数据（通过Python服务）
+    /// </summary>
+    private async Task<Stock?> FetchAKShareDataAsync(string stockCode)
+    {
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") ?? "http://localhost:5001";
+            var url = $"{pythonServiceUrl}/api/stock/quote/{stockCode}";
+            
+            _logger.LogDebug("尝试从Python服务(AKShare)获取股票 {StockCode} 数据", stockCode);
+            
+            using var pythonClient = new HttpClient();
+            pythonClient.Timeout = TimeSpan.FromSeconds(10);
+            
+            var response = await pythonClient.GetStringAsync(url);
+            var jsonData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(response);
+            
+            if (!jsonData.GetProperty("success").GetBoolean())
+            {
+                _logger.LogWarning("Python服务(AKShare)返回失败: {Error}", jsonData.GetProperty("error").GetString());
+                return null;
+            }
+            
+            if (!jsonData.TryGetProperty("data", out var dataElement))
+            {
+                _logger.LogWarning("Python服务(AKShare)返回数据格式不正确");
+                return null;
+            }
+            
+            // 解析Python服务返回的数据
+            var stock = new Stock
+            {
+                Code = stockCode,
+                Name = dataElement.TryGetProperty("name", out var nameEl) ? (nameEl.GetString() ?? "未知") : "未知",
+                Market = stockCode.StartsWith("6") ? "SH" : "SZ",
+                CurrentPrice = dataElement.TryGetProperty("currentPrice", out var cp) && cp.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(cp.GetDecimal()) : 0,
+                OpenPrice = dataElement.TryGetProperty("openPrice", out var op) && op.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(op.GetDecimal()) : 0,
+                ClosePrice = dataElement.TryGetProperty("prevClose", out var pc) && pc.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(pc.GetDecimal()) : 0,
+                HighPrice = dataElement.TryGetProperty("highPrice", out var hp) && hp.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(hp.GetDecimal()) : 0,
+                LowPrice = dataElement.TryGetProperty("lowPrice", out var lp) && lp.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(lp.GetDecimal()) : 0,
+                Volume = dataElement.TryGetProperty("volume", out var vol) && vol.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(vol.GetDecimal()) : 0,
+                Turnover = dataElement.TryGetProperty("turnover", out var to) && to.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(to.GetDecimal()) : 0,
+                ChangeAmount = dataElement.TryGetProperty("changeAmount", out var ca) && ca.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(ca.GetDecimal()) : 0,
+                ChangePercent = dataElement.TryGetProperty("changePercent", out var cpct) && cpct.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(cpct.GetDecimal()) : 0,
+                TurnoverRate = dataElement.TryGetProperty("turnoverRate", out var tr) && tr.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(tr.GetDecimal()) : 0,
+                PE = dataElement.TryGetProperty("pe", out var pe) && pe.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(pe.GetDecimal()) : null,
+                PB = dataElement.TryGetProperty("pb", out var pb) && pb.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(pb.GetDecimal()) : null,
+                LastUpdate = DateTime.Now
+            };
+            
+            return stock;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AKShare获取失败: {Code}", stockCode);
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// 从TUShare获取单个股票数据（通过Python服务）
+    /// </summary>
+    private async Task<Stock?> FetchTUShareDataAsync(string stockCode)
+    {
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") ?? "http://localhost:5001";
+            // 假设Python服务提供TUShare接口，如果不存在则返回null
+            var url = $"{pythonServiceUrl}/api/stock/tushare/quote/{stockCode}";
+            
+            _logger.LogDebug("尝试从Python服务(TUShare)获取股票 {StockCode} 数据", stockCode);
+            
+            using var pythonClient = new HttpClient();
+            pythonClient.Timeout = TimeSpan.FromSeconds(10);
+            
+            try
+            {
+                var response = await pythonClient.GetStringAsync(url);
+                var jsonData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(response);
+                
+                if (!jsonData.GetProperty("success").GetBoolean())
+                {
+                    _logger.LogDebug("Python服务(TUShare)返回失败: {Error}", jsonData.GetProperty("error").GetString());
+                    return null;
+                }
+                
+                if (!jsonData.TryGetProperty("data", out var dataElement))
+                {
+                    _logger.LogDebug("Python服务(TUShare)返回数据格式不正确");
+                    return null;
+                }
+                
+                // 解析Python服务返回的数据（格式与AKShare类似）
+                var stock = new Stock
+                {
+                    Code = stockCode,
+                    Name = dataElement.TryGetProperty("name", out var nameEl) ? (nameEl.GetString() ?? "未知") : "未知",
+                    Market = stockCode.StartsWith("6") ? "SH" : "SZ",
+                    CurrentPrice = dataElement.TryGetProperty("currentPrice", out var cp) && cp.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(cp.GetDecimal()) : 0,
+                    OpenPrice = dataElement.TryGetProperty("openPrice", out var op) && op.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(op.GetDecimal()) : 0,
+                    ClosePrice = dataElement.TryGetProperty("prevClose", out var pc) && pc.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(pc.GetDecimal()) : 0,
+                    HighPrice = dataElement.TryGetProperty("highPrice", out var hp) && hp.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(hp.GetDecimal()) : 0,
+                    LowPrice = dataElement.TryGetProperty("lowPrice", out var lp) && lp.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(lp.GetDecimal()) : 0,
+                    Volume = dataElement.TryGetProperty("volume", out var vol) && vol.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(vol.GetDecimal()) : 0,
+                    Turnover = dataElement.TryGetProperty("turnover", out var to) && to.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(to.GetDecimal()) : 0,
+                    ChangeAmount = dataElement.TryGetProperty("changeAmount", out var ca) && ca.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(ca.GetDecimal()) : 0,
+                    ChangePercent = dataElement.TryGetProperty("changePercent", out var cpct) && cpct.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(cpct.GetDecimal()) : 0,
+                    TurnoverRate = dataElement.TryGetProperty("turnoverRate", out var tr) && tr.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(tr.GetDecimal()) : 0,
+                    PE = dataElement.TryGetProperty("pe", out var pe) && pe.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(pe.GetDecimal()) : null,
+                    PB = dataElement.TryGetProperty("pb", out var pb) && pb.ValueKind == System.Text.Json.JsonValueKind.Number ? SafeConvertToDecimal(pb.GetDecimal()) : null,
+                    LastUpdate = DateTime.Now
+                };
+                
+                return stock;
+            }
+            catch (HttpRequestException httpEx) when (httpEx.Message.Contains("404") || httpEx.Message.Contains("Not Found"))
+            {
+                // TUShare接口可能不存在，这是正常的
+                _logger.LogDebug("TUShare接口不存在或未实现，跳过");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "TUShare获取失败: {Code} (可能未实现)", stockCode);
+            return null;
+        }
+    }
+    
+    /// <summary>
     /// 从新浪财经获取（备用）
     /// </summary>
     private async Task<Stock?> FetchSinaDataAsync(string stockCode)
@@ -509,21 +726,8 @@ public class StockDataService : IStockDataService
 
     public async Task<int> FetchAndStoreDailyHistoryAsync(string stockCode, DateTime startDate, DateTime endDate)
     {
-        // 方案1: 尝试东方财富接口（主要数据源）
-        try
-        {
-            var result = await FetchFromEastMoneyAsync(stockCode, startDate, endDate);
-            if (result > 0)
-            {
-                return result;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "东方财富接口获取股票 {StockCode} 历史数据失败，尝试备用方案", stockCode);
-        }
 
-        // 方案2: 尝试Python服务（AKShare数据源）- 备用方案
+         // 方案1: 尝试Python服务（AKShare数据源）
         try
         {
             var result = await FetchFromPythonServiceAsync(stockCode, startDate, endDate);
@@ -536,6 +740,19 @@ public class StockDataService : IStockDataService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Python服务获取股票 {StockCode} 历史数据失败，尝试其他备用方案", stockCode);
+        }
+        // 方案2: 尝试东方财富接口（主要数据源）- 备用方案
+        try
+        {
+            var result = await FetchFromEastMoneyAsync(stockCode, startDate, endDate);
+            if (result > 0)
+            {
+                return result;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "东方财富接口获取股票 {StockCode} 历史数据失败，尝试备用方案", stockCode);
         }
 
         // 方案3: 尝试新浪财经接口（备用方案）
@@ -569,8 +786,6 @@ public class StockDataService : IStockDataService
         var end = endDate.ToString("yyyyMMdd");
 
         var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={end}";
-        ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
-
         // 添加重试机制（最多3次）
         string? response = null;
         int maxRetries = 3;
@@ -578,31 +793,26 @@ public class StockDataService : IStockDataService
         {
             try
             {
-                response = await _httpClient.GetStringAsync(url);
+                // 使用 HttpRequestMessage 而不是修改全局 DefaultRequestHeaders
+                // 修复并发请求时的竞态条件
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                request.Headers.Add("Referer", "http://quote.eastmoney.com/");
+                request.Headers.Add("Connection", "close"); // 避免保持连接导致的问题
+
+                using var httpResponse = await _httpClient.SendAsync(request);
+                httpResponse.EnsureSuccessStatusCode();
+                response = await httpResponse.Content.ReadAsStringAsync();
                 break; // 成功获取，退出重试循环
-            }
-            catch (System.Net.Http.HttpRequestException ex) when (ex.Message.Contains("502") || ex.Message.Contains("Bad Gateway"))
-            {
-                if (attempt < maxRetries)
-                {
-                    var delay = attempt * 2; // 递增延迟：2秒、4秒、6秒
-                    _logger.LogWarning("获取股票 {StockCode} 历史数据失败（502错误），{Attempt}/{MaxRetries}，等待 {Delay} 秒后重试", 
-                        stockCode, attempt, maxRetries, delay);
-                    await Task.Delay(TimeSpan.FromSeconds(delay));
-                }
-                else
-                {
-                    _logger.LogWarning("获取股票 {StockCode} 历史数据失败（502错误），所有重试均失败，将尝试备用方案", stockCode);
-                    throw; // 抛出异常，让调用者尝试备用方案
-                }
             }
             catch (Exception ex)
             {
+                // 捕获所有异常，包括 HttpRequestException, IOException 等
                 if (attempt < maxRetries)
                 {
-                    var delay = attempt * 2;
-                    _logger.LogWarning(ex, "获取股票 {StockCode} 历史数据失败，{Attempt}/{MaxRetries}，等待 {Delay} 秒后重试", 
-                        stockCode, attempt, maxRetries, delay);
+                    var delay = attempt * 2; // 递增延迟：2秒、4秒、6秒
+                    _logger.LogWarning("获取股票 {StockCode} 历史数据失败 ({Error})，{Attempt}/{MaxRetries}，等待 {Delay} 秒后重试", 
+                        stockCode, ex.Message, attempt, maxRetries, delay);
                     await Task.Delay(TimeSpan.FromSeconds(delay));
                 }
                 else
@@ -931,10 +1141,15 @@ public class StockDataService : IStockDataService
             
             var url = $"http://qt.gtimg.cn/q={string.Join(",", codeList)}";
             
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
             
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            
+            using var responseMsg = await _httpClient.SendAsync(request);
+            responseMsg.EnsureSuccessStatusCode();
             // 使用GetByteArrayAsync然后手动解码，解决编码问题
-            var responseBytes = await _httpClient.GetByteArrayAsync(url);
+            var responseBytes = await responseMsg.Content.ReadAsByteArrayAsync();
             // 腾讯财经返回的是GBK编码
             // .NET Core需要注册CodePages编码提供程序才能使用GBK
             // 确保编码提供程序已注册（如果未注册则注册，已注册则忽略）
@@ -1624,9 +1839,13 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试实时行情扩展接口");
             
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.Add("Referer", "http://quote.eastmoney.com/");
             
-            var response = await _httpClient.GetStringAsync(url);
+            using var responseMsg = await _httpClient.SendAsync(request);
+            responseMsg.EnsureSuccessStatusCode();
+            var response = await responseMsg.Content.ReadAsStringAsync();
             dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
             
             if (data?.data != null)
@@ -1671,9 +1890,13 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试F10接口获取基本面信息: {Url}", url);
             
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "https://data.eastmoney.com/");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.Add("Referer", "https://data.eastmoney.com/");
             
-            var response = await _httpClient.GetStringAsync(url);
+            using var responseMsg = await _httpClient.SendAsync(request);
+            responseMsg.EnsureSuccessStatusCode();
+            var response = await responseMsg.Content.ReadAsStringAsync();
             _logger.LogDebug("F10接口响应长度: {Length} 字符", response.Length);
             
             // 先尝试解析为JObject，以便更好地处理
@@ -1856,9 +2079,13 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试财务指标接口: {Url}", url);
             
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "https://data.eastmoney.com/");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.Add("Referer", "https://data.eastmoney.com/");
             
-            var response = await _httpClient.GetStringAsync(url);
+            using var responseMsg = await _httpClient.SendAsync(request);
+            responseMsg.EnsureSuccessStatusCode();
+            var response = await responseMsg.Content.ReadAsStringAsync();
             
             var jsonData = Newtonsoft.Json.Linq.JObject.Parse(response);
             
@@ -1906,9 +2133,13 @@ public class StockDataService : IStockDataService
             
             _logger.LogDebug("尝试旧接口: {Url}", url);
             
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "https://data.eastmoney.com/");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.Add("Referer", "https://data.eastmoney.com/");
             
-            var response = await _httpClient.GetStringAsync(url);
+            using var responseMsg = await _httpClient.SendAsync(request);
+            responseMsg.EnsureSuccessStatusCode();
+            var response = await responseMsg.Content.ReadAsStringAsync();
             
             var jsonData = Newtonsoft.Json.Linq.JObject.Parse(response);
             
@@ -2136,9 +2367,13 @@ public class StockDataService : IStockDataService
                 
                 _logger.LogDebug("请求东方财富股票列表，页码: {PageNum}, URL: {Url}", pageNum, url);
                 
-                ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                request.Headers.Add("Referer", "http://quote.eastmoney.com/");
                 
-                var response = await _httpClient.GetStringAsync(url);
+                using var responseMsg = await _httpClient.SendAsync(request);
+                responseMsg.EnsureSuccessStatusCode();
+                var response = await responseMsg.Content.ReadAsStringAsync();
                 
                 dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
                 

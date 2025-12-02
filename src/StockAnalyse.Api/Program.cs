@@ -110,6 +110,9 @@ builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IStrategyConfigService, StrategyConfigService>();
 builder.Services.AddScoped<IStrategyOptimizationService, StrategyOptimizationService>();
 
+// 高级数据源服务
+builder.Services.AddScoped<IAnnouncementService, AnnouncementService>();
+
 // 注册后台服务（做T方案定时更新）
 builder.Services.AddHostedService<TradingPlanBackgroundService>();
 

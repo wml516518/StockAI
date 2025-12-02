@@ -12,6 +12,10 @@ public class AutoSelectionService : IAutoSelectionService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AutoSelectionService> _logger;
+    
+    // 防止重复执行的锁
+    private readonly SemaphoreSlim _executionLock = new SemaphoreSlim(1, 1);
+    private bool _isExecuting = false;
 
     // 配置：选股规则 - 技术面条件
     private const decimal MinPrice = 8.0m; // 最低价格（过滤低价垃圾股）
@@ -41,15 +45,35 @@ public class AutoSelectionService : IAutoSelectionService
     /// </summary>
     public async Task<AutoSelectionResult> ExecuteSelectionAsync(CancellationToken cancellationToken = default)
     {
-        using var scope = _serviceProvider.CreateScope();
-        var stockDataService = scope.ServiceProvider.GetRequiredService<IStockDataService>();
-        var industryService = scope.ServiceProvider.GetRequiredService<IIndustryService>();
-        var marketService = scope.ServiceProvider.GetRequiredService<IMarketService>();
-        var aiService = scope.ServiceProvider.GetRequiredService<IAIService>();
+        var executionId = Guid.NewGuid().ToString("N")[..8]; // 生成执行ID用于追踪
+        var startTime = DateTime.Now;
+        
+        // 防止重复执行：如果正在执行，直接返回错误
+        if (!await _executionLock.WaitAsync(0, cancellationToken))
+        {
+            _logger.LogWarning("[执行ID: {ExecutionId}] 自动选股任务正在执行中，拒绝重复请求 - 当前时间: {Time:yyyy-MM-dd HH:mm:ss.fff}", 
+                executionId, DateTime.Now);
+            return new AutoSelectionResult
+            {
+                Success = false,
+                ErrorMessage = "自动选股任务正在执行中，请勿重复请求"
+            };
+        }
 
         try
         {
-            _logger.LogInformation("开始执行自动选股流程...");
+            _isExecuting = true;
+            _logger.LogInformation("[执行ID: {ExecutionId}] 开始执行自动选股流程 - 时间: {Time:yyyy-MM-dd HH:mm:ss.fff}", 
+                executionId, startTime);
+            
+            using var scope = _serviceProvider.CreateScope();
+            var stockDataService = scope.ServiceProvider.GetRequiredService<IStockDataService>();
+            var industryService = scope.ServiceProvider.GetRequiredService<IIndustryService>();
+            var marketService = scope.ServiceProvider.GetRequiredService<IMarketService>();
+            var aiService = scope.ServiceProvider.GetRequiredService<IAIService>();
+
+            try
+            {
 
             // 步骤1: 获取所有股票数据
             _logger.LogInformation("步骤1: 从腾讯财经获取所有股票数据...");
@@ -199,17 +223,30 @@ public class AutoSelectionService : IAutoSelectionService
                 }).ToList()
             };
 
-            _logger.LogInformation("自动选股任务完成 - 筛选出 {Count} 只股票", highScoreStocks.Count);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "执行自动选股任务时发生错误");
-            return new AutoSelectionResult
+                    var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                _logger.LogInformation("[执行ID: {ExecutionId}] 自动选股任务完成 - 耗时: {Elapsed:F2}秒, 筛选出 {Count} 只股票", 
+                    executionId, elapsed, highScoreStocks.Count);
+                return result;
+            }
+            catch (Exception ex)
             {
-                Success = false,
-                ErrorMessage = ex.Message
-            };
+                var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                _logger.LogError(ex, "[执行ID: {ExecutionId}] 执行自动选股任务时发生错误 - 耗时: {Elapsed:F2}秒", 
+                    executionId, elapsed);
+                return new AutoSelectionResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message
+                };
+            }
+        }
+        finally
+        {
+            _isExecuting = false;
+            _executionLock.Release();
+            var totalElapsed = (DateTime.Now - startTime).TotalSeconds;
+            _logger.LogInformation("[执行ID: {ExecutionId}] 自动选股任务执行完成，释放执行锁 - 总耗时: {Elapsed:F2}秒", 
+                executionId, totalElapsed);
         }
     }
 
