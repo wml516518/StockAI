@@ -10,15 +10,18 @@ public class ScreenController : ControllerBase
 {
     private readonly IScreenService _screenService;
     private readonly IAutoSelectionService _autoSelectionService;
+    private readonly IAutoFilterService _autoFilterService;
     private readonly ILogger<ScreenController> _logger;
 
     public ScreenController(
         IScreenService screenService,
         IAutoSelectionService autoSelectionService,
+        IAutoFilterService autoFilterService,
         ILogger<ScreenController> logger)
     {
         _screenService = screenService;
         _autoSelectionService = autoSelectionService;
+        _autoFilterService = autoFilterService;
         _logger = logger;
     }
 
@@ -213,6 +216,115 @@ public class ScreenController : ControllerBase
             return StatusCode(500, new { error = "执行自动选股失败", message = ex.Message });
         }
     }
+
+    /// <summary>
+    /// 自动筛选股票（综合基本面、技术面、公告新闻等条件）
+    /// </summary>
+    [HttpPost("auto-filter")]
+    public async Task<ActionResult<AutoFilterResult>> AutoFilter([FromBody] AutoFilterRequest? request)
+    {
+        try
+        {
+            _logger.LogInformation("收到自动筛选请求: {Request}", 
+                request != null ? System.Text.Json.JsonSerializer.Serialize(request) : "null");
+
+            var stockCodes = request?.StockCodes;
+            var enableSentimentFilter = request?.EnableSentimentFilter ?? false;
+
+            var result = await _autoFilterService.FilterStocksAsync(stockCodes, enableSentimentFilter);
+
+            // 输出详细统计信息到日志
+            var stats = result.Statistics;
+            _logger.LogInformation("=== API自动筛选完成统计 ===");
+            _logger.LogInformation("总数: {Total}, 最终通过: {All}", stats.TotalChecked, stats.PassedAll);
+            _logger.LogInformation("基本面: 通过={Passed}, 失败={Failed}", stats.PassedFundamental, stats.FilteredByFundamental);
+            _logger.LogInformation("  - 数据缺失: {DataMissing}", stats.FilteredByFundamentalDataMissing);
+            _logger.LogInformation("  - 净利润<=0: {NetProfit}", stats.FilteredByNetProfit);
+            _logger.LogInformation("  - ROE<=6%: {ROE}", stats.FilteredByROE);
+            _logger.LogInformation("  - 毛利率<=15%: {GrossMargin}", stats.FilteredByGrossProfitMargin);
+            _logger.LogInformation("  - 营收同比<=0: {RevenueGrowth}", stats.FilteredByRevenueGrowth);
+            _logger.LogInformation("  - ST类股票: {ST}", stats.FilteredByST);
+            _logger.LogInformation("  - 资产负债率>=70%: {AssetLiability}", stats.FilteredByAssetLiabilityRatio);
+            _logger.LogInformation("  - 流动比率<=1: {CurrentRatio}", stats.FilteredByCurrentRatio);
+            _logger.LogInformation("  - 行业不符合: {Industry}", stats.FilteredByIndustry);
+            _logger.LogInformation("技术面: 通过={Passed}, 失败={Failed}", stats.PassedTechnical, stats.FilteredByTechnical);
+            _logger.LogInformation("  - 数据缺失: {DataMissing}", stats.FilteredByTechnicalDataMissing);
+            _logger.LogInformation("  - 未满足反转信号: {ReversalSignal}", stats.FilteredByReversalSignal);
+            _logger.LogInformation("  - 成交量不足: {Volume}", stats.FilteredByVolume);
+            _logger.LogInformation("  - 换手率不在2%-12%: {TurnoverRate}", stats.FilteredByTurnoverRate);
+            _logger.LogInformation("  - 涨幅>7%: {ChangePercent}", stats.FilteredByChangePercent);
+            _logger.LogInformation("  - 波动率>=6%: {Volatility}", stats.FilteredByVolatility);
+            _logger.LogInformation("新闻: 通过={Passed}, 失败={Failed} (负面新闻: {Negative})", 
+                stats.PassedNews, stats.FilteredByNews, stats.FilteredByNewsNegative);
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "自动筛选时发生错误");
+            return StatusCode(500, new { error = "自动筛选失败", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 检查单个股票是否符合筛选条件
+    /// </summary>
+    [HttpGet("auto-filter/check/{stockCode}")]
+    public async Task<ActionResult<StockFilterCheckResult>> CheckStock(string stockCode)
+    {
+        try
+        {
+            _logger.LogInformation("检查股票筛选条件: {StockCode}", stockCode);
+
+            var fundamentalResult = await _autoFilterService.CheckFundamentalConditionsAsync(stockCode);
+            var technicalResult = await _autoFilterService.CheckTechnicalConditionsAsync(stockCode);
+            var newsResult = await _autoFilterService.CheckNewsConditionsAsync(stockCode);
+
+            var result = new StockFilterCheckResult
+            {
+                StockCode = stockCode,
+                Fundamental = fundamentalResult,
+                Technical = technicalResult,
+                News = newsResult,
+                Passed = fundamentalResult.Passed && technicalResult.Passed && newsResult.Passed
+            };
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "检查股票筛选条件时发生错误: {StockCode}", stockCode);
+            return StatusCode(500, new { error = "检查失败", message = ex.Message });
+        }
+    }
+}
+
+/// <summary>
+/// 自动筛选请求模型
+/// </summary>
+public class AutoFilterRequest
+{
+    /// <summary>
+    /// 待筛选的股票代码列表（如果为空，则从全市场筛选）
+    /// </summary>
+    public List<string>? StockCodes { get; set; }
+
+    /// <summary>
+    /// 是否启用社交舆情过滤（可选）
+    /// </summary>
+    public bool EnableSentimentFilter { get; set; } = false;
+}
+
+/// <summary>
+/// 股票筛选检查结果
+/// </summary>
+public class StockFilterCheckResult
+{
+    public string StockCode { get; set; } = string.Empty;
+    public FundamentalFilterResult Fundamental { get; set; } = new();
+    public TechnicalFilterResult Technical { get; set; } = new();
+    public NewsFilterResult News { get; set; } = new();
+    public bool Passed { get; set; }
 }
 
 /// <summary>

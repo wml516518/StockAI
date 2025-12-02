@@ -1,6 +1,7 @@
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 
 namespace StockAnalyse.Api.Services;
 
@@ -69,10 +70,66 @@ public class AutoSelectionService : IAutoSelectionService
                 };
             }
 
-            // 步骤2: 应用技术面和资金面筛选规则
-            _logger.LogInformation("步骤2: 应用技术面和资金面筛选规则...");
-            var filteredStocks = ApplyFilterRules(allStocks);
-            _logger.LogInformation("筛选后剩余 {Count} 只股票", filteredStocks.Count);
+            // 步骤2: 应用快速技术面和资金面筛选规则（第一层快速过滤）
+            _logger.LogInformation("步骤2: 应用快速技术面和资金面筛选规则（第一层过滤）...");
+            var quickFilteredStocks = ApplyQuickFilterRules(allStocks);
+            _logger.LogInformation("快速筛选后剩余 {Count} 只股票", quickFilteredStocks.Count);
+
+            if (quickFilteredStocks.Count == 0)
+            {
+                _logger.LogInformation("快速筛选后没有符合条件的股票，跳过本次选股");
+                return new AutoSelectionResult
+                {
+                    Success = true,
+                    TotalStocks = allStocks.Count,
+                    FilteredCount = 0,
+                    ScoredCount = 0,
+                    SelectedCount = 0,
+                    SelectedStocks = new List<AutoSelectedStock>()
+                };
+            }
+
+            // 步骤2.1: 应用深度筛选（基本面、技术面深度检查、新闻过滤）
+            _logger.LogInformation("步骤2.1: 应用深度筛选（基本面、技术面、新闻）...");
+            var autoFilterService = scope.ServiceProvider.GetRequiredService<IAutoFilterService>();
+            var (filteredStocks, filterStatistics) = await ApplyDeepFilterRulesAsync(quickFilteredStocks, autoFilterService, cancellationToken);
+            _logger.LogInformation("深度筛选后剩余 {Count} 只股票", filteredStocks.Count);
+            
+            // 输出详细统计信息
+            _logger.LogInformation("=== 深度筛选完成统计 ===");
+            _logger.LogInformation("总数: {Total}, 最终通过: {All}", filterStatistics.TotalChecked, filterStatistics.PassedAll);
+            _logger.LogInformation("基本面: 通过={Passed}, 失败={Failed}", filterStatistics.PassedFundamental, filterStatistics.FilteredByFundamental);
+            _logger.LogInformation("  - 数据缺失: {DataMissing}", filterStatistics.FilteredByFundamentalDataMissing);
+            _logger.LogInformation("  - 净利润<=0: {NetProfit}", filterStatistics.FilteredByNetProfit);
+            _logger.LogInformation("  - ROE<=6%: {ROE}", filterStatistics.FilteredByROE);
+            _logger.LogInformation("  - 毛利率<=15%: {GrossMargin}", filterStatistics.FilteredByGrossProfitMargin);
+            _logger.LogInformation("  - 营收同比<=0: {RevenueGrowth}", filterStatistics.FilteredByRevenueGrowth);
+            _logger.LogInformation("  - ST类股票: {ST}", filterStatistics.FilteredByST);
+            _logger.LogInformation("  - 资产负债率>=70%: {AssetLiability}", filterStatistics.FilteredByAssetLiabilityRatio);
+            _logger.LogInformation("  - 流动比率<=1: {CurrentRatio}", filterStatistics.FilteredByCurrentRatio);
+            _logger.LogInformation("  - 行业不符合: {Industry} (共{Count}个不同行业)", 
+                filterStatistics.FilteredByIndustry, filterStatistics.FilteredIndustries.Count);
+            
+            // 输出被过滤的行业详情（按数量排序，只显示前10个）
+            if (filterStatistics.FilteredIndustries.Count > 0)
+            {
+                var topFilteredIndustries = filterStatistics.FilteredIndustries.OrderByDescending(kvp => kvp.Value).Take(10).ToList();
+                _logger.LogInformation("  - 被过滤行业详情（Top 10）:");
+                foreach (var kvp in topFilteredIndustries)
+                {
+                    _logger.LogInformation("    * {IndustryName}: {Count}只", kvp.Key, kvp.Value);
+                }
+            }
+            
+            _logger.LogInformation("技术面: 通过={Passed}, 失败={Failed}", filterStatistics.PassedTechnical, filterStatistics.FilteredByTechnical);
+            _logger.LogInformation("  - 数据缺失: {DataMissing}", filterStatistics.FilteredByTechnicalDataMissing);
+            _logger.LogInformation("  - 未满足反转信号: {ReversalSignal}", filterStatistics.FilteredByReversalSignal);
+            _logger.LogInformation("  - 成交量不足: {Volume}", filterStatistics.FilteredByVolume);
+            _logger.LogInformation("  - 换手率不在2%-12%: {TurnoverRate}", filterStatistics.FilteredByTurnoverRate);
+            _logger.LogInformation("  - 涨幅>7%: {ChangePercent}", filterStatistics.FilteredByChangePercent);
+            _logger.LogInformation("  - 波动率>=6%: {Volatility}", filterStatistics.FilteredByVolatility);
+            _logger.LogInformation("新闻: 通过={Passed}, 失败={Failed} (负面新闻: {Negative})", 
+                filterStatistics.PassedNews, filterStatistics.FilteredByNews, filterStatistics.FilteredByNewsNegative);
 
             if (filteredStocks.Count == 0)
             {
@@ -157,19 +214,19 @@ public class AutoSelectionService : IAutoSelectionService
     }
 
     /// <summary>
-    /// 应用技术面和资金面筛选规则
+    /// 应用快速技术面和资金面筛选规则（第一层快速过滤，不涉及异步操作）
     /// </summary>
-    private List<Stock> ApplyFilterRules(List<Stock> stocks)
+    private List<Stock> ApplyQuickFilterRules(List<Stock> stocks)
     {
         return stocks
             .Where(s =>
                 // 1. 价格筛选：过滤低价垃圾股和高价股
                 s.CurrentPrice >= MinPrice && s.CurrentPrice <= MaxPrice &&
                 
-                // 2. 涨跌幅筛选：避免下跌股和追高风险
+                // 2. 涨跌幅筛选：避免下跌股和追高风险（当天涨幅不超过7%）
                 s.ChangePercent >= MinChangePercent && s.ChangePercent <= MaxChangePercent &&
                 
-                // 3. 换手率筛选：确保有活跃度但避免庄家出货
+                // 3. 换手率筛选：确保有活跃度但避免庄家出货（2%-12%）
                 s.TurnoverRate >= MinTurnoverRate && s.TurnoverRate <= MaxTurnoverRate &&
                 
                 // 4. 成交量筛选：确保流动性充足
@@ -187,6 +244,187 @@ public class AutoSelectionService : IAutoSelectionService
                 !IsHighRiskIndustry(s.Name)
             )
             .ToList();
+    }
+
+    /// <summary>
+    /// 应用深度筛选规则（基本面、技术面深度检查、新闻过滤）
+    /// 使用并行处理提高性能，并收集详细统计信息
+    /// </summary>
+    private async Task<(List<Stock> PassedStocks, FilterStatistics Statistics)> ApplyDeepFilterRulesAsync(
+        List<Stock> stocks,
+        IAutoFilterService autoFilterService,
+        CancellationToken cancellationToken)
+    {
+        var passedStocks = new System.Collections.Concurrent.ConcurrentBag<Stock>();
+        var statistics = new FilterStatistics
+        {
+            TotalChecked = stocks.Count
+        };
+        
+        // 使用线程安全的计数器
+        var fundamentalCounters = new ConcurrentDictionary<FundamentalFilterFailureType, int>();
+        var technicalCounters = new ConcurrentDictionary<TechnicalFilterFailureType, int>();
+        var newsNegativeCount = new ConcurrentDictionary<string, int>(); // 使用字典来计数
+        var filteredIndustries = new ConcurrentDictionary<string, int>(); // 记录被过滤的行业
+        var passedFundamentalCount = 0;
+        var passedTechnicalCount = 0;
+        var passedNewsCount = 0;
+        var passedAllCount = 0;
+        
+        // 限制并发数量，避免过多并发请求
+        var semaphore = new SemaphoreSlim(10); // 最多10个并发检查
+        var tasks = new List<Task>();
+
+        foreach (var stock in stocks)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            tasks.Add(Task.Run(async () =>
+            {
+                await semaphore.WaitAsync(cancellationToken);
+                try
+                {
+                    // 为每个并行任务创建新的服务范围，避免DbContext线程冲突
+                    using var taskScope = _serviceProvider.CreateScope();
+                    var taskAutoFilterService = taskScope.ServiceProvider.GetRequiredService<IAutoFilterService>();
+
+                    // 1. 检查基本面条件
+                    var fundamentalResult = await taskAutoFilterService.CheckFundamentalConditionsAsync(stock.Code);
+                    if (!fundamentalResult.Passed)
+                    {
+                        _logger.LogDebug("股票 {StockCode} 基本面不符合: {Reason}", stock.Code, fundamentalResult.Reason);
+                        // 更新统计
+                        fundamentalCounters.AddOrUpdate(fundamentalResult.FailureType, 1, (key, oldValue) => oldValue + 1);
+                        
+                        // 如果是行业过滤，记录行业名称
+                        if (fundamentalResult.FailureType == FundamentalFilterFailureType.Industry &&
+                            fundamentalResult.Details.TryGetValue("Industry", out var industryObj))
+                        {
+                            var industryName = industryObj?.ToString() ?? "未知";
+                            filteredIndustries.AddOrUpdate(industryName, 1, (key, oldValue) => oldValue + 1);
+                        }
+                        return;
+                    }
+                    Interlocked.Increment(ref passedFundamentalCount);
+
+                    // 2. 检查技术面条件（深度检查：均线、MACD、量价关系、波动率等）
+                    var technicalResult = await taskAutoFilterService.CheckTechnicalConditionsAsync(stock.Code);
+                    if (!technicalResult.Passed)
+                    {
+                        _logger.LogDebug("股票 {StockCode} 技术面不符合: {Reason}", stock.Code, technicalResult.Reason);
+                        // 更新统计
+                        technicalCounters.AddOrUpdate(technicalResult.FailureType, 1, (key, oldValue) => oldValue + 1);
+                        return;
+                    }
+                    Interlocked.Increment(ref passedTechnicalCount);
+
+                    // 3. 检查公告和新闻条件
+                    var newsResult = await taskAutoFilterService.CheckNewsConditionsAsync(stock.Code);
+                    if (!newsResult.Passed)
+                    {
+                        _logger.LogDebug("股票 {StockCode} 新闻不符合: {Reason}", stock.Code, newsResult.Reason);
+                        // 更新统计
+                        newsNegativeCount.AddOrUpdate("count", 1, (key, oldValue) => oldValue + 1);
+                        return;
+                    }
+                    Interlocked.Increment(ref passedNewsCount);
+
+                    // 所有条件都通过
+                    passedStocks.Add(stock);
+                    Interlocked.Increment(ref passedAllCount);
+                    _logger.LogDebug("股票 {StockCode} 通过深度筛选", stock.Code);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "检查股票 {StockCode} 深度筛选条件时发生错误，跳过", stock.Code);
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }, cancellationToken));
+        }
+
+        await Task.WhenAll(tasks);
+        
+        // 汇总统计信息
+        statistics.PassedFundamental = passedFundamentalCount;
+        statistics.PassedTechnical = passedTechnicalCount;
+        statistics.PassedNews = passedNewsCount;
+        statistics.PassedAll = passedAllCount;
+        statistics.FilteredByFundamental = statistics.TotalChecked - statistics.PassedFundamental;
+        statistics.FilteredByTechnical = statistics.PassedFundamental - statistics.PassedTechnical;
+        statistics.FilteredByNews = statistics.PassedTechnical - statistics.PassedNews;
+        statistics.FilteredByNewsNegative = newsNegativeCount.TryGetValue("count", out var newsCount) ? newsCount : 0;
+        
+        // 汇总基本面详细统计
+        foreach (var kvp in fundamentalCounters)
+        {
+            switch (kvp.Key)
+            {
+                case FundamentalFilterFailureType.DataMissing:
+                    statistics.FilteredByFundamentalDataMissing = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.NetProfit:
+                    statistics.FilteredByNetProfit = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.ROE:
+                    statistics.FilteredByROE = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.GrossProfitMargin:
+                    statistics.FilteredByGrossProfitMargin = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.RevenueGrowth:
+                    statistics.FilteredByRevenueGrowth = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.ST:
+                    statistics.FilteredByST = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.AssetLiabilityRatio:
+                    statistics.FilteredByAssetLiabilityRatio = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.CurrentRatio:
+                    statistics.FilteredByCurrentRatio = kvp.Value;
+                    break;
+                case FundamentalFilterFailureType.Industry:
+                    statistics.FilteredByIndustry = kvp.Value;
+                    break;
+            }
+        }
+        
+        // 汇总技术面详细统计
+        foreach (var kvp in technicalCounters)
+        {
+            switch (kvp.Key)
+            {
+                case TechnicalFilterFailureType.DataMissing:
+                    statistics.FilteredByTechnicalDataMissing = kvp.Value;
+                    break;
+                case TechnicalFilterFailureType.ReversalSignal:
+                    statistics.FilteredByReversalSignal = kvp.Value;
+                    break;
+                case TechnicalFilterFailureType.Volume:
+                    statistics.FilteredByVolume = kvp.Value;
+                    break;
+                case TechnicalFilterFailureType.TurnoverRate:
+                    statistics.FilteredByTurnoverRate = kvp.Value;
+                    break;
+                case TechnicalFilterFailureType.ChangePercent:
+                    statistics.FilteredByChangePercent = kvp.Value;
+                    break;
+                case TechnicalFilterFailureType.Volatility:
+                    statistics.FilteredByVolatility = kvp.Value;
+                    break;
+            }
+        }
+        
+        // 更新行业统计
+        statistics.FilteredIndustries = filteredIndustries.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        
+        return (passedStocks.ToList(), statistics);
     }
 
     /// <summary>

@@ -97,6 +97,9 @@ builder.Services.AddScoped<IMarketService, MarketService>();
 // 注册自动选股服务
 builder.Services.AddScoped<IAutoSelectionService, AutoSelectionService>();
 
+// 注册自动筛选服务
+builder.Services.AddScoped<IAutoFilterService, AutoFilterService>();
+
 // 注册做T方案事件通知服务（单例，用于SSE推送）
 builder.Services.AddSingleton<TradingPlanEventService>();
 

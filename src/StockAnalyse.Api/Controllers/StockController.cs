@@ -55,6 +55,253 @@ public class StockController : ControllerBase
     }
 
     /// <summary>
+    /// 测试东方财富历史数据接口（测试502错误和重试机制）
+    /// </summary>
+    [HttpGet("{code}/test-history-api")]
+    public async Task<ActionResult<object>> TestHistoryApi(string code, DateTime? startDate, DateTime? endDate)
+    {
+        var start = startDate ?? DateTime.Now.AddDays(-30);
+        var end = endDate ?? DateTime.Now;
+        
+        try
+        {
+            var market = code.StartsWith("6") ? "1" : "0";
+            var secid = $"{market}.{code}";
+            var beg = start.ToString("yyyyMMdd");
+            var endStr = end.ToString("yyyyMMdd");
+
+            var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={endStr}";
+            
+            using var httpClient = new HttpClient();
+            httpClient.Timeout = TimeSpan.FromSeconds(30);
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            httpClient.DefaultRequestHeaders.Add("Referer", "http://quote.eastmoney.com/");
+            
+            // 测试重试机制
+            string? response = null;
+            int maxRetries = 3;
+            var attempts = new List<object>();
+            
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                object attemptInfo;
+                
+                try
+                {
+                    var startTime = DateTime.Now;
+                    response = await httpClient.GetStringAsync(url);
+                    var duration = (DateTime.Now - startTime).TotalMilliseconds;
+                    
+                    attemptInfo = new
+                    {
+                        attemptNumber = attempt,
+                        timestamp = startTime,
+                        success = true,
+                        error = (string?)null,
+                        statusCode = (int?)null,
+                        durationMs = duration
+                    };
+                    
+                    attempts.Add(attemptInfo);
+                    break; // 成功获取，退出重试循环
+                }
+                catch (System.Net.Http.HttpRequestException ex)
+                {
+                    var statusCode = 0;
+                    if (ex.Message.Contains("502") || ex.Message.Contains("Bad Gateway"))
+                    {
+                        statusCode = 502;
+                    }
+                    else if (ex.Message.Contains("500"))
+                    {
+                        statusCode = 500;
+                    }
+                    else if (ex.Message.Contains("503"))
+                    {
+                        statusCode = 503;
+                    }
+                    
+                    attemptInfo = new
+                    {
+                        attemptNumber = attempt,
+                        timestamp = DateTime.Now,
+                        success = false,
+                        error = (string?)ex.Message,
+                        statusCode = statusCode > 0 ? statusCode : (int?)null,
+                        durationMs = (double?)null
+                    };
+                    
+                    attempts.Add(attemptInfo);
+                    
+                    if (attempt < maxRetries)
+                    {
+                        var delay = attempt * 2;
+                        _logger.LogWarning("尝试 {Attempt}/{MaxRetries} 失败，等待 {Delay} 秒后重试", attempt, maxRetries, delay);
+                        await Task.Delay(TimeSpan.FromSeconds(delay));
+                    }
+                    else
+                    {
+                        _logger.LogError(ex, "所有重试均失败");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    attemptInfo = new
+                    {
+                        attemptNumber = attempt,
+                        timestamp = DateTime.Now,
+                        success = false,
+                        error = (string?)ex.Message,
+                        statusCode = (int?)null,
+                        durationMs = (double?)null
+                    };
+                    
+                    attempts.Add(attemptInfo);
+                    
+                    if (attempt < maxRetries)
+                    {
+                        var delay = attempt * 2;
+                        _logger.LogWarning(ex, "尝试 {Attempt}/{MaxRetries} 失败，等待 {Delay} 秒后重试", attempt, maxRetries, delay);
+                        await Task.Delay(TimeSpan.FromSeconds(delay));
+                    }
+                }
+            }
+            
+            if (response == null)
+            {
+                return Ok(new
+                {
+                    success = false,
+                    message = "所有重试均失败，无法获取数据",
+                    stockCode = code,
+                    url = url,
+                    attempts = attempts,
+                    testInfo = new
+                    {
+                        startDate = start,
+                        endDate = end,
+                        secid = secid,
+                        market = market
+                    }
+                });
+            }
+            
+            // 解析响应
+            dynamic? data = null;
+            try
+            {
+                data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
+            }
+            catch (Exception ex)
+            {
+                return Ok(new
+                {
+                    success = false,
+                    message = "JSON解析失败",
+                    error = ex.Message,
+                    rawResponse = response.Substring(0, Math.Min(500, response.Length)),
+                    attempts = attempts
+                });
+            }
+            
+            if (data?.data?.klines == null)
+            {
+                return Ok(new
+                {
+                    success = false,
+                    message = "API返回数据为空或格式不正确",
+                    rawResponse = response.Substring(0, Math.Min(500, response.Length)),
+                    parsedData = data,
+                    attempts = attempts
+                });
+            }
+            
+            // 解析前5条数据作为示例
+            var sampleData = new List<object>();
+            int count = 0;
+            foreach (var k in data.data.klines)
+            {
+                if (count >= 5) break;
+                
+                string line = k.ToString();
+                var parts = line.Split(',');
+                
+                if (parts.Length >= 7)
+                {
+                    try
+                    {
+                        var tradeDate = DateTime.Parse(parts[0]);
+                        sampleData.Add(new
+                        {
+                            date = tradeDate.ToString("yyyy-MM-dd"),
+                            open = parts[1],
+                            close = parts[2],
+                            high = parts[3],
+                            low = parts[4],
+                            volume = parts[5],
+                            amount = parts[6],
+                            rawLine = line
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        sampleData.Add(new
+                        {
+                            error = $"解析失败: {ex.Message}",
+                            rawLine = line,
+                            parts = parts
+                        });
+                    }
+                }
+                else
+                {
+                    sampleData.Add(new
+                    {
+                        error = "字段数不足",
+                        rawLine = line,
+                        partsCount = parts.Length
+                    });
+                }
+                
+                count++;
+            }
+            
+            return Ok(new
+            {
+                success = true,
+                message = "接口调用成功",
+                stockCode = code,
+                url = url,
+                attempts = attempts,
+                dataInfo = new
+                {
+                    totalRecords = ((System.Collections.ICollection)data.data.klines).Count,
+                    sampleCount = sampleData.Count,
+                    sampleData = sampleData
+                },
+                testInfo = new
+                {
+                    startDate = start,
+                    endDate = end,
+                    secid = secid,
+                    market = market
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "测试接口调用失败");
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "测试接口调用失败",
+                error = ex.Message,
+                stackTrace = ex.StackTrace
+            });
+        }
+    }
+
+    /// <summary>
     /// 测试接口：获取股票原始API数据（用于调试字段映射）
     /// </summary>
     [HttpGet("{code}/test-raw-data")]

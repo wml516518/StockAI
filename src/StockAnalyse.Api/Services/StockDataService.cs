@@ -509,18 +509,117 @@ public class StockDataService : IStockDataService
 
     public async Task<int> FetchAndStoreDailyHistoryAsync(string stockCode, DateTime startDate, DateTime endDate)
     {
-        int saved = 0;
+        // 方案1: 尝试东方财富接口（主要数据源）
         try
         {
-            var market = stockCode.StartsWith("6") ? "1" : "0";
-            var secid = $"{market}.{stockCode}";
-            var beg = startDate.ToString("yyyyMMdd");
-            var end = endDate.ToString("yyyyMMdd");
+            var result = await FetchFromEastMoneyAsync(stockCode, startDate, endDate);
+            if (result > 0)
+            {
+                return result;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "东方财富接口获取股票 {StockCode} 历史数据失败，尝试备用方案", stockCode);
+        }
 
-            var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={end}";
-            ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
+        // 方案2: 尝试Python服务（AKShare数据源）- 备用方案
+        try
+        {
+            var result = await FetchFromPythonServiceAsync(stockCode, startDate, endDate);
+            if (result > 0)
+            {
+                _logger.LogInformation("从Python服务(AKShare)成功获取股票 {StockCode} 历史数据: {Count} 条", stockCode, result);
+                return result;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Python服务获取股票 {StockCode} 历史数据失败，尝试其他备用方案", stockCode);
+        }
 
-            var response = await _httpClient.GetStringAsync(url);
+        // 方案3: 尝试新浪财经接口（备用方案）
+        try
+        {
+            var result = await FetchFromSinaAsync(stockCode, startDate, endDate);
+            if (result > 0)
+            {
+                _logger.LogInformation("从新浪财经成功获取股票 {StockCode} 历史数据: {Count} 条", stockCode, result);
+                return result;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "新浪财经获取股票 {StockCode} 历史数据失败", stockCode);
+        }
+
+        _logger.LogWarning("所有数据源均无法获取股票 {StockCode} 的历史数据", stockCode);
+        return 0;
+    }
+
+    /// <summary>
+    /// 方案1: 从东方财富获取历史数据（主要数据源）
+    /// </summary>
+    private async Task<int> FetchFromEastMoneyAsync(string stockCode, DateTime startDate, DateTime endDate)
+    {
+        int saved = 0;
+        var market = stockCode.StartsWith("6") ? "1" : "0";
+        var secid = $"{market}.{stockCode}";
+        var beg = startDate.ToString("yyyyMMdd");
+        var end = endDate.ToString("yyyyMMdd");
+
+        var url = $"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&beg={beg}&end={end}";
+        ClearAndSetHeaders("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "http://quote.eastmoney.com/");
+
+        // 添加重试机制（最多3次）
+        string? response = null;
+        int maxRetries = 3;
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                response = await _httpClient.GetStringAsync(url);
+                break; // 成功获取，退出重试循环
+            }
+            catch (System.Net.Http.HttpRequestException ex) when (ex.Message.Contains("502") || ex.Message.Contains("Bad Gateway"))
+            {
+                if (attempt < maxRetries)
+                {
+                    var delay = attempt * 2; // 递增延迟：2秒、4秒、6秒
+                    _logger.LogWarning("获取股票 {StockCode} 历史数据失败（502错误），{Attempt}/{MaxRetries}，等待 {Delay} 秒后重试", 
+                        stockCode, attempt, maxRetries, delay);
+                    await Task.Delay(TimeSpan.FromSeconds(delay));
+                }
+                else
+                {
+                    _logger.LogWarning("获取股票 {StockCode} 历史数据失败（502错误），所有重试均失败，将尝试备用方案", stockCode);
+                    throw; // 抛出异常，让调用者尝试备用方案
+                }
+            }
+            catch (Exception ex)
+            {
+                if (attempt < maxRetries)
+                {
+                    var delay = attempt * 2;
+                    _logger.LogWarning(ex, "获取股票 {StockCode} 历史数据失败，{Attempt}/{MaxRetries}，等待 {Delay} 秒后重试", 
+                        stockCode, attempt, maxRetries, delay);
+                    await Task.Delay(TimeSpan.FromSeconds(delay));
+                }
+                else
+                {
+                    _logger.LogWarning(ex, "获取股票 {StockCode} 历史数据失败，所有重试均失败，将尝试备用方案", stockCode);
+                    throw; // 抛出异常，让调用者尝试备用方案
+                }
+            }
+        }
+
+        if (response == null)
+        {
+            throw new Exception("东方财富接口返回空响应");
+        }
+
+        try
+        {
             dynamic? data = Newtonsoft.Json.JsonConvert.DeserializeObject(response);
             if (data?.data?.klines == null)
             {
@@ -602,14 +701,141 @@ public class StockDataService : IStockDataService
             }
 
             await _context.SaveChangesAsync();
-            _logger.LogInformation("保存{Count}条 {Code} 日线历史", saved, stockCode);
+            _logger.LogInformation("保存{Count}条 {Code} 日线历史（东方财富）", saved, stockCode);
             return saved;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "拉取并保存东方财富日线失败: {Code}", stockCode);
-            return 0;
+            _logger.LogWarning(ex, "解析或保存股票 {StockCode} 历史数据失败（东方财富）", stockCode);
+            throw; // 抛出异常，让调用者尝试备用方案
         }
+    }
+
+    /// <summary>
+    /// 方案2: 从Python服务（AKShare）获取历史数据（备用方案）
+    /// </summary>
+    private async Task<int> FetchFromPythonServiceAsync(string stockCode, DateTime startDate, DateTime endDate)
+    {
+        try
+        {
+            var pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL") ?? "http://localhost:5001";
+            // Python服务的technical接口返回历史数据
+            var days = (int)(endDate - startDate).TotalDays + 30; // 多获取一些数据
+            var url = $"{pythonServiceUrl}/api/stock/technical/{stockCode}?days={days}";
+            
+            _logger.LogInformation("尝试从Python服务获取股票 {StockCode} 历史数据", stockCode);
+            
+            using var pythonClient = new HttpClient();
+            pythonClient.Timeout = TimeSpan.FromSeconds(120);
+            
+            var response = await pythonClient.GetStringAsync(url);
+            var jsonData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(response);
+            
+            if (!jsonData.GetProperty("success").GetBoolean())
+            {
+                throw new Exception($"Python服务返回失败: {jsonData.GetProperty("error").GetString()}");
+            }
+            
+            if (!jsonData.TryGetProperty("data", out var dataElement) || 
+                !dataElement.TryGetProperty("history", out var historyElement))
+            {
+                throw new Exception("Python服务返回数据格式不正确");
+            }
+            
+            var histories = historyElement.EnumerateArray();
+            int saved = 0;
+            
+            foreach (var item in histories)
+            {
+                try
+                {
+                    if (!item.TryGetProperty("date", out var dateEl))
+                    {
+                        continue;
+                    }
+                    
+                    var tradeDateStr = dateEl.GetString();
+                    if (string.IsNullOrEmpty(tradeDateStr) || !DateTime.TryParse(tradeDateStr, out var tradeDate))
+                    {
+                        continue;
+                    }
+                    
+                    if (tradeDate < startDate.Date || tradeDate > endDate.Date)
+                    {
+                        continue;
+                    }
+                    
+                    var open = SafeConvertToDecimal(item.TryGetProperty("open", out var openEl) ? openEl.GetRawText() : "0");
+                    var close = SafeConvertToDecimal(item.TryGetProperty("close", out var closeEl) ? closeEl.GetRawText() : "0");
+                    var high = SafeConvertToDecimal(item.TryGetProperty("high", out var highEl) ? highEl.GetRawText() : "0");
+                    var low = SafeConvertToDecimal(item.TryGetProperty("low", out var lowEl) ? lowEl.GetRawText() : "0");
+                    var volume = SafeConvertToDecimal(item.TryGetProperty("volume", out var volEl) ? volEl.GetRawText() : "0");
+                    
+                    if (open <= 0 || close <= 0 || high <= 0 || low <= 0)
+                    {
+                        continue;
+                    }
+                    
+                    var existing = await _context.StockHistories
+                        .FirstOrDefaultAsync(h => h.StockCode == stockCode && h.TradeDate == tradeDate);
+                    
+                    if (existing != null)
+                    {
+                        existing.Open = open;
+                        existing.Close = close;
+                        existing.High = high;
+                        existing.Low = low;
+                        existing.Volume = volume;
+                    }
+                    else
+                    {
+                        await _context.StockHistories.AddAsync(new StockHistory
+                        {
+                            StockCode = stockCode,
+                            TradeDate = tradeDate,
+                            Open = open,
+                            Close = close,
+                            High = high,
+                            Low = low,
+                            Volume = volume,
+                            Turnover = 0 // Python服务可能不提供成交额
+                        });
+                    }
+                    
+                    saved++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "解析Python服务返回的历史数据项失败");
+                    continue;
+                }
+            }
+            
+            if (saved > 0)
+            {
+                await _context.SaveChangesAsync();
+            }
+            
+            return saved;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "从Python服务获取股票 {StockCode} 历史数据失败", stockCode);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 方案3: 从新浪财经获取历史数据（备用方案）
+    /// 注意：新浪财经的历史数据接口可能有限制，这里提供一个基础实现框架
+    /// </summary>
+    private Task<int> FetchFromSinaAsync(string stockCode, DateTime startDate, DateTime endDate)
+    {
+        // 新浪财经的历史数据接口比较复杂，通常需要爬虫或特殊处理
+        // 这里提供一个基础框架，实际使用时可能需要调整
+        // 由于新浪财经历史数据接口不稳定，这里暂时返回0，表示不可用
+        _logger.LogInformation("新浪财经历史数据接口暂未实现，跳过");
+        return Task.FromResult(0);
     }
 
     /// <summary>
