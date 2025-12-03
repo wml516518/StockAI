@@ -346,75 +346,11 @@ public class AutoFilterService : IAutoFilterService
             }
             details["CurrentRatio"] = fundamentalInfo.CurrentRatio?.ToString("F2") ?? "N/A";
 
-            // 4. 行业过滤（更精确的匹配，避免误杀）
-            // 注意：如果行业信息不可用或为"未知"，跳过行业过滤，避免误杀
-            var industryResult = await _industryService.GetIndustryInfoFromAKShareAsync(stockCode);
-            if (industryResult != null)
-            {
-                var industryName = industryResult.IndustryName ?? "";
-                var industryText = industryResult.InfoText ?? "";
-                
-                // 如果行业名称为空、"未知"或无法获取，跳过行业过滤
-                if (string.IsNullOrWhiteSpace(industryName) || 
-                    industryName.Equals("未知", StringComparison.OrdinalIgnoreCase) ||
-                    industryName.Equals("N/A", StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogDebug("股票 {StockCode} 行业信息不可用（{IndustryName}），跳过行业过滤", stockCode, industryName);
-                    details["Industry"] = industryName;
-                }
-                else
-                {
-                    var combinedText = $"{industryName} {industryText}";
-
-                    // 检查是否属于需要过滤的行业（精确匹配）
-                    bool shouldFilter = false;
-                    string matchedKeyword = "";
-                    
-                    foreach (var keyword in ExcludedIndustryKeywords)
-                    {
-                        // 使用精确匹配，避免误杀
-                        if (industryName.Equals(keyword, StringComparison.OrdinalIgnoreCase) ||
-                            industryName.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                        {
-                            shouldFilter = true;
-                            matchedKeyword = keyword;
-                            break;
-                        }
-                    }
-                    
-                    // 如果还没匹配到，检查严格匹配的关键词
-                    if (!shouldFilter)
-                    {
-                        foreach (var keyword in StrictExcludedKeywords)
-                        {
-                            if (combinedText.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                            {
-                                shouldFilter = true;
-                                matchedKeyword = keyword;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if (shouldFilter)
-                    {
-                        result.Passed = false;
-                        result.Reason = $"行业不符合要求: {industryName} (匹配关键词: {matchedKeyword})";
-                        result.FailureType = FundamentalFilterFailureType.Industry;
-                        details["Industry"] = industryName;
-                        details["MatchedKeyword"] = matchedKeyword;
-                        return result;
-                    }
-                    
-                    details["Industry"] = industryName;
-                }
-            }
-            else
-            {
-                // 如果无法获取行业信息，记录但不过滤（避免误杀）
-                _logger.LogDebug("股票 {StockCode} 无法获取行业信息，跳过行业过滤", stockCode);
-                details["Industry"] = "未知";
-            }
+            // 4. 行业过滤（已移除）
+            // 由于数据源限制，不再进行基于行业数据的过滤
+            // 仅保留基于名称的简单过滤（在AutoSelectionService.ApplyQuickFilterRules中实现）
+            _logger.LogDebug("股票 {StockCode} 跳过行业数据过滤（已禁用）", stockCode);
+            details["Industry"] = "未检查";
 
             result.Details = details;
             result.Reason = "基本面条件全部通过";

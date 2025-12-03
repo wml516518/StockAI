@@ -26,6 +26,35 @@ import time
 from bs4 import BeautifulSoup
 from strategy_hot_volume_breakout import run_strategy
 from technical_indicators import calculate_all_indicators
+import configparser
+
+# 读取配置文件
+config = configparser.ConfigParser()
+config_file = os.path.join(os.path.dirname(__file__), 'config.ini')
+if os.path.exists(config_file):
+    config.read(config_file, encoding='utf-8')
+    print(f"✅ 已加载配置文件: {config_file}")
+    
+    # 读取TuShare Token
+    if config.has_option('TuShare', 'Token'):
+        tushare_token = config.get('TuShare', 'Token').strip()
+        if tushare_token:
+            os.environ['TUSHARE_TOKEN'] = tushare_token
+            print(f"✅ TuShare Token已配置")
+        else:
+            print(f"⚠️ TuShare Token未配置（留空）")
+    
+    # 读取其他配置
+    if config.has_option('Network', 'Timeout'):
+        network_timeout = config.getint('Network', 'Timeout')
+        print(f"📡 网络超时设置: {network_timeout}秒")
+    
+    if config.has_option('Network', 'MaxRetries'):
+        max_retries = config.getint('Network', 'MaxRetries')
+        print(f"🔄 最大重试次数: {max_retries}")
+else:
+    print(f"⚠️ 配置文件不存在: {config_file}")
+    print(f"💡 将使用环境变量或默认配置")
 
 # matplotlib 相关代码已移除，不再需要生成图片
 
@@ -1560,7 +1589,285 @@ def analyze_stock_data(stock_code):
         
         return jsonify(error_response), 500
 
+# ============================================================================
+# 行业数据多数据源获取辅助函数
+# ============================================================================
+
+def _fetch_industry_from_tencent(stock_code):
+    """
+    从腾讯财经获取行业数据
+    
+    由于腾讯财经API不稳定，此方法已禁用
+    建议使用东方财富或AKShare
+    
+    Args:
+        stock_code: 6位股票代码
+    
+    Returns:
+        dict: 包含行业信息的字典，失败返回None
+    """
+    # 腾讯财经API不稳定，暂时禁用
+    print(f"[{datetime.now()}] ⚠️ [腾讯财经] 已禁用，跳过")
+    return None
+
+
+def _fetch_industry_from_eastmoney_direct(stock_code):
+    """
+    直接从东方财富API获取行业数据
+    
+    Args:
+        stock_code: 6位股票代码
+    
+    Returns:
+        dict: 包含行业信息的字典，失败返回None
+    """
+    try:
+        print(f"[{datetime.now()}] 🔄 [东方财富] 尝试获取行业数据: {stock_code}")
+        
+        # 确定市场代码
+        market_code = '1' if stock_code.startswith('6') else '0'
+        secid = f"{market_code}.{stock_code}"
+        
+        # 东方财富个股信息API - 使用更全面的字段列表
+        url = "http://push2.eastmoney.com/api/qt/stock/get"
+        params = {
+            'secid': secid,
+            'fields': 'f57,f58,f127,f116'  # 简化字段列表，只请求必要的
+        }
+        
+        # 使用重试机制
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                session = create_no_proxy_session()
+                session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'http://quote.eastmoney.com/'
+                })
+                
+                response = session.get(url, params=params, timeout=8)
+                response.raise_for_status()
+                
+                data = response.json()
+                if not data or 'data' not in data or not data['data']:
+                    if attempt < max_retries - 1:
+                        print(f"[{datetime.now()}] ⚠️ [东方财富] 数据为空，重试中...")
+                        time.sleep(0.5)
+                        continue
+                    print(f"[{datetime.now()}] ⚠️ [东方财富] 未找到股票数据")
+                    return None
+                
+                stock_data = data['data']
+                print(f"[{datetime.now()}] 🔍 [东方财富] 返回字段: {list(stock_data.keys())}")
+                
+                # 尝试多个可能的行业字段
+                industry_name = None
+                industry_fields = ['f127', 'f116']  # f127通常是行业板块, f116是行业
+                
+                for field in industry_fields:
+                    value = stock_data.get(field)
+                    if value and isinstance(value, str) and value.strip() and value != '-':
+                        # 检查是否是有效的行业名称（包含中文）
+                        if any('\u4e00' <= char <= '\u9fff' for char in str(value)):
+                            industry_name = value.strip()
+                            print(f"[{datetime.now()}] 🔍 [东方财富] 从字段{field}获取行业: {industry_name}")
+                            break
+                
+                if not industry_name:
+                    if attempt < max_retries - 1:
+                        print(f"[{datetime.now()}] ⚠️ [东方财富] 未找到行业信息，重试中...")
+                        time.sleep(0.5)
+                        continue
+                    print(f"[{datetime.now()}] ⚠️ [东方财富] 未找到有效的行业信息")
+                    print(f"[{datetime.now()}] 🔍 [东方财富] 所有字段值: {stock_data}")
+                    return None
+                
+                print(f"[{datetime.now()}] ✅ [东方财富] 成功获取行业: {industry_name}")
+                
+                return {
+                    'industryName': industry_name,
+                    'industryCode': '',
+                    'description': f'该股票属于{industry_name}行业',
+                    'stocks': [],
+                    'performance': {},
+                    'trends': '',
+                    'marketData': {},
+                    'source': '东方财富'
+                }
+                
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt < max_retries - 1:
+                    print(f"[{datetime.now()}] ⚠️ [东方财富] 连接失败 (尝试 {attempt + 1}/{max_retries}): {str(e)[:80]}")
+                    time.sleep(1)
+                    continue
+                else:
+                    raise
+        
+        return None
+        
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ [东方财富] 获取失败: {str(e)[:100]}")
+        return None
+
+
+def _fetch_industry_from_tushare(stock_code):
+    """
+    从TuShare获取行业数据（需要token）
+    
+    Args:
+        stock_code: 6位股票代码
+    
+    Returns:
+        dict: 包含行业信息的字典，失败返回None
+    """
+    try:
+        # 检查是否配置了TuShare token
+        tushare_token = os.environ.get('TUSHARE_TOKEN')
+        if not tushare_token:
+            print(f"[{datetime.now()}] ⚠️ [TuShare] 未配置TUSHARE_TOKEN环境变量，跳过")
+            return None
+        
+        print(f"[{datetime.now()}] 🔄 [TuShare] 尝试获取行业数据: {stock_code}")
+        
+        try:
+            import tushare as ts
+        except ImportError:
+            print(f"[{datetime.now()}] ⚠️ [TuShare] 未安装tushare库，跳过")
+            return None
+        
+        # 设置token
+        ts.set_token(tushare_token)
+        pro = ts.pro_api()
+        
+        # 确定股票代码格式 (TuShare格式: 000001.SZ 或 600000.SH)
+        market_suffix = 'SH' if stock_code.startswith('6') else 'SZ'
+        ts_code = f"{stock_code}.{market_suffix}"
+        
+        # 获取股票基本信息
+        df = pro.stock_basic(ts_code=ts_code, fields='ts_code,name,industry')
+        
+        if df is None or df.empty:
+            print(f"[{datetime.now()}] ⚠️ [TuShare] 未找到股票数据")
+            return None
+        
+        industry_name = df.iloc[0]['industry']
+        if not industry_name or pd.isna(industry_name):
+            print(f"[{datetime.now()}] ⚠️ [TuShare] 未找到行业信息")
+            return None
+        
+        print(f"[{datetime.now()}] ✅ [TuShare] 成功获取行业: {industry_name}")
+        
+        return {
+            'industryName': industry_name,
+            'industryCode': '',
+            'description': f'该股票属于{industry_name}行业',
+            'stocks': [],
+            'performance': {},
+            'trends': '',
+            'marketData': {},
+            'source': 'TuShare'
+        }
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ [TuShare] 获取失败: {str(e)[:100]}")
+        return None
+
+
+def _fetch_industry_from_akshare(stock_code):
+    """
+    从AKShare获取行业数据（原有逻辑）
+    
+    Args:
+        stock_code: 6位股票代码
+    
+    Returns:
+        dict: 包含行业信息的字典，失败返回None
+    """
+    try:
+        print(f"[{datetime.now()}] 🔄 [AKShare] 尝试获取行业数据: {stock_code}")
+        
+        clean_code = stock_code.strip().zfill(6)
+        
+        # 临时禁用代理
+        for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+            os.environ.pop(proxy_var, None)
+        os.environ['NO_PROXY'] = '*'
+        os.environ['no_proxy'] = '*'
+        
+        # 先尝试从股票基本信息获取行业名称
+        industry_name_from_info = None
+        try:
+            df_info = ak.stock_individual_info_em(symbol=clean_code)
+            if df_info is not None and not df_info.empty:
+                industry_fields = ['所属行业', '行业', '行业分类', '板块', '所属板块']
+                for field in industry_fields:
+                    industry_row = df_info[df_info['item'] == field]
+                    if not industry_row.empty:
+                        industry_value = str(industry_row.iloc[0]['value']).strip()
+                        if industry_value and industry_value != '--' and industry_value != 'N/A':
+                            industry_name_from_info = industry_value
+                            break
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ [AKShare] 获取股票信息失败: {str(e)[:100]}")
+        
+        if not industry_name_from_info:
+            print(f"[{datetime.now()}] ⚠️ [AKShare] 未找到行业信息")
+            return None
+        
+        print(f"[{datetime.now()}] ✅ [AKShare] 成功获取行业: {industry_name_from_info}")
+        
+        # 返回基本信息，详细数据将在主函数中获取
+        return {
+            'industryName': industry_name_from_info,
+            'industryCode': '',
+            'description': f'该股票属于{industry_name_from_info}行业',
+            'stocks': [],
+            'performance': {},
+            'trends': '',
+            'marketData': {},
+            'source': 'AKShare'
+        }
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ [AKShare] 获取失败: {str(e)[:100]}")
+        return None
+
+
+def _fetch_industry_with_fallback(stock_code):
+    """
+    使用多数据源fallback机制获取行业数据
+    
+    尝试顺序: AKShare -> 东方财富 -> TuShare
+    (腾讯财经已禁用due to API不稳定)
+    
+    Args:
+        stock_code: 6位股票代码
+    
+    Returns:
+        dict: 包含行业信息的字典，所有源都失败返回None
+    """
+    print(f"[{datetime.now()}] 🔍 开始多数据源获取行业数据: {stock_code}")
+    
+    # 数据源列表（按优先级排序）- 移除腾讯财经
+    sources = [
+        ('AKShare', _fetch_industry_from_akshare),
+        ('东方财富', _fetch_industry_from_eastmoney_direct),
+        ('TuShare', _fetch_industry_from_tushare)
+    ]
+    
+    for source_name, fetch_func in sources:
+        try:
+            result = fetch_func(stock_code)
+            if result and result.get('industryName'):
+                print(f"[{datetime.now()}] ✅ 成功从{source_name}获取行业数据")
+                return result
+        except Exception as e:
+            print(f"[{datetime.now()}] ⚠️ {source_name}获取异常: {str(e)[:100]}")
+            continue
+    
+    print(f"[{datetime.now()}] ❌ 所有数据源均失败")
+    return None
+
 @app.route('/api/stock/industry/<stock_code>', methods=['GET'])
+
 def get_industry_info(stock_code):
     """
     获取股票所属行业的详情
@@ -1582,70 +1889,32 @@ def get_industry_info(stock_code):
         
         clean_code = stock_code.strip().zfill(6)
         
-        # 临时移除代理环境变量（在整个函数执行期间禁用代理，与测试脚本保持一致）
-        print(f"[{datetime.now()}] 🔧 [行业接口] 再次确认禁用代理设置...")
+        # 临时移除代理环境变量（在整个函数执行期间禁用代理）
+        print(f"[{datetime.now()}] 🔧 [行业接口] 禁用代理设置...")
         for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-            original_value = os.environ.get(proxy_var)
-            if original_value:
-                print(f"[{datetime.now()}]   - 移除代理: {proxy_var} = {original_value[:50]}...")
             os.environ.pop(proxy_var, None)
         
         # 确保NO_PROXY设置正确
         os.environ['NO_PROXY'] = '*'
         os.environ['no_proxy'] = '*'
         
-        # 先尝试从股票基本信息获取行业名称（可选步骤）
-        industry_name_from_info = None
-        try:
-            df_info = None
-            max_retries = 2  # 减少重试次数，因为如果失败我们可以用反向查找
-            for attempt in range(max_retries):
-                try:
-                    df_info = ak.stock_individual_info_em(symbol=clean_code)
-                    if df_info is not None and not df_info.empty:
-                        # 打印所有可用字段，用于调试
-                        print(f"[{datetime.now()}] 🔍 [行业接口] 股票信息字段: {list(df_info['item'].values) if 'item' in df_info.columns else '无item列'}")
-                        
-                        # 提取行业信息
-                        industry_fields = ['所属行业', '行业', '行业分类', '板块', '所属板块', '概念板块']
-                        found_industry = False
-                        for field in industry_fields:
-                            industry_row = df_info[df_info['item'] == field]
-                            if not industry_row.empty:
-                                industry_value = str(industry_row.iloc[0]['value']).strip()
-                                if industry_value and industry_value != '--' and industry_value != 'N/A':
-                                    industry_name_from_info = industry_value
-                                    print(f"[{datetime.now()}] ✅ 从股票信息获取到行业: {industry_name_from_info} (字段: {field})")
-                                    found_industry = True
-                                    break
-                        
-                        if not found_industry:
-                            print(f"[{datetime.now()}] ⚠️ [行业接口] 股票信息中未找到行业字段，将使用反向查找")
-                            # 打印所有字段值，便于调试
-                            print(f"[{datetime.now()}] 🔍 [行业接口] 所有字段值:")
-                            for idx, row in df_info.iterrows():
-                                print(f"  - {row.get('item', 'N/A')}: {row.get('value', 'N/A')}")
-                        break
-                    else:
-                        print(f"[{datetime.now()}] ⚠️ [行业接口] 股票信息返回为空，将使用反向查找")
-                except Exception as e:
-                    error_type = type(e).__name__
-                    error_msg = str(e)
-                    if attempt < max_retries - 1:
-                        print(f"[{datetime.now()}] ⚠️ [行业接口] 获取股票信息失败 (尝试 {attempt + 1}/{max_retries}): {error_type} - {error_msg[:100]}，将使用反向查找...")
-                        time.sleep(0.5)
-                    else:
-                        print(f"[{datetime.now()}] ⚠️ [行业接口] 获取股票信息最终失败 ({error_type})，将使用反向查找")
-                        print(f"  错误详情: {error_msg[:200]}")
-        except Exception as e:
-            print(f"[{datetime.now()}] ⚠️ [行业接口] 获取股票信息异常: {str(e)[:100]}，将使用反向查找")
+        # 使用多数据源fallback机制获取行业基本信息
+        industry_basic_info = _fetch_industry_with_fallback(clean_code)
+        
+        # 初始化行业信息
+        if industry_basic_info:
+            industry_name = industry_basic_info.get('industryName', '未知')
+            industry_code = industry_basic_info.get('industryCode', '')
+            data_source = industry_basic_info.get('source', '未知')
+            print(f"[{datetime.now()}] ✅ 成功从{data_source}获取行业名称: {industry_name}")
+        else:
+            industry_name = '未知'
+            industry_code = ''
+            data_source = '无'
+            print(f"[{datetime.now()}] ⚠️ 所有数据源均无法获取行业信息")
         
         # 注意：不在此处恢复代理，因为后续还需要调用AKShare函数获取行业板块数据
         # 代理将在函数结束时统一恢复
-        
-        # 初始化行业信息
-        industry_name = industry_name_from_info if industry_name_from_info else '未知'
-        industry_code = ''
         
         # 使用 stock_board_industry_spot_em 根据行业名称获取行业板块实时行情
         industry_stocks = []
@@ -2152,7 +2421,7 @@ def get_industry_info(stock_code):
             'trends': industry_trends if industry_trends else '',
             'marketData': industry_market_data if industry_market_data else {},  # 新增：行业板块市场数据
             'lastUpdate': datetime.now().isoformat(),
-            'source': 'AKShare'
+            'source': data_source if 'data_source' in locals() else 'AKShare'  # 使用fallback机制获取的数据源
         }
         
         print(f"[{datetime.now()}] ✅ 成功获取行业信息: {stock_code} - {industry_name} (代码: {industry_code}, 股票数: {len(industry_stocks)})")

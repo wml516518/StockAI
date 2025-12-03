@@ -519,17 +519,13 @@ public class AutoSelectionService : IAutoSelectionService
                         HotRank = string.Empty
                     };
 
-                    // 获取行业信息（带超时）
-                    try
-                    {
-                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
-                        enrichedStock.IndustryInfo = await taskIndustryService.GetIndustryInfoFromAKShareAsync(stock.Code);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "获取股票 {StockCode} 的行业信息失败", stock.Code);
-                    }
+                    // 获取行业信息（已禁用）
+                    // 由于数据源限制，不再获取行业信息
+                    enrichedStock.IndustryInfo = new IndustryInfoResult 
+                    { 
+                        IndustryName = "未获取",
+                        InfoText = "行业数据获取已禁用"
+                    };
 
                     // 获取人气榜信息（带超时）
                     try

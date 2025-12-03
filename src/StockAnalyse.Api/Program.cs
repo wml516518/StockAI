@@ -116,8 +116,8 @@ builder.Services.AddScoped<IAnnouncementService, AnnouncementService>();
 // 注册后台服务（做T方案定时更新）
 builder.Services.AddHostedService<TradingPlanBackgroundService>();
 
-// 注册自动选股后台服务
-builder.Services.AddHostedService<AutoSelectionJob>();
+// 注册自动选股后台服务 (已移除)
+// builder.Services.AddHostedService<AutoSelectionJob>();
 
 // 添加HttpClient，为AI服务配置专门的HttpClient，设置更长的超时时间（5分钟）
 builder.Services.AddHttpClient("AIService", client =>
