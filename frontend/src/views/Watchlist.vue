@@ -325,31 +325,17 @@
                 <!-- 一键做T区域 -->
                 <div class="auto-trading-section">
                   <div class="auto-trading-header">
-                    <span>一键做T</span>
-                    <div class="auto-trading-controls">
-                      <select 
-                        v-if="stock.autoTradingEnabled"
-                        :value="stock.autoTradingIntervalMinutes || 30"
-                        @change="handleIntervalChange(stock.id, parseInt($event.target.value))"
-                        class="interval-select"
-                        :disabled="togglingAutoTrading[stock.id]"
-                        title="更新间隔"
-                      >
-                        <option :value="10">10分钟</option>
-                        <option :value="30">30分钟</option>
-                      </select>
-                      <label class="toggle-switch">
-                        <input 
-                          type="checkbox" 
-                          :checked="stock.autoTradingEnabled"
-                          @change="handleToggleAutoTrading(stock, $event.target.checked)"
-                          :disabled="togglingAutoTrading[stock.id]"
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
+                    <span>实时做T</span>
+                    <button 
+                      class="btn btn-small btn-generate-plan" 
+                      @click="handleRefreshTradingPlan(stock.id)"
+                      :disabled="refreshingPlan[stock.id]"
+                      title="生成做T方案"
+                    >
+                      {{ refreshingPlan[stock.id] ? '生成中...' : '📈 生成方案' }}
+                    </button>
                   </div>
-                  <div v-if="stock.autoTradingEnabled && getTradingPlan(stock)" class="trading-plan-display">
+                  <div v-if="getTradingPlan(stock)" class="trading-plan-display">
                     <div class="trading-plan-item">
                       <span class="plan-label">买入:</span>
                       <span class="plan-value buy-price">{{ getTradingPlan(stock)?.buyPriceRange || '-' }}</span>
@@ -365,18 +351,10 @@
                       <span class="plan-update-time" v-if="stock.tradingPlanUpdateTime">
                         更新: {{ getRelativeTimeText(stock.tradingPlanUpdateTime) }}
                       </span>
-                      <button 
-                        class="btn-refresh-plan" 
-                        @click="handleRefreshTradingPlan(stock.id)"
-                        :disabled="refreshingPlan[stock.id]"
-                        title="手动刷新做T方案"
-                      >
-                        {{ refreshingPlan[stock.id] ? '刷新中...' : '🔄' }}
-                      </button>
                     </div>
                   </div>
-                  <div v-else-if="stock.autoTradingEnabled" class="trading-plan-loading">
-                    正在生成做T方案...
+                  <div v-else class="trading-plan-placeholder">
+                    点击"生成方案"获取做T建议
                   </div>
                 </div>
                 <!-- 操作分析按钮区域 -->
@@ -2889,85 +2867,27 @@ const formatAnalysisText = (text) => {
   color: #333;
 }
 
-.auto-trading-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.interval-select {
-  padding: 4px 8px;
-  font-size: 0.85em;
-  border: 1px solid #ddd;
+.btn-generate-plan {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 6px 12px;
   border-radius: 4px;
-  background: white;
+  font-size: 0.85em;
   cursor: pointer;
   transition: all 0.3s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.interval-select:hover:not(:disabled) {
-  border-color: #1890ff;
+.btn-generate-plan:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
-.interval-select:focus {
-  outline: none;
-  border-color: #1890ff;
-  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
-}
-
-.interval-select:disabled {
+.btn-generate-plan:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.toggle-switch {
-  position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 24px;
-}
-
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: #ccc;
-  transition: 0.3s;
-  border-radius: 24px;
-}
-
-.toggle-slider:before {
-  position: absolute;
-  content: "";
-  height: 18px;
-  width: 18px;
-  left: 3px;
-  bottom: 3px;
-  background-color: white;
-  transition: 0.3s;
-  border-radius: 50%;
-}
-
-.toggle-switch input:checked + .toggle-slider {
-  background-color: #4caf50;
-}
-
-.toggle-switch input:checked + .toggle-slider:before {
-  transform: translateX(20px);
-}
-
-.toggle-switch input:disabled + .toggle-slider {
-  opacity: 0.6;
-  cursor: not-allowed;
+  transform: none;
 }
 
 .trading-plan-display {
@@ -3017,7 +2937,7 @@ const formatAnalysisText = (text) => {
 
 .trading-plan-footer {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   margin-top: 8px;
   padding-top: 8px;
@@ -3029,31 +2949,13 @@ const formatAnalysisText = (text) => {
   color: #999;
 }
 
-.btn-refresh-plan {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 1.2em;
-  padding: 4px 8px;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.btn-refresh-plan:hover:not(:disabled) {
-  background: #e0e0e0;
-}
-
-.btn-refresh-plan:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.trading-plan-loading {
+.trading-plan-placeholder {
   margin-top: 10px;
   padding: 10px;
   text-align: center;
-  color: #666;
+  color: #999;
   font-size: 0.85em;
+  font-style: italic;
 }
 
 .operation-buttons-section {

@@ -12,10 +12,7 @@ public interface ITradingPlanService
     /// </summary>
     Task UpdateTradingPlanForStockAsync(int watchlistStockId, bool force = false);
 
-    /// <summary>
-    /// 更新所有启用做T的股票方案
-    /// </summary>
-    Task UpdateAllTradingPlansAsync();
+
 }
 
 public class TradingPlanResult

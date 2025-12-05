@@ -329,27 +329,11 @@ _logger.LogInformation("做T方案提示词: {TradingPrompt}", tradingPrompt);
             return;
         }
 
-        if (!watchlistStock.AutoTradingEnabled && !force)
+        // 仅在手动触发时执行 (force = true)
+        if (!force)
         {
+            _logger.LogDebug("跳过更新做T方案: {StockCode}, 需要手动触发", watchlistStock.StockCode);
             return;
-        }
-
-        // 检查是否需要更新（距离上次更新时间是否超过间隔）
-        if (!force && watchlistStock.TradingPlanUpdateTime.HasValue)
-        {
-            var interval = TimeSpan.FromMinutes(watchlistStock.AutoTradingIntervalMinutes);
-            var timeSinceLastUpdate = DateTime.Now - watchlistStock.TradingPlanUpdateTime.Value;
-            
-            if (timeSinceLastUpdate < interval)
-            {
-                var minutesRemaining = (interval - timeSinceLastUpdate).TotalMinutes;
-                _logger.LogDebug("做T方案尚未到更新时间: {StockCode}, 上次更新: {UpdateTime}, 还需等待: {MinutesRemaining:F1} 分钟", 
-                    watchlistStock.StockCode, watchlistStock.TradingPlanUpdateTime.Value, minutesRemaining);
-                return;
-            }
-            
-            _logger.LogInformation("做T方案已到更新时间: {StockCode}, 距离上次更新: {TimeSinceLastUpdate:F1} 分钟, 设置间隔: {IntervalMinutes} 分钟", 
-                watchlistStock.StockCode, timeSinceLastUpdate.TotalMinutes, watchlistStock.AutoTradingIntervalMinutes);
         }
 
         try
@@ -375,7 +359,7 @@ _logger.LogInformation("做T方案提示词: {TradingPrompt}", tradingPrompt);
 
                 _logger.LogInformation("成功更新做T方案: {StockCode}", watchlistStock.StockCode);
                 
-                // 推送更新事件到前端
+                // 推送更新事件到前端（若事件服务可用）
                 if (_eventService != null)
                 {
                     await _eventService.NotifyTradingPlanUpdatedAsync(
@@ -395,54 +379,6 @@ _logger.LogInformation("做T方案提示词: {TradingPrompt}", tradingPrompt);
         {
             _logger.LogError(ex, "更新做T方案失败: {StockCode}", watchlistStock.StockCode);
         }
-    }
-
-    public async Task UpdateAllTradingPlansAsync()
-    {
-        var enabledStocks = await _context.WatchlistStocks
-            .Where(w => w.AutoTradingEnabled)
-            .ToListAsync();
-
-        if (enabledStocks.Count == 0)
-        {
-            _logger.LogDebug("没有启用做T的股票，跳过更新");
-            return;
-        }
-
-        _logger.LogInformation("开始检查所有启用做T的股票方案，共 {Count} 只", enabledStocks.Count);
-        
-        int updatedCount = 0;
-        int skippedCount = 0;
-
-        foreach (var stock in enabledStocks)
-        {
-            // 检查是否需要更新
-            bool needsUpdate = false;
-            if (!stock.TradingPlanUpdateTime.HasValue)
-            {
-                needsUpdate = true;
-            }
-            else
-            {
-                var interval = TimeSpan.FromMinutes(stock.AutoTradingIntervalMinutes);
-                var timeSinceLastUpdate = DateTime.Now - stock.TradingPlanUpdateTime.Value;
-                needsUpdate = timeSinceLastUpdate >= interval;
-            }
-
-            if (needsUpdate)
-            {
-                await UpdateTradingPlanForStockAsync(stock.Id, force: false);
-                updatedCount++;
-                // 避免请求过于频繁
-                await Task.Delay(1000);
-            }
-            else
-            {
-                skippedCount++;
-            }
-        }
-
-        _logger.LogInformation("完成检查所有做T方案: 已更新 {UpdatedCount} 只, 跳过 {SkippedCount} 只", updatedCount, skippedCount);
     }
 }
 

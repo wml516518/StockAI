@@ -43,7 +43,8 @@ public class TradingPlanBackgroundService : BackgroundService
                     var tradingPlanService = scope.ServiceProvider.GetRequiredService<ITradingPlanService>();
 
                     _logger.LogDebug("在交易时间段内，开始更新做T方案...");
-                    await tradingPlanService.UpdateAllTradingPlansAsync();
+                    // 已移除定时更新功能，此后台服务不再使用
+                    // await tradingPlanService.UpdateAllTradingPlansAsync();
                 }
                 else
                 {
