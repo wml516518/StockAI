@@ -64,8 +64,10 @@ public class WatchlistStock
     public bool LowAlertSent { get; set; }
     
     // 建议价格
-    public decimal? SuggestedBuyPrice { get; set; } // 建议买入价
-    public decimal? SuggestedSellPrice { get; set; } // 建议卖出价
+    public decimal? SuggestedBuyPrice { get; set; } // 建议买入价1
+    public decimal? SuggestedSellPrice { get; set; } // 建议卖出价1
+    public decimal? SuggestedBuyPrice2 { get; set; } // 建议买入价2
+    public decimal? SuggestedSellPrice2 { get; set; } // 建议卖出价2
     public bool BuyAlertSent { get; set; } // 买入提醒已发送
     public bool SellAlertSent { get; set; } // 卖出提醒已发送
     

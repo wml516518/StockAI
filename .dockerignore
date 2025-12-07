@@ -1,0 +1,74 @@
+# Git相关
+.git
+.gitignore
+.gitattributes
+
+# IDE和编辑器
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 构建输出
+**/bin
+**/obj
+**/dist
+**/build
+**/publish
+**/node_modules
+**/.next
+**/.nuxt
+
+# 日志和数据
+**/logs
+**/data
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Python相关
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+**/.venv
+**/venv
+**/ENV
+
+# Node相关
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+
+# 配置文件（包含敏感信息）
+**/*.user
+**/*.local
+**/appsettings.Development.json
+**/config.ini
+**/.env
+**/.env.local
+**/.env.*.local
+
+# 文档
+*.md
+!README.md
+
+# Docker相关
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# 其他
+*.bak
+*.tmp
+*.temp

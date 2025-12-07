@@ -58,10 +58,12 @@ export const watchlistService = {
   },
 
   // 更新建议价格
-  updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice) {
+  updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice, suggestedBuyPrice2 = null, suggestedSellPrice2 = null) {
     return api.put(`/watchlist/${id}/suggested-price`, {
       suggestedBuyPrice,
-      suggestedSellPrice
+      suggestedSellPrice,
+      suggestedBuyPrice2,
+      suggestedSellPrice2
     })
   },
 

@@ -338,11 +338,19 @@
                   <div v-if="getTradingPlan(stock)" class="trading-plan-display">
                     <div class="trading-plan-item">
                       <span class="plan-label">买入:</span>
-                      <span class="plan-value buy-price">{{ getTradingPlan(stock)?.buyPriceRange || '-' }}</span>
+                      <span class="plan-value buy-price">
+                        <span v-if="getTradingPlan(stock)?.buyPrice1">{{ formatPrice(getTradingPlan(stock)?.buyPrice1) }}</span>
+                        <span v-if="getTradingPlan(stock)?.buyPrice2" class="price-separator"> / {{ formatPrice(getTradingPlan(stock)?.buyPrice2) }}</span>
+                        <span v-if="!getTradingPlan(stock)?.buyPrice1 && !getTradingPlan(stock)?.buyPrice2">-</span>
+                      </span>
                     </div>
                     <div class="trading-plan-item">
                       <span class="plan-label">卖出:</span>
-                      <span class="plan-value sell-price">{{ getTradingPlan(stock)?.sellPriceRange || '-' }}</span>
+                      <span class="plan-value sell-price">
+                        <span v-if="getTradingPlan(stock)?.sellPrice1">{{ formatPrice(getTradingPlan(stock)?.sellPrice1) }}</span>
+                        <span v-if="getTradingPlan(stock)?.sellPrice2" class="price-separator"> / {{ formatPrice(getTradingPlan(stock)?.sellPrice2) }}</span>
+                        <span v-if="!getTradingPlan(stock)?.sellPrice1 && !getTradingPlan(stock)?.sellPrice2">-</span>
+                      </span>
                     </div>
                     <div v-if="getTradingPlan(stock)?.suggestion" class="trading-plan-suggestion">
                       {{ getTradingPlan(stock)?.suggestion }}
@@ -505,22 +513,42 @@
                   </div>
                   <div v-if="editingSuggestedPrice[stock.id]" class="suggested-price-edit">
                     <div class="price-input-group">
-                      <label>买入价:</label>
+                      <label>买入价1:</label>
                       <input 
                         type="number" 
                         step="0.01" 
                         v-model.number="suggestedPriceForm[stock.id].buyPrice"
-                        placeholder="建议买入价"
+                        placeholder="第一个买入价"
                         class="price-input"
                       />
                     </div>
                     <div class="price-input-group">
-                      <label>卖出价:</label>
+                      <label>买入价2:</label>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        v-model.number="suggestedPriceForm[stock.id].buyPrice2"
+                        placeholder="第二个买入价"
+                        class="price-input"
+                      />
+                    </div>
+                    <div class="price-input-group">
+                      <label>卖出价1:</label>
                       <input 
                         type="number" 
                         step="0.01" 
                         v-model.number="suggestedPriceForm[stock.id].sellPrice"
-                        placeholder="建议卖出价"
+                        placeholder="第一个卖出价"
+                        class="price-input"
+                      />
+                    </div>
+                    <div class="price-input-group">
+                      <label>卖出价2:</label>
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        v-model.number="suggestedPriceForm[stock.id].sellPrice2"
+                        placeholder="第二个卖出价"
                         class="price-input"
                       />
                     </div>
@@ -533,9 +561,12 @@
                     </button>
                   </div>
                   <div v-else class="suggested-price-display">
-                    <div v-if="stock.suggestedBuyPrice" class="suggested-price-item buy-price">
+                    <div v-if="stock.suggestedBuyPrice || stock.suggestedBuyPrice2" class="suggested-price-item buy-price">
                       <span class="price-label">买入:</span>
-                      <span class="price-value">{{ formatPrice(stock.suggestedBuyPrice) }}</span>
+                      <span class="price-value">
+                        <span v-if="stock.suggestedBuyPrice">{{ formatPrice(stock.suggestedBuyPrice) }}</span>
+                        <span v-if="stock.suggestedBuyPrice2" class="price-separator"> / {{ formatPrice(stock.suggestedBuyPrice2) }}</span>
+                      </span>
                       <span v-if="shouldShowBuyAlert(stock)" class="alert-badge alert-triggered">
                         <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
@@ -544,9 +575,12 @@
                         <span class="alert-text">买入提醒</span>
                       </span>
                     </div>
-                    <div v-if="stock.suggestedSellPrice" class="suggested-price-item sell-price">
+                    <div v-if="stock.suggestedSellPrice || stock.suggestedSellPrice2" class="suggested-price-item sell-price">
                       <span class="price-label">卖出:</span>
-                      <span class="price-value">{{ formatPrice(stock.suggestedSellPrice) }}</span>
+                      <span class="price-value">
+                        <span v-if="stock.suggestedSellPrice">{{ formatPrice(stock.suggestedSellPrice) }}</span>
+                        <span v-if="stock.suggestedSellPrice2" class="price-separator"> / {{ formatPrice(stock.suggestedSellPrice2) }}</span>
+                      </span>
                       <span v-if="shouldShowSellAlert(stock)" class="alert-badge alert-triggered">
                         <svg class="alert-icon bell-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M12 2C8.13 2 5 5.13 5 9C5 11.38 5.97 13.54 7.5 15L6 22H18L16.5 15C18.03 13.54 19 11.38 19 9C19 5.13 15.87 2 12 2ZM12 4C14.76 4 17 6.24 17 9C17 10.65 16.32 12.13 15.24 13.11L14.75 13.5H9.25L8.76 13.11C7.68 12.13 7 10.65 7 9C7 6.24 9.24 4 12 4Z" fill="currentColor"/>
@@ -555,7 +589,7 @@
                         <span class="alert-text">卖出提醒</span>
                       </span>
                     </div>
-                    <div v-if="!stock.suggestedBuyPrice && !stock.suggestedSellPrice" class="no-suggested-price">
+                    <div v-if="!stock.suggestedBuyPrice && !stock.suggestedBuyPrice2 && !stock.suggestedSellPrice && !stock.suggestedSellPrice2" class="no-suggested-price">
                       未设置建议价格
                     </div>
                   </div>
@@ -1521,8 +1555,10 @@ const toggleSuggestedPriceEdit = (stockId) => {
     const stock = stocks.value.find(s => s.id === stockId)
     editingSuggestedPrice.value[stockId] = true
     suggestedPriceForm.value[stockId] = {
-      buyPrice: stock?.suggestedBuyPrice || null,
-      sellPrice: stock?.suggestedSellPrice || null
+      buyPrice: stock?. suggestedBuyPrice || null,
+      buyPrice2: stock?.suggestedBuyPrice2 || null,
+      sellPrice: stock?.suggestedSellPrice || null,
+      sellPrice2: stock?.suggestedSellPrice2 || null
     }
   }
 }
@@ -1534,7 +1570,9 @@ const handleSaveSuggestedPrice = async (stockId) => {
     await watchlistStore.updateSuggestedPrice(
       stockId,
       form.buyPrice || null,
-      form.sellPrice || null
+      form.sellPrice || null,
+      form.buyPrice2 || null,
+      form.sellPrice2 || null
     )
     // 立即关闭编辑模式，不等待列表刷新
     delete editingSuggestedPrice.value[stockId]
@@ -2014,6 +2052,23 @@ const handleRefreshTradingPlan = async (stockId) => {
     // 只更新当前股票的数据，不刷新整个列表
     if (updatedStock) {
       updateSingleStock(updatedStock)
+      
+      // 自动填充建议价格
+      const plan = getTradingPlan(updatedStock)
+      if (plan && (plan.buyPrice1 || plan.buyPrice2 || plan.sellPrice1 || plan.sellPrice2)) {
+        try {
+          await watchlistStore.updateSuggestedPrice(
+            stockId,
+            plan.buyPrice1 || null,
+            plan.sellPrice1 || null,
+            plan.buyPrice2 || null,
+            plan.sellPrice2 || null
+          )
+          console.log('✅ 已自动填充建议价格')
+        } catch (error) {
+          console.error('自动填充建议价格失败:', error)
+        }
+      }
     }
   } catch (error) {
     console.error('刷新做T方案失败:', error)

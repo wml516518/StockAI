@@ -21,8 +21,10 @@ public class TradingPlanResult
     public string? Message { get; set; }
     public string StockCode { get; set; } = string.Empty;
     public string StockName { get; set; } = string.Empty;
-    public string BuyPriceRange { get; set; } = string.Empty;
-    public string SellPriceRange { get; set; } = string.Empty;
+    public decimal? BuyPrice1 { get; set; }
+    public decimal? BuyPrice2 { get; set; }
+    public decimal? SellPrice1 { get; set; }
+    public decimal? SellPrice2 { get; set; }
     public string Suggestion { get; set; } = string.Empty;
     public decimal CurrentPrice { get; set; }
     public DateTime UpdateTime { get; set; }

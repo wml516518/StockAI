@@ -228,7 +228,12 @@ public class WatchlistController : ControllerBase
     {
         try
         {
-            var stock = await _watchlistService.UpdateSuggestedPriceAsync(id, request.SuggestedBuyPrice, request.SuggestedSellPrice);
+            var stock = await _watchlistService.UpdateSuggestedPriceAsync(
+                id, 
+                request.SuggestedBuyPrice, 
+                request.SuggestedSellPrice,
+                request.SuggestedBuyPrice2,
+                request.SuggestedSellPrice2);
             return Ok(stock);
         }
         catch (KeyNotFoundException ex)
@@ -279,8 +284,10 @@ public class WatchlistController : ControllerBase
                 {
                     stock.TradingPlan = System.Text.Json.JsonSerializer.Serialize(new
                     {
-                        buyPriceRange = plan.BuyPriceRange,
-                        sellPriceRange = plan.SellPriceRange,
+                        buyPrice1 = plan.BuyPrice1,
+                        buyPrice2 = plan.BuyPrice2,
+                        sellPrice1 = plan.SellPrice1,
+                        sellPrice2 = plan.SellPrice2,
                         suggestion = plan.Suggestion,
                         currentPrice = plan.CurrentPrice,
                         updateTime = plan.UpdateTime
@@ -421,6 +428,8 @@ public class UpdateSuggestedPriceRequest
 {
     public decimal? SuggestedBuyPrice { get; set; }
     public decimal? SuggestedSellPrice { get; set; }
+    public decimal? SuggestedBuyPrice2 { get; set; }
+    public decimal? SuggestedSellPrice2 { get; set; }
 }
 
 public class ResetAlertFlagsRequest

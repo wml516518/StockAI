@@ -531,7 +531,12 @@ public class WatchlistService : IWatchlistService
         return new WatchlistMoveResult(true, targetItem != null, movedToTarget);
     }
 
-    public async Task<WatchlistStock> UpdateSuggestedPriceAsync(int id, decimal? suggestedBuyPrice, decimal? suggestedSellPrice)
+    public async Task<WatchlistStock> UpdateSuggestedPriceAsync(
+        int id, 
+        decimal? suggestedBuyPrice, 
+        decimal? suggestedSellPrice,
+        decimal? suggestedBuyPrice2 = null,
+        decimal? suggestedSellPrice2 = null)
     {
         var item = await _context.WatchlistStocks
             .Include(w => w.Category)
@@ -545,9 +550,13 @@ public class WatchlistService : IWatchlistService
         // 保存旧值用于比较
         var oldBuyPrice = item.SuggestedBuyPrice;
         var oldSellPrice = item.SuggestedSellPrice;
+        var oldBuyPrice2 = item.SuggestedBuyPrice2;
+        var oldSellPrice2 = item.SuggestedSellPrice2;
         
         item.SuggestedBuyPrice = suggestedBuyPrice;
         item.SuggestedSellPrice = suggestedSellPrice;
+        item.SuggestedBuyPrice2 = suggestedBuyPrice2;
+        item.SuggestedSellPrice2 = suggestedSellPrice2;
         
         // 如果更新了建议价格，重置提醒标志，允许重新提醒
         if (suggestedBuyPrice.HasValue && oldBuyPrice != suggestedBuyPrice)
@@ -555,6 +564,14 @@ public class WatchlistService : IWatchlistService
             item.BuyAlertSent = false;
         }
         if (suggestedSellPrice.HasValue && oldSellPrice != suggestedSellPrice)
+        {
+            item.SellAlertSent = false;
+        }
+        if (suggestedBuyPrice2.HasValue && oldBuyPrice2 != suggestedBuyPrice2)
+        {
+            item.BuyAlertSent = false;
+        }
+        if (suggestedSellPrice2.HasValue && oldSellPrice2 != suggestedSellPrice2)
         {
             item.SellAlertSent = false;
         }

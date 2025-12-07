@@ -67,7 +67,12 @@ public interface IWatchlistService
     /// <summary>
     /// 更新自选股建议价格
     /// </summary>
-    Task<WatchlistStock> UpdateSuggestedPriceAsync(int id, decimal? suggestedBuyPrice, decimal? suggestedSellPrice);
+    Task<WatchlistStock> UpdateSuggestedPriceAsync(
+        int id, 
+        decimal? suggestedBuyPrice, 
+        decimal? suggestedSellPrice,
+        decimal? suggestedBuyPrice2 = null,
+        decimal? suggestedSellPrice2 = null);
     
     /// <summary>
     /// 重置自选股提醒标志（当价格偏离建议价格时）

@@ -143,14 +143,18 @@ public class TradingPlanService : ITradingPlanService
 
 【要求】
 请充分结合上述多维度数据（价格、波动、成交量、成交额、换手率等）生成做T方案，需包含：
-1. **买入价格区间**：具体的买入价格或价格区间（例如：69.50-69.80元）
-2. **卖出价格区间**：具体的卖出价格或价格区间（例如：70.50-71.00元）
-3. **操作建议**：简短说明该策略的逻辑（如量价配合、资金面、风险点），1-2句话即可
+1. **买入价格1**：第一个建议买入价（具体价格，如69.50元）
+2. **买入价格2**：第二个建议买入价（具体价格，通常比第一个更低，如69.20元）
+3. **卖出价格1**：第一个建议卖出价（具体价格，如70.50元）
+4. **卖出价格2**：第二个建议卖出价（具体价格，通常比第一个更高，如70.80元）
+5. **操作建议**：简短说明该策略的逻辑（如量价配合、资金面、风险点），1-2句话即可
 
 请以JSON格式返回，格式如下：
 {{
-  ""buyPriceRange"": ""买入价格区间"",
-  ""sellPriceRange"": ""卖出价格区间"",
+  ""buyPrice1"": 69.50,
+  ""buyPrice2"": 69.20,
+  ""sellPrice1"": 70.50,
+  ""sellPrice2"": 70.80,
   ""suggestion"": ""操作建议""
 }}
 
@@ -210,15 +214,17 @@ _logger.LogInformation("做T方案提示词: {TradingPrompt}", tradingPrompt);
                 Success = true,
                 StockCode = stockCode,
                 StockName = stockName,
-                BuyPriceRange = planData.BuyPriceRange ?? "",
-                SellPriceRange = planData.SellPriceRange ?? "",
+                BuyPrice1 = planData.BuyPrice1,
+                BuyPrice2 = planData.BuyPrice2,
+                SellPrice1 = planData.SellPrice1,
+                SellPrice2 = planData.SellPrice2,
                 Suggestion = planData.Suggestion ?? "",
                 CurrentPrice = currentPrice,
                 UpdateTime = DateTime.Now
             };
 
-            _logger.LogInformation("成功生成做T方案: {StockCode}, 买入: {BuyPrice}, 卖出: {SellPrice}", 
-                stockCode, result.BuyPriceRange, result.SellPriceRange);
+            _logger.LogInformation("成功生成做T方案: {StockCode}, 买入: {BuyPrice1}/{BuyPrice2}, 卖出: {SellPrice1}/{SellPrice2}", 
+                stockCode, result.BuyPrice1, result.BuyPrice2, result.SellPrice1, result.SellPrice2);
 
             return result;
         }
@@ -299,21 +305,33 @@ _logger.LogInformation("做T方案提示词: {TradingPrompt}", tradingPrompt);
     private TradingPlanData? ExtractTradingPlanFromText(string text, decimal currentPrice)
     {
         // 尝试从文本中提取价格信息
-        var buyMatch = System.Text.RegularExpressions.Regex.Match(text, @"买入[：:]\s*([0-9.]+(?:\s*[-~]\s*[0-9.]+)?)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        var sellMatch = System.Text.RegularExpressions.Regex.Match(text, @"卖出[：:]\s*([0-9.]+(?:\s*[-~]\s*[0-9.]+)?)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var buyMatches = System.Text.RegularExpressions.Regex.Matches(text, @"买入[价]?[：:1-2]?\s*([0-9.]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var sellMatches = System.Text.RegularExpressions.Regex.Matches(text, @"卖出[价]?[：:1-2]?\s*([0-9.]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        var buyPrice = buyMatch.Success ? buyMatch.Groups[1].Value.Trim() : "";
-        var sellPrice = sellMatch.Success ? sellMatch.Groups[1].Value.Trim() : "";
+        decimal? buyPrice1 = null, buyPrice2 = null;
+        decimal? sellPrice1 = null, sellPrice2 = null;
 
-        if (string.IsNullOrWhiteSpace(buyPrice) && string.IsNullOrWhiteSpace(sellPrice))
+        if (buyMatches.Count >= 1 && decimal.TryParse(buyMatches[0].Groups[1].Value, out var bp1))
+            buyPrice1 = bp1;
+        if (buyMatches.Count >= 2 && decimal.TryParse(buyMatches[1].Groups[1].Value, out var bp2))
+            buyPrice2 = bp2;
+
+        if (sellMatches.Count >= 1 && decimal.TryParse(sellMatches[0].Groups[1].Value, out var sp1))
+            sellPrice1 = sp1;
+        if (sellMatches.Count >= 2 && decimal.TryParse(sellMatches[1].Groups[1].Value, out var sp2))
+            sellPrice2 = sp2;
+
+        if (!buyPrice1.HasValue && !sellPrice1.HasValue)
         {
             return null;
         }
 
         return new TradingPlanData
         {
-            BuyPriceRange = buyPrice,
-            SellPriceRange = sellPrice,
+            BuyPrice1 = buyPrice1,
+            BuyPrice2 = buyPrice2,
+            SellPrice1 = sellPrice1,
+            SellPrice2 = sellPrice2,
             Suggestion = text.Length > 200 ? text.Substring(0, 200) + "..." : text
         };
     }
@@ -344,8 +362,10 @@ _logger.LogInformation("做T方案提示词: {TradingPrompt}", tradingPrompt);
             {
                 var planJson = JsonConvert.SerializeObject(new
                 {
-                    buyPriceRange = plan.BuyPriceRange,
-                    sellPriceRange = plan.SellPriceRange,
+                    buyPrice1 = plan.BuyPrice1,
+                    buyPrice2 = plan.BuyPrice2,
+                    sellPrice1 = plan.SellPrice1,
+                    sellPrice2 = plan.SellPrice2,
                     suggestion = plan.Suggestion,
                     currentPrice = plan.CurrentPrice,
                     updateTime = plan.UpdateTime
@@ -386,8 +406,11 @@ public readonly record struct RangeData(decimal High, decimal Low);
 
 public class TradingPlanData
 {
-    public string? BuyPriceRange { get; set; }
-    public string? SellPriceRange { get; set; }
+    public decimal? BuyPrice1 { get; set; }
+    public decimal? BuyPrice2 { get; set; }
+    public decimal? SellPrice1 { get; set; }
+    public decimal? SellPrice2 { get; set; }
     public string? Suggestion { get; set; }
 }
+
 

@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # 后端API服务
+  backend:
+    build:
+      context: .
+      dockerfile: src/StockAnalyse.Api/Dockerfile
+    container_name: stock-api
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:5000
+      - ConnectionStrings__DefaultConnection=Data Source=/app/data/stockanalyse.db
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-exp}
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+      - ./logs/backend:/app/logs
+    networks:
+      - stock-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - python-service
+
+  # Python数据服务
+  python-service:
+    build:
+      context: ./python-data-service
+      dockerfile: Dockerfile
+    container_name: stock-python
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      - FLASK_ENV=production
+    volumes:
+      - ./python-data-service/config.ini:/app/config.ini:ro
+      - ./logs/python:/app/logs
+    networks:
+      - stock-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5001/health" ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # 前端Nginx服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: stock-frontend
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - stock-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      - backend
+
+networks:
+  stock-network:
+    driver: bridge
+
+volumes:
+  stock-data:
+  stock-logs:

@@ -107,21 +107,21 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       console.log('API返回的原始数据:', response)
       console.log('数据类型:', typeof response)
       console.log('是否为数组:', Array.isArray(response))
-      
+
       let dataArray = []
-      
+
       if (Array.isArray(response)) {
         dataArray = response
       } else if (response && typeof response === 'object') {
         // 如果返回的是对象，尝试提取数组
         dataArray = response.data || response.items || response.stocks || []
       }
-      
+
       stocks.value = dataArray
       console.log('最终设置的自选股数量:', stocks.value.length)
 
       applyInsightsToStocks()
-      
+
       if (stocks.value.length > 0) {
         console.log('第一条股票数据:', JSON.stringify(stocks.value[0], null, 2))
       } else {
@@ -273,15 +273,17 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   }
 
   // 更新建议价格
-  async function updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice) {
+  async function updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice, suggestedBuyPrice2 = null, suggestedSellPrice2 = null) {
     try {
-      const updatedStock = await watchlistService.updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice)
+      const updatedStock = await watchlistService.updateSuggestedPrice(id, suggestedBuyPrice, suggestedSellPrice, suggestedBuyPrice2, suggestedSellPrice2)
       // 只更新对应的股票项，不重新获取整个列表
       const index = stocks.value.findIndex(s => s.id === id)
       if (index !== -1) {
         // 更新建议价格字段，保留其他数据不变
         stocks.value[index].suggestedBuyPrice = updatedStock.suggestedBuyPrice
+        stocks.value[index].suggestedBuyPrice2 = updatedStock.suggestedBuyPrice2
         stocks.value[index].suggestedSellPrice = updatedStock.suggestedSellPrice
+        stocks.value[index].suggestedSellPrice2 = updatedStock.suggestedSellPrice2
         stocks.value[index].buyAlertSent = updatedStock.buyAlertSent
         stocks.value[index].sellAlertSent = updatedStock.sellAlertSent
         stocks.value[index].lastUpdate = updatedStock.lastUpdate
@@ -330,27 +332,27 @@ export const useWatchlistStore = defineStore('watchlist', () => {
   // 刷新股票价格
   // 防止并发刷新
   let isRefreshing = false
-  
+
   async function refreshPrices(forceRefresh = false) {
     // 如果正在刷新或没有股票，直接返回
     if (isRefreshing || stocks.value.length === 0) {
       return
     }
-    
+
     // 如果是自动刷新（非强制），需要检查是否启用和是否在交易时间内
     if (!forceRefresh) {
       // 自动刷新需要启用状态
       if (!autoRefreshEnabled.value) {
         return
       }
-      
+
       // 检查是否在交易时间内，如果不在交易时间内则不刷新
       if (!isTradingTime()) {
         console.log('当前不在交易时间内，跳过自动刷新')
         return
       }
     }
-    
+
     try {
       isRefreshing = true
       const codes = stocks.value.map(s => s.stockCode)
@@ -358,32 +360,32 @@ export const useWatchlistStore = defineStore('watchlist', () => {
         isRefreshing = false
         return
       }
-      
+
       const updatedStocks = await stockService.getBatchStocks(codes)
-      
+
       // 辅助函数：规范化股票代码（移除市场前缀，统一格式）
       const normalizeCode = (code) => {
         if (!code) return ''
         // 移除sh/sz前缀，统一转换为纯数字代码
         return code.toString().replace(/^(sh|sz)/i, '').trim()
       }
-      
+
       // 更新价格信息
       stocks.value.forEach(stock => {
         const stockCodeNormalized = normalizeCode(stock.stockCode)
-        
+
         // 查找匹配的更新数据
         const updated = updatedStocks.find(s => {
           const updatedCodeNormalized = normalizeCode(s.code || s.Code)
           return updatedCodeNormalized === stockCodeNormalized
         })
-        
+
         if (updated) {
           // 确保stock对象存在
           if (!stock.stock) {
             stock.stock = {}
           }
-          
+
           // 兼容PascalCase和camelCase两种命名方式
           // 后端可能返回: CurrentPrice/currentPrice, ChangeAmount/changeAmount 等
           const currentPrice = updated.currentPrice ?? updated.CurrentPrice
@@ -393,23 +395,23 @@ export const useWatchlistStore = defineStore('watchlist', () => {
           const lowPrice = updated.lowPrice ?? updated.LowPrice
           const openPrice = updated.openPrice ?? updated.OpenPrice
           const closePrice = updated.closePrice ?? updated.ClosePrice
-          
+
           // 只有当更新数据中字段存在且有效时才更新，避免覆盖已有数据为0
           // 价格字段需要严格验证，防止错误的数据
           if (currentPrice !== undefined && currentPrice !== null && currentPrice > 0) {
             stock.stock.currentPrice = currentPrice
           }
-          
+
           // 涨跌额可能为负数或0，所以只要不是undefined/null就更新
           if (changeAmount !== undefined && changeAmount !== null) {
             stock.stock.change = changeAmount
             stock.stock.changeAmount = changeAmount
           }
-          
+
           if (changePercent !== undefined && changePercent !== null) {
             stock.stock.changePercent = changePercent
           }
-          
+
           // 更新最高价和最低价，但只有在值有效时才更新
           // 注意：非交易时间这些值可能为0，所以只有在明确有值时才更新
           if (highPrice !== undefined && highPrice !== null && highPrice > 0) {
@@ -421,7 +423,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
             stock.stock.highPrice = stock.stock.currentPrice
             stock.stock.high = stock.stock.currentPrice
           }
-          
+
           if (lowPrice !== undefined && lowPrice !== null && lowPrice > 0) {
             stock.stock.lowPrice = lowPrice
             stock.stock.low = lowPrice
@@ -430,12 +432,12 @@ export const useWatchlistStore = defineStore('watchlist', () => {
             stock.stock.lowPrice = stock.stock.currentPrice
             stock.stock.low = stock.stock.currentPrice
           }
-          
+
           // 更新股票名称（如果API返回了）
           if (updated.name || updated.Name) {
             stock.stock.name = updated.name || updated.Name
           }
-          
+
           // 更新其他字段
           if (openPrice !== undefined && openPrice !== null) {
             stock.stock.openPrice = openPrice
@@ -443,7 +445,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
           if (closePrice !== undefined && closePrice !== null) {
             stock.stock.closePrice = closePrice
           }
-          
+
           // 检查并重置提醒标志（当价格偏离建议价格时）
           if (currentPrice > 0) {
             // 如果当前价格高于建议买入价，重置买入提醒
@@ -454,7 +456,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
                 console.warn('重置买入提醒标志失败:', err)
               })
             }
-            
+
             // 如果当前价格低于建议卖出价，重置卖出提醒
             if (stock.suggestedSellPrice && stock.sellAlertSent && currentPrice < stock.suggestedSellPrice) {
               stock.sellAlertSent = false
@@ -604,24 +606,24 @@ export const useWatchlistStore = defineStore('watchlist', () => {
           }
         }
 
-      const response = await api.post(`/ai/analyze/${code}`, {
-        analysisType,
-        forceRefresh
-      }, {
-        timeout: 600000
-      })
+        const response = await api.post(`/ai/analyze/${code}`, {
+          analysisType,
+          forceRefresh
+        }, {
+          timeout: 600000
+        })
 
-      item.analysisSucceeded = true
-      item.cached = response?.cached ?? false
-      item.analysisTime = response?.analysisTime || response?.timestamp || null
-      item.analysis = response?.analysis || response?.result || ''
-      item.rating = response?.rating || null
-      item.actionSuggestion = response?.actionSuggestion || null
-      item.technicalChart = response?.technicalChart || null
-      item.stockName = response?.stockInfo?.name || item.stockName || code
+        item.analysisSucceeded = true
+        item.cached = response?.cached ?? false
+        item.analysisTime = response?.analysisTime || response?.timestamp || null
+        item.analysis = response?.analysis || response?.result || ''
+        item.rating = response?.rating || null
+        item.actionSuggestion = response?.actionSuggestion || null
+        item.technicalChart = response?.technicalChart || null
+        item.stockName = response?.stockInfo?.name || item.stockName || code
 
-      setStockRecommendation(code, item.rating, item.actionSuggestion)
-    } catch (error) {
+        setStockRecommendation(code, item.rating, item.actionSuggestion)
+      } catch (error) {
         console.error('AI分析失败:', code, error)
         item.analysisSucceeded = false
         item.message =
@@ -629,14 +631,14 @@ export const useWatchlistStore = defineStore('watchlist', () => {
           error?.response?.data?.error ||
           error?.message ||
           'AI分析失败'
-    } finally {
-      if (onProgress) {
-        try {
-          onProgress(item, index, items)
-        } catch (callbackError) {
-          console.warn('批量AI分析进度回调失败:', callbackError)
+      } finally {
+        if (onProgress) {
+          try {
+            onProgress(item, index, items)
+          } catch (callbackError) {
+            console.warn('批量AI分析进度回调失败:', callbackError)
+          }
         }
-      }
       }
     }
 
