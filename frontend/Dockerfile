@@ -17,8 +17,8 @@ RUN npm config set registry https://registry.npmmirror.com && \
 # 复制源代码
 COPY . .
 
-# 构建前端
-RUN npm run build
+# 构建前端 (覆盖输出目录为dist)
+RUN npm run build -- --outDir dist
 
 # 阶段2: 运行时阶段
 FROM nginx:alpine
