@@ -28,8 +28,9 @@ RUN dotnet publish "StockAnalyse.Api.csproj" -c Release -o /app/publish /p:UseAp
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
-# 安装必要的工具和时区数据
-RUN apt-get update && apt-get install -y \
+# 安装必要的工具和时区数据 (使用阿里云镜像源)
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y \
     curl \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
