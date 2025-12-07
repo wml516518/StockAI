@@ -91,23 +91,38 @@ jobs:
             # 拉取最新代码
             git pull origin main || git pull origin master
             
+            # 检测命令 (兼容Docker和Podman)
+            CMD_DOCKER="docker"
+            CMD_COMPOSE="docker-compose"
+            
+            if command -v podman &> /dev/null; then
+              CMD_DOCKER="podman"
+            fi
+            
+            if command -v podman-compose &> /dev/null; then
+              CMD_COMPOSE="podman-compose"
+            fi
+            
+            echo "Using Docker command: $CMD_DOCKER"
+            echo "Using Compose command: $CMD_COMPOSE"
+
             # 登录GitHub Container Registry
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo ${{ secrets.GITHUB_TOKEN }} | $CMD_DOCKER login ghcr.io -u ${{ github.actor }} --password-stdin
             
             # 拉取最新镜像
-            docker-compose pull
+            $CMD_COMPOSE pull
             
             # 停止并移除旧容器
-            docker-compose down
+            $CMD_COMPOSE down
             
             # 启动新容器
-            docker-compose up -d
+            $CMD_COMPOSE up -d
             
             # 清理未使用的镜像
-            docker image prune -af --filter "until=24h"
+            $CMD_DOCKER image prune -af --filter "until=24h" || true
             
             # 查看服务状态
-            docker-compose ps
+            $CMD_COMPOSE ps
             
             echo "✅ 部署完成！"
 
