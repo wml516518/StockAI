@@ -3,6 +3,7 @@ using Microsoft.OpenApi.Models;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Services;
 using StockAnalyse.Api.Services.Interfaces;
+using StockAnalyse.Api.Services.AITools;
 using System.Text;
 
 // 注册CodePages编码提供程序，支持GBK等中文编码
@@ -112,6 +113,15 @@ builder.Services.AddScoped<IStrategyOptimizationService, StrategyOptimizationSer
 
 // 高级数据源服务
 builder.Services.AddScoped<IAnnouncementService, AnnouncementService>();
+
+// 注册AI工具
+builder.Services.AddScoped<IAITool, StockQuoteTool>();
+builder.Services.AddScoped<IAITool, StockNewsTool>();
+builder.Services.AddScoped<IAITool, StockFundamentalsTool>();
+builder.Services.AddScoped<IAITool, IndustryInfoTool>();
+builder.Services.AddScoped<IAITool, MarketSentimentTool>();
+builder.Services.AddScoped<IAITool, PriceHistoryTool>();
+builder.Services.AddScoped<IAIToolFactory, AIToolFactory>();
 
 // 注册后台服务（做T方案定时更新）- 已移除，改为仅支持手动触发
 // builder.Services.AddHostedService<TradingPlanBackgroundService>();

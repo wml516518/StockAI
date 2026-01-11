@@ -5,12 +5,43 @@ using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Models;
 using StockAnalyse.Api.Services.Interfaces;
 using StockAnalyse.Api.Services.Abstractions;
+using StockAnalyse.Api.Services.AITools;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
 namespace StockAnalyse.Api.Services;
+
+#region Tool Definitions
+public class AiTool
+{
+    [JsonProperty("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonProperty("function")]
+    public AiFunction Function { get; set; } = new();
+}
+
+public class AiFunction
+{
+    [JsonProperty("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonProperty("description")]
+    public string Description { get; set; } = string.Empty;
+
+    [JsonProperty("parameters")]
+    public object Parameters { get; set; } = new { };
+}
+
+public class LlmResponse
+{
+    public string? Content { get; set; }
+    public List<AiToolCall>? ToolCalls { get; set; }
+    public string? FinishReason { get; set; }
+}
+#endregion
 
 public class AIPromptSettings
 {
@@ -25,6 +56,9 @@ public class AIService : IAIService
     private readonly ILogger<AIService> _logger;
     private readonly IStockDataService _stockDataService;
     private readonly INewsService _newsService;
+    private readonly IIndustryService _industryService;
+    private readonly IMarketService _marketService;
+    private readonly IAIToolFactory _toolFactory;
 
     private const string DefaultChatSystemPrompt =
         "你是一位资深投资顾问，服务的对象都是刚入门的理财小白。"
@@ -34,15 +68,28 @@ public class AIService : IAIService
     private const string DefaultStockAnalysisPrompt =
         "你是一名资深的A股分析师。请结合财务数据、技术指标、消息面、行业地位，对指定股票进行结构化分析，并给出风险提示与操作建议。";
 
-    public AIService(StockDbContext context, IHttpClientFactory httpClientFactory, ILogger<AIService> logger, IStockDataService stockDataService, INewsService newsService)
+    public AIService(
+        StockDbContext context, 
+        IHttpClientFactory httpClientFactory, 
+        ILogger<AIService> logger, 
+        IStockDataService stockDataService, 
+        INewsService newsService,
+        IIndustryService industryService,
+        IMarketService marketService,
+        IAIToolFactory toolFactory)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _stockDataService = stockDataService;
         _newsService = newsService;
+        _industryService = industryService;
+        _marketService = marketService;
+        _toolFactory = toolFactory;
     }
     
+
+
     private HttpClient GetHttpClient()
     {
         // 优先使用配置了长超时的HttpClient，如果不存在则使用默认的
@@ -70,16 +117,22 @@ public class AIService : IAIService
             return "请先配置AI模型API";
         }
 
-        var promptText = $"帮我分析当前股票{stockCode}。{additionalContext ?? ""}";
         var promptSettings = await GetPromptSettingsAsync(promptId);
+        
+        // 构造用户提示词，不再预先注入大量上下文，而是让AI自己决定调用工具
+        var userInstruction = $"请分析股票 {stockCode}。";
+        if (!string.IsNullOrWhiteSpace(additionalContext))
+        {
+            userInstruction += $" {additionalContext}";
+        }
 
         var messages = new List<AiChatMessage>
         {
-            new("user", promptText)
+            new("user", userInstruction)
         };
 
-        var response = await CallAIAsync(config, messages, promptSettings);
-        return response;
+        // 使用带工具的对话模式
+        return await ChatWithToolsAsync(config, messages, promptSettings);
     }
 
     public async Task<string> ExecutePromptAsync(string? promptName, string userPrompt, IDictionary<string, string?>? placeholders = null, int? modelId = null)
@@ -175,339 +228,161 @@ public class AIService : IAIService
             return "请提供至少一条对话消息";
         }
 
-        var response = await CallAIAsync(config, conversation, promptSettings);
+        var response = await ChatWithToolsAsync(config, conversation, promptSettings);
         return response;
     }
 
+    /// <summary>
+    /// 支持Function Calling的核心对话循环
+    /// </summary>
+    private async Task<string> ChatWithToolsAsync(AIModelConfig config, List<AiChatMessage> messages, AIPromptSettings settings)
+    {
+        const int MaxTurns = 10;
+        int turns = 0;
+        var tools = _toolFactory.GetAllDefinitions();
+        
+        // 初始化系统提示词
+        var conversation = new List<object>(); // 使用object以支持不同结构的Message
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
+        {
+            conversation.Add(new { role = "system", content = settings.SystemPrompt });
+        }
+        
+        conversation.AddRange(messages.Select(m => new 
+        { 
+            role = m.Role, 
+            content = m.Content,
+            tool_calls = m.ToolCalls,
+            tool_call_id = m.ToolCallId
+        }));
+
+        while (turns++ < MaxTurns)
+        {
+            var response = await CallLlmApiAsync(config, conversation, settings.Temperature, tools);
+            
+            if (response == null) return "AI调用失败: 无响应";
+            
+            // 将AI的回复加入历史
+            var assistantMsg = new Dictionary<string, object>
+            {
+                ["role"] = "assistant",
+                ["content"] = response.Content
+            };
+            
+            if (response.ToolCalls != null && response.ToolCalls.Any())
+            {
+                assistantMsg["tool_calls"] = response.ToolCalls;
+                conversation.Add(assistantMsg);
+                
+                // 执行工具
+                foreach (var toolCall in response.ToolCalls)
+                {
+                    _logger.LogInformation("Creating tool execution for {ToolName}", toolCall.Function.Name);
+                    string toolResult = await _toolFactory.ExecuteToolAsync(toolCall.Function.Name, toolCall.Function.Arguments);
+                    
+                    conversation.Add(new 
+                    {
+                        role = "tool",
+                        tool_call_id = toolCall.Id,
+                        content = toolResult
+                    });
+                }
+            }
+            else
+            {
+                // 没有工具调用，直接返回内容
+                return response.Content ?? "无内容";
+            }
+        }
+        
+        return "对话轮数超过限制";
+    }
+    
+
+
+    // 兼容旧方法的重载
     private async Task<string> CallAIAsync(AIModelConfig config, IEnumerable<AiChatMessage> messages, AIPromptSettings settings)
     {
-        try
+        // 旧方法不使用工具，直接适配到新API
+        var conversation = new List<object>();
+        if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
         {
-            // 检查配置是否完整
-            if (string.IsNullOrEmpty(config.ApiKey))
-            {
-                return "AI配置错误: API密钥未设置";
-            }
-
-            var conversation = new List<AiChatMessage>();
-            if (!string.IsNullOrWhiteSpace(settings.SystemPrompt))
-            {
-                conversation.Add(new AiChatMessage("system", settings.SystemPrompt));
-            }
-
-            if (messages != null)
-            {
-                conversation.AddRange(messages);
-            }
-
-            if (!conversation.Any())
-            {
-                return "AI对话消息为空，请提供有效的消息内容";
-            }
-
-            if (config.Name.Contains("DeepSeek", StringComparison.OrdinalIgnoreCase))
-            {
-                return await CallDeepSeekAsync(config, conversation, settings.Temperature);
-            }
-            else if (config.Name.Contains("OpenAI", StringComparison.OrdinalIgnoreCase))
-            {
-                return await CallOpenAIAsync(config, conversation, settings.Temperature);
-            }
-            else if (!string.IsNullOrEmpty(config.SubscribeEndpoint))
-            {
-                // 尝试通用调用方式
-                if (config.SubscribeEndpoint.Contains("openai", StringComparison.OrdinalIgnoreCase))
-                {
-                    return await CallOpenAIAsync(config, conversation, settings.Temperature);
-                }
-                else if (config.SubscribeEndpoint.Contains("deepseek", StringComparison.OrdinalIgnoreCase))
-                {
-                    return await CallDeepSeekAsync(config, conversation, settings.Temperature);
-                }
-            }
-
-            return "不支持的AI模型或配置不完整，请检查模型名称和API端点";
+            conversation.Add(new { role = "system", content = settings.SystemPrompt });
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "调用AI失败");
-            return "AI调用失败：" + ex.Message;
-        }
+        conversation.AddRange(messages.Select(m => new { role = m.Role, content = m.Content }));
+        
+        var resp = await CallLlmApiAsync(config, conversation, settings.Temperature, null);
+        return resp?.Content ?? "调用失败";
     }
 
-    private static string ApplyPlaceholders(string? template, IDictionary<string, string?>? placeholders)
+    private async Task<LlmResponse?> CallLlmApiAsync(AIModelConfig config, List<object> messages, double? temperature, List<AiTool>? tools)
     {
-        if (string.IsNullOrEmpty(template) || placeholders == null || placeholders.Count == 0)
+        try 
         {
-            return template ?? string.Empty;
-        }
-
-        var result = template;
-        foreach (var kvp in placeholders)
-        {
-            if (string.IsNullOrEmpty(kvp.Key))
+            var requestBody = new
             {
-                continue;
+                model = config.ModelName ?? "gpt-3.5-turbo",
+                messages = messages,
+                temperature = temperature,
+                tools = (tools != null && tools.Any()) ? tools : null,
+                stream = false
+            };
+
+            var endpoint = config.SubscribeEndpoint;
+            if (string.IsNullOrEmpty(endpoint))
+            {
+                endpoint = config.Name.Contains("DeepSeek", StringComparison.OrdinalIgnoreCase) 
+                    ? "https://api.deepseek.com/v1/chat/completions" 
+                    : "https://api.openai.com/v1/chat/completions";
             }
-            result = result.Replace(kvp.Key, kvp.Value ?? string.Empty);
-        }
 
-        return result;
-    }
+            var content = new StringContent(JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore }), 
+                System.Text.Encoding.UTF8, "application/json");
+                
+            var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = content
+            };
+            request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
 
-    private async Task<string> CallDeepSeekAsync(AIModelConfig config, IEnumerable<AiChatMessage> messages, double? temperature)
-    {
-        var messageArray = messages
-            .Where(m => !string.IsNullOrWhiteSpace(m.Content))
-            .Select(m => new { role = m.Role, content = m.Content })
-            .ToArray();
+            using var httpClient = GetHttpClient();
+            var response = await httpClient.SendAsync(request);
+            var json = await response.Content.ReadAsStringAsync();
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                 _logger.LogError("AI API Error: {StatusCode} {Json}", response.StatusCode, json);
+                 return new LlmResponse { Content = $"API Error: {response.StatusCode}" };
+            }
 
-        var requestBody = new
-        {
-            model = config.ModelName ?? "deepseek-chat",
-            messages = messageArray,
-            temperature = temperature
-        };
-
-        var content = new StringContent(JsonConvert.SerializeObject(requestBody), System.Text.Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, config.SubscribeEndpoint ?? "https://api.deepseek.com/v1/chat/completions")
-        {
-            Content = content
-        };
-        request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
-
-        using var httpClient = GetHttpClient();
-        var response = await httpClient.SendAsync(request);
-        var json = await response.Content.ReadAsStringAsync();
-
-        try
-        {
             dynamic? result = JsonConvert.DeserializeObject(json);
-
-            // 检查API是否返回错误
-            if (result?.error != null)
+            
+            // 解析标准OpenAI格式响应
+            if (result?.choices != null && result.choices.Count > 0)
             {
-                string errorMessage = result?.error?.message?.ToString() ?? "未知错误";
-                _logger.LogError("DeepSeek API返回错误: {ErrorMessage}", errorMessage);
-                return $"AI调用失败: {errorMessage}";
-            }
-
-            // 检查返回结构是否符合预期
-            bool hasChoices = false;
-            if (result?.choices != null)
-            {
-                if (result.choices is JArray jArray && jArray.Count > 0)
+                var choice = result.choices[0];
+                var message = choice.message;
+                
+                var llmResp = new LlmResponse
                 {
-                    hasChoices = true;
-                }
-                else if (result.choices is JToken jToken && jToken.Type == JTokenType.Array && jToken.Count() > 0)
+                    Content = message?.content,
+                    FinishReason = choice?.finish_reason
+                };
+
+                if (message?.tool_calls != null)
                 {
-                    hasChoices = true;
+                    llmResp.ToolCalls = message.tool_calls.ToObject<List<AiToolCall>>();
                 }
-                else
-                {
-                    // 尝试动态访问Count属性
-                    try
-                    {
-                        dynamic choices = result.choices;
-                        if (choices != null && choices.Count > 0)
-                        {
-                            hasChoices = true;
-                        }
-                    }
-                    catch
-                    {
-                        // 忽略转换错误
-                    }
-                }
+                
+                return llmResp;
             }
-
-            if (!hasChoices)
-            {
-                _logger.LogError("DeepSeek API返回结构异常: {Json}", json);
-                return "AI返回结构异常，请检查API配置";
-            }
-
-            // 安全访问内容
-            string? messageContent = null;
-            try
-            {
-                if (result?.choices != null)
-                {
-                    JArray? choicesArray = null;
-                    if (result.choices is JArray directArray)
-                    {
-                        choicesArray = directArray;
-                    }
-                    else if (result.choices is JToken choicesToken && choicesToken.Type == JTokenType.Array)
-                    {
-                        choicesArray = choicesToken as JArray;
-                    }
-                    else
-                    {
-                        var fallbackToken = result.choices as JToken;
-                        if (fallbackToken?.Type == JTokenType.Array)
-                        {
-                            choicesArray = fallbackToken as JArray;
-                        }
-                    }
-
-                    if (choicesArray != null && choicesArray.Count > 0)
-                    {
-                        var firstChoice = choicesArray[0];
-                        if (firstChoice != null)
-                        {
-                            var messageToken = firstChoice["message"];
-                            if (messageToken != null)
-                            {
-                                var contentToken = messageToken["content"];
-                                if (contentToken != null)
-                                {
-                                    messageContent = contentToken.ToString();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "解析DeepSeek API响应内容失败");
-                return "解析AI响应失败: " + ex.Message;
-            }
-
-            return messageContent ?? "无响应";
+            
+            return new LlmResponse { Content = "无法解析响应" };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "解析DeepSeek API响应失败: {Json}", json);
-            return "解析AI响应失败: " + ex.Message;
-        }
-    }
-
-    private async Task<string> CallOpenAIAsync(AIModelConfig config, IEnumerable<AiChatMessage> messages, double? temperature)
-    {
-        var messageArray = messages
-            .Where(m => !string.IsNullOrWhiteSpace(m.Content))
-            .Select(m => new { role = m.Role, content = m.Content })
-            .ToArray();
-
-        var requestBody = new
-        {
-            model = config.ModelName ?? "gpt-3.5-turbo",
-            messages = messageArray,
-            temperature = temperature
-        };
-
-        var content = new StringContent(JsonConvert.SerializeObject(requestBody), System.Text.Encoding.UTF8, "application/json");
-        var request = new HttpRequestMessage(HttpMethod.Post, config.SubscribeEndpoint ?? "https://api.openai.com/v1/chat/completions")
-        {
-            Content = content
-        };
-        request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
-
-        using var httpClient = GetHttpClient();
-        var response = await httpClient.SendAsync(request);
-        var json = await response.Content.ReadAsStringAsync();
-
-        try
-        {
-            dynamic? result = JsonConvert.DeserializeObject(json);
-
-            if (result?.error != null)
-            {
-                string errorMessage = result?.error?.message?.ToString() ?? "未知错误";
-                _logger.LogError("OpenAI API返回错误: {ErrorMessage}", errorMessage);
-                return $"AI调用失败: {errorMessage}";
-            }
-
-            bool hasChoices = false;
-            if (result?.choices != null)
-            {
-                if (result.choices is JArray jArray && jArray.Count > 0)
-                {
-                    hasChoices = true;
-                }
-                else if (result.choices is JToken jToken && jToken.Type == JTokenType.Array && jToken.Count() > 0)
-                {
-                    hasChoices = true;
-                }
-                else
-                {
-                    try
-                    {
-                        dynamic choices = result.choices;
-                        if (choices != null && choices.Count > 0)
-                        {
-                            hasChoices = true;
-                        }
-                    }
-                    catch
-                    {
-                        // 忽略转换错误
-                    }
-                }
-            }
-
-            if (!hasChoices)
-            {
-                _logger.LogError("OpenAI API返回结构异常: {Json}", json);
-                return "AI返回结构异常，请检查API配置";
-            }
-
-            string? messageContent = null;
-            try
-            {
-                if (result?.choices != null)
-                {
-                    JArray? choicesArray = null;
-                    if (result.choices is JArray directArray)
-                    {
-                        choicesArray = directArray;
-                    }
-                    else if (result.choices is JToken choicesToken && choicesToken.Type == JTokenType.Array)
-                    {
-                        choicesArray = choicesToken as JArray;
-                    }
-                    else
-                    {
-                        var fallbackToken = result.choices as JToken;
-                        if (fallbackToken?.Type == JTokenType.Array)
-                        {
-                            choicesArray = fallbackToken as JArray;
-                        }
-                    }
-
-                    if (choicesArray != null && choicesArray.Count > 0)
-                    {
-                        var firstChoice = choicesArray[0];
-                        if (firstChoice != null)
-                        {
-                            var messageToken = firstChoice["message"];
-                            if (messageToken != null)
-                            {
-                                var contentToken = messageToken["content"];
-                                if (contentToken != null)
-                                {
-                                    messageContent = contentToken.ToString();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "解析OpenAI API响应内容失败");
-                return "解析AI响应失败: " + ex.Message;
-            }
-
-            return messageContent ?? "无响应";
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "解析OpenAI API响应失败: {Json}", json);
-            return "解析AI响应失败: " + ex.Message;
+            _logger.LogError(ex, "CallLlmApiAsync Failed");
+            return null;
         }
     }
 
@@ -634,6 +509,24 @@ public class AIService : IAIService
             _logger.LogWarning(ex, "获取股票 {StockCode} 技术指标数据失败", stockCode);
             return string.Empty;
         }
+    }
+
+    private static string ApplyPlaceholders(string template, IDictionary<string, string?>? placeholders)
+    {
+        if (placeholders == null || !placeholders.Any())
+        {
+            return template;
+        }
+
+        var result = template;
+        foreach (var kv in placeholders)
+        {
+            if (!string.IsNullOrEmpty(kv.Key))
+            {
+                result = result.Replace(kv.Key, kv.Value ?? string.Empty);
+            }
+        }
+        return result;
     }
 
     private async Task<AIModelConfig?> GetActiveAIConfigAsync()
