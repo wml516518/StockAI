@@ -248,7 +248,8 @@ namespace StockAnalyse.Api.Controllers
                 config.ModelName,
                 config.IsActive,
                 config.IsDefault,
-                !string.IsNullOrWhiteSpace(config.ApiKey));
+                !string.IsNullOrWhiteSpace(config.ApiKey)
+                && !string.Equals(config.ApiKey, "your-api-key-here", StringComparison.Ordinal));
         }
 
         /// <summary>

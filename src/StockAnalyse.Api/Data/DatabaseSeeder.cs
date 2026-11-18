@@ -38,13 +38,21 @@ public static class DatabaseSeeder
             context.WatchlistCategories.AddRange(categories);
         }
         
+        // 清理旧版本写入的占位密钥，避免把 "your-api-key-here" 当成已配置
+        foreach (var config in context.AIModelConfigs
+            .Where(c => c.ApiKey == "your-api-key-here")
+            .ToList())
+        {
+            config.ApiKey = string.Empty;
+        }
+
         // 检查是否已有AI模型配置，如果没有则添加默认配置
         if (!context.AIModelConfigs.Any())
         {
             var aiConfig = new AIModelConfig
             {
                 Name = "DeepSeek",
-                ApiKey = "your-api-key-here",
+                ApiKey = string.Empty,
                 SubscribeEndpoint = "https://api.deepseek.com/v1/chat/completions",
                 ModelName = "deepseek-chat",
                 IsActive = false,

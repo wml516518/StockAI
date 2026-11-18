@@ -192,12 +192,15 @@
             <input 
               type="text" 
               v-model="editingConfig.subscribeEndpoint" 
-              placeholder="例如：https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+              placeholder="例如：https://api.deepseek.com/v1/chat/completions"
             >
+            <p class="help-text">
+              需要兼容 OpenAI Chat Completions 格式（/v1/chat/completions）。
+            </p>
           </div>
           <div class="form-group">
             <label>模型名称 *</label>
-            <input type="text" v-model="editingConfig.modelName" placeholder="例如：qwen-max">
+            <input type="text" v-model="editingConfig.modelName" placeholder="例如：deepseek-chat">
           </div>
           <div class="form-group">
             <label>
