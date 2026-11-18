@@ -1,0 +1,206 @@
+name: StockAI CI/CD
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "生成发布包后部署到生产服务器（仍需 production 环境审批）"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 设置.NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: 设置Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 设置Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 缓存NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('src/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: 构建后端
+        run: dotnet build src/StockAnalyse.Api/StockAnalyse.Api.csproj --nologo
+
+      - name: 后端部署回归
+        run: python3 tests/test_api_deployment.py
+
+      - name: 后端访问保护回归
+        run: python3 tests/test_api_security.py
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Python语法检查
+        run: python3 -m py_compile python-data-service/stock_data_service.py
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck -x deploy/server/*.sh
+
+      - name: 部署脚本与发布包回归
+        run: |
+          cp .env.example .env
+          sed -i 's/^APP_AUTH_PASSWORD=$/APP_AUTH_PASSWORD=ci-placeholder-password-123456/' .env
+          cp python-data-service/config.example.ini python-data-service/config.ini
+          docker compose config --quiet
+          python3 tests/test_server_deployment.py
+
+  container-build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 设置Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建三个服务镜像
+        run: |
+          cp .env.example .env
+          sed -i 's/^APP_AUTH_PASSWORD=$/APP_AUTH_PASSWORD=ci-placeholder-password-123456/' .env
+          cp python-data-service/config.example.ini python-data-service/config.ini
+          docker compose build
+
+  package:
+    needs: [ verify, container-build ]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 生成发布包
+        run: bash deploy/server/package-release.sh dist/stockai-release.tar.gz
+
+      - name: 记录发布元数据
+        run: |
+          cat > dist/release-metadata.txt <<EOF
+          commit=$GITHUB_SHA
+          ref=$GITHUB_REF
+          workflow_run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          cat dist/release-metadata.txt
+
+      - name: 上传发布包
+        uses: actions/upload-artifact@v4
+        with:
+          name: stockai-release-${{ github.sha }}
+          path: |
+            dist/stockai-release.tar.gz
+            dist/stockai-release.tar.gz.sha256
+            dist/release-metadata.txt
+          retention-days: 14
+
+  deploy:
+    needs: package
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.STOCKAI_PUBLIC_URL }}
+    concurrency:
+      group: stockai-production-deploy
+      cancel-in-progress: false
+    steps:
+      - name: 下载发布包
+        uses: actions/download-artifact@v4
+        with:
+          name: stockai-release-${{ github.sha }}
+          path: release
+
+      - name: 校验生产配置
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "缺少 production 环境 Secret: $name" >&2
+              exit 1
+            fi
+          done
+          (cd release && sha256sum -c stockai-release.tar.gz.sha256)
+
+      - name: 配置SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: 部署到生产服务器
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          RELEASE_SHA="$(awk '{print $1}' release/stockai-release.tar.gz.sha256)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            RELEASE_ID="$GITHUB_REF_NAME"
+          else
+            RELEASE_ID="manual-${GITHUB_SHA::7}"
+          fi
+          echo "部署提交: $GITHUB_SHA"
+          echo "发布编号: $RELEASE_ID"
+          cat release/stockai-release.tar.gz | ssh \
+            -i ~/.ssh/id_ed25519 \
+            -p "$DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $RELEASE_SHA $RELEASE_ID"

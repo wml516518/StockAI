@@ -1,5 +1,9 @@
 # 股票分析系统阿里云部署指南
 
+> 本文及 `deploy-stock-analyse.sh`、`deploy-stock-analyse-simple.sh` 是旧版裸机部署资料，
+> 仍依赖 .NET 8，且未适配当前必需的认证配置。请勿用于新部署或更新现有服务器。
+> 当前维护的入口是 [Docker 部署指南](DOCKER_DEPLOYMENT.md) 与 `docker-deploy.sh`。
+
 ## 📦 文件说明
 
 - `deploy-stock-analyse.sh` - 完整部署脚本（所有配置写死在脚本中）

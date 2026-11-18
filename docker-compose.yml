@@ -1,23 +1,21 @@
-version: '3.8'
-
 services:
   # 后端API服务
   backend:
     build:
       context: .
       dockerfile: src/StockAnalyse.Api/Dockerfile
-    container_name: stock-api
     restart: unless-stopped
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:5000
       - ConnectionStrings__DefaultConnection=Data Source=/app/data/stockanalyse.db
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-exp}
+      - PYTHON_DATA_SERVICE_URL=http://python-service:5001
+      - APP_AUTH_USERNAME=${APP_AUTH_USERNAME:?Set APP_AUTH_USERNAME in .env}
+      - APP_AUTH_PASSWORD=${APP_AUTH_PASSWORD:?Set APP_AUTH_PASSWORD in .env}
       - TZ=Asia/Shanghai
     volumes:
-      - ./data:/app/data
-      - ./logs/backend:/app/logs
+      - stock-data:/app/data
+      - stock-backend-logs:/app/logs
     networks:
       - stock-network
     healthcheck:
@@ -27,21 +25,25 @@ services:
       retries: 3
       start_period: 40s
     depends_on:
-      - python-service
+      python-service:
+        condition: service_healthy
 
   # Python数据服务
   python-service:
     build:
       context: ./python-data-service
       dockerfile: Dockerfile
-    container_name: stock-python
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
-      - FLASK_ENV=production
     volumes:
-      - ./python-data-service/config.ini:/app/config.ini:ro
-      - ./logs/python:/app/logs
+      - type: bind
+        source: ./python-data-service/config.ini
+        target: /app/config.ini
+        read_only: true
+        bind:
+          create_host_path: false
+      - stock-python-logs:/app/logs
     networks:
       - stock-network
     healthcheck:
@@ -56,12 +58,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: stock-frontend
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTP_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-18081}:80"
     environment:
       - TZ=Asia/Shanghai
+      - APP_AUTH_USERNAME=${APP_AUTH_USERNAME:?Set APP_AUTH_USERNAME in .env}
+      - APP_AUTH_PASSWORD=${APP_AUTH_PASSWORD:?Set APP_AUTH_PASSWORD in .env}
     networks:
       - stock-network
     healthcheck:
@@ -71,7 +74,8 @@ services:
       retries: 3
       start_period: 5s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 networks:
   stock-network:
@@ -79,4 +83,5 @@ networks:
 
 volumes:
   stock-data:
-  stock-logs:
+  stock-backend-logs:
+  stock-python-logs:

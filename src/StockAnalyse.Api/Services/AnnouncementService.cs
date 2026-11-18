@@ -14,7 +14,7 @@ namespace StockAnalyse.Api.Services
         private readonly StockDbContext _context;
         private readonly HttpClient _httpClient;
         private readonly ILogger<AnnouncementService> _logger;
-        private const string PYTHON_SERVICE_URL = "http://localhost:5001";
+        private readonly string _pythonServiceUrl;
 
         public AnnouncementService(
             StockDbContext context,
@@ -24,6 +24,8 @@ namespace StockAnalyse.Api.Services
             _context = context;
             _httpClient = httpClientFactory.CreateClient();
             _logger = logger;
+            _pythonServiceUrl = Environment.GetEnvironmentVariable("PYTHON_DATA_SERVICE_URL")
+                ?? "http://localhost:5001";
         }
 
         public async Task<List<StockAnnouncement>> GetRecentAnnouncementsAsync(string stockCode, int days = 30)
@@ -63,7 +65,7 @@ namespace StockAnalyse.Api.Services
         {
             try
             {
-                var url = $"{PYTHON_SERVICE_URL}/api/stock/announcements/{stockCode}?days={days}";
+                var url = $"{_pythonServiceUrl.TrimEnd('/')}/api/stock/announcements/{stockCode}?days={days}";
                 var response = await _httpClient.GetAsync(url);
 
                 if (!response.IsSuccessStatusCode)

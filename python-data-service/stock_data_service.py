@@ -2904,5 +2904,5 @@ if __name__ == '__main__':
         print("❌ 缺少依赖，请运行: pip install akshare pandas flask flask-cors")
         exit(1)
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='127.0.0.1', port=5001, debug=False)
 

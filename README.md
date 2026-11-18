@@ -1,6 +1,6 @@
 # 📈 股票分析系统
 
-基于 .NET 8、Entity Framework Core、SQLite 开发的股票分析系统，提供实时行情、自选股管理、条件选股、量化交易、技术分析、金融新闻、AI分析等完整功能。
+基于 .NET 10、Entity Framework Core、SQLite 开发的股票分析系统，提供实时行情、自选股管理、条件选股、量化交易、技术分析、金融新闻、AI分析等完整功能。
 
 ## ✨ 核心功能模块
 
@@ -199,7 +199,7 @@
 ## 🚀 快速开始
 
 ### 环境要求
-- .NET 8.0 SDK
+- .NET 10 SDK
 - Node.js 18+ (前端开发需要)
 - Python 3.8+ (可选，用于Python数据服务)
 - Visual Studio 2022 或 VS Code
@@ -242,6 +242,8 @@ start-all-services.bat
 # 启动后端API服务
 start-backend.bat
 # 或
+export APP_AUTH_USERNAME=stockai
+export APP_AUTH_PASSWORD='替换为至少20位随机密码'
 cd src/StockAnalyse.Api
 dotnet run
 
@@ -261,6 +263,9 @@ python stock_data_service.py
 - 后端API：http://localhost:5000
 - API文档：http://localhost:5000/swagger
 - Python数据服务：http://localhost:5001（如果已启动）
+
+后端未配置 `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD` 时会拒绝启动。
+Windows 启动脚本会自动读取根目录 `.env`；Docker 部署方式见 `DOCKER_DEPLOYMENT.md`。
 
 ### 脚本说明
 
@@ -379,6 +384,10 @@ StockAnalyse/
 2. 通过API：`/api/aimodelconfig`
 3. 通过数据库：直接操作 `AIModelConfigs` 表
 
+配置接口不会返回 API Key 原文。页面编辑时留空表示保留已保存的密钥；
+连接测试可以只传配置 ID，由后端读取已保存的密钥。部署时 `.env` 必须配置
+`APP_AUTH_USERNAME` 和 `APP_AUTH_PASSWORD`，整站使用 Basic Auth 保护并通过 HTTPS 访问。
+
 ### 自动刷新配置
 - **自选股刷新间隔：** 默认3秒，可在设置中配置（0.5-60秒）
 - **新闻刷新间隔：** 默认30分钟，可在设置中配置（5-1440分钟）
@@ -442,8 +451,7 @@ StockAnalyse/
 - `POST /api/aimodelconfig` - 创建新配置
 - `PUT /api/aimodelconfig/{id}` - 更新配置
 - `DELETE /api/aimodelconfig/{id}` - 删除配置
-- `POST /api/aimodelconfig/{id}/test` - 测试配置连接
-- `PUT /api/aimodelconfig/{id}/activate` - 激活配置
+- `POST /api/aimodelconfig/test` - 测试配置连接；可只传 `id` 使用服务端保存的密钥
 
 ### AI提示词接口 (`/api/aiprompt`)
 - `GET /api/aiprompt` - 获取所有提示词
@@ -541,7 +549,7 @@ POST /api/news/analyze-latest
 ## 🛠️ 技术栈
 
 ### 后端技术
-- **框架：** .NET 8.0
+- **框架：** .NET 10
 - **Web框架：** ASP.NET Core Web API
 - **ORM：** Entity Framework Core 8.0
 - **数据库：** SQLite
@@ -774,9 +782,10 @@ POST /api/news/analyze-latest
    - 错误追踪（如集成Sentry）
 
 4. **CI/CD**
-   - 自动化构建
-   - 自动化测试
-   - 自动化部署
+   - PR/主分支自动测试、前端构建和三镜像构建
+   - `v*` 标签或手动发布，经 GitHub `production` 环境审批后部署
+   - 服务器备份、部署锁、健康验收和发布编号记录
+   - 配置见 [deploy/server/CICD.md](./deploy/server/CICD.md)
 
 ## 📚 相关文档
 
@@ -805,7 +814,7 @@ MIT License
 ## 🙏 致谢
 
 感谢以下开源项目和服务：
-- .NET 8
+- .NET 10
 - Entity Framework Core
 - SQLite
 - Swagger/OpenAPI
@@ -813,6 +822,6 @@ MIT License
 
 ---
 
-Made with ❤️ using .NET 8
+Made with ❤️ using .NET 10
 
 

@@ -46,7 +46,7 @@ stop-all-services.bat
 
 ### 必需环境
 
-- **.NET 8.0 SDK** - 后端API需要
+- **.NET 10 SDK** - 后端API需要
   - 下载: https://dotnet.microsoft.com/download
   - 验证: `dotnet --version`
 

@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.OpenApi.Models;
+using Microsoft.Data.Sqlite;
+using Microsoft.OpenApi;
 using StockAnalyse.Api.Data;
+using StockAnalyse.Api.Security;
 using StockAnalyse.Api.Services;
 using StockAnalyse.Api.Services.Interfaces;
 using StockAnalyse.Api.Services.AITools;
@@ -69,10 +71,20 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? "Data Source=stockanalyse.db";
+var sqliteOptions = new SqliteConnectionStringBuilder(connectionString);
+if (sqliteOptions.Mode != SqliteOpenMode.Memory &&
+    !string.IsNullOrWhiteSpace(sqliteOptions.DataSource) &&
+    sqliteOptions.DataSource != ":memory:")
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(sqliteOptions.DataSource))!);
+}
+
 // 配置数据库
 builder.Services.AddDbContext<StockDbContext>(options =>
 {
-    options.UseSqlite("Data Source=stockanalyse.db");
+    options.UseSqlite(connectionString);
     // 禁用敏感数据日志和SQL查询日志
     options.EnableSensitiveDataLogging(false);
     if (!builder.Environment.IsDevelopment())
@@ -138,35 +150,18 @@ builder.Services.AddHttpClient("AIService", client =>
 // 默认HttpClient（用于其他服务）
 builder.Services.AddHttpClient();
 
-// 配置CORS
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-    {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
-    });
-});
+var authSettings = new BasicAuthSettings(
+    builder.Configuration["APP_AUTH_USERNAME"],
+    builder.Configuration["APP_AUTH_PASSWORD"]);
+builder.Services.AddSingleton(authSettings);
 
 var app = builder.Build();
 
-// 初始化数据库（将 EnsureCreated 替换为 Migrate）
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     var context = services.GetRequiredService<StockDbContext>();
-    var logger = services.GetRequiredService<ILogger<Program>>();
-
-    try
-    {
-        context.Database.Migrate();
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "应用迁移失败，回退到 EnsureCreated");
-        context.Database.EnsureCreated();
-    }
+    context.Database.Migrate();
 
     DatabaseSeeder.Seed(context);
 }
@@ -178,10 +173,14 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors();
+app.UseMiddleware<BasicAuthMiddleware>();
 app.UseResponseCompression(); // 启用响应压缩（支持大响应）
 app.UseStaticFiles();
 app.UseRouting();
+app.MapGet("/health", async (StockDbContext context, CancellationToken cancellationToken) =>
+    await context.Database.CanConnectAsync(cancellationToken)
+        ? Results.Ok(new { status = "healthy" })
+        : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapControllers();
 
 // 默认页面重定向到index.html

@@ -14,7 +14,7 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:5000',
-        changeOrigin: true,
+        changeOrigin: false,
         timeout: 600000, // 10分钟超时（AI分析可能需要较长时间）
         configure: (proxy, options) => {
           proxy.on('error', (err, req, res) => {

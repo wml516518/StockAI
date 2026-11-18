@@ -136,6 +136,7 @@
               <th>名称</th>
               <th>模型名称</th>
               <th>订阅端点</th>
+              <th>密钥</th>
               <th>状态</th>
               <th>默认</th>
               <th>操作</th>
@@ -146,6 +147,11 @@
               <td>{{ config.name }}</td>
               <td>{{ config.modelName || '-' }}</td>
               <td>{{ config.subscribeEndpoint }}</td>
+              <td>
+                <span :class="config.hasApiKey ? 'status-active' : 'status-inactive'">
+                  {{ config.hasApiKey ? '已保存' : '未配置' }}
+                </span>
+              </td>
               <td>
                 <span :class="config.isActive ? 'status-active' : 'status-inactive'">
                   {{ config.isActive ? '激活' : '未激活' }}
@@ -170,8 +176,16 @@
             <input type="text" v-model="editingConfig.name" placeholder="例如：通义千问API">
           </div>
           <div class="form-group">
-            <label>API Key *</label>
-            <input type="password" v-model="editingConfig.apiKey" placeholder="请输入API密钥">
+            <label>API Key {{ editingConfig.id === 0 ? '*' : '' }}</label>
+            <input
+              type="password"
+              v-model="editingConfig.apiKey"
+              :placeholder="editingConfig.id === 0 ? '请输入API密钥' : '已保存，留空则不修改'"
+              autocomplete="new-password"
+            >
+            <p v-if="editingConfig.id !== 0" class="help-text">
+              密钥不会回传到浏览器。留空保存会继续使用服务端已保存的密钥。
+            </p>
           </div>
           <div class="form-group">
             <label>订阅端点 *</label>
@@ -248,6 +262,7 @@ const editingConfig = ref({
   id: 0,
   name: '',
   apiKey: '',
+  hasApiKey: false,
   subscribeEndpoint: '',
   modelName: '',
   isActive: false,
@@ -403,6 +418,7 @@ const showCreateConfigForm = () => {
     id: 0,
     name: '',
     apiKey: '',
+    hasApiKey: false,
     subscribeEndpoint: '',
     modelName: '',
     isActive: false,
@@ -412,21 +428,30 @@ const showCreateConfigForm = () => {
 }
 
 const editConfig = (config) => {
-  editingConfig.value = { ...config }
+  editingConfig.value = { ...config, apiKey: '' }
   showConfigForm.value = true
 }
 
 const saveConfig = async () => {
-  if (!editingConfig.value.name || !editingConfig.value.apiKey || !editingConfig.value.subscribeEndpoint) {
+  const isCreate = editingConfig.value.id === 0
+  if (!editingConfig.value.name
+    || !editingConfig.value.subscribeEndpoint
+    || !editingConfig.value.modelName
+    || (isCreate && !editingConfig.value.apiKey)
+    || (!isCreate && !editingConfig.value.hasApiKey && !editingConfig.value.apiKey)) {
     alert('请填写必填字段')
     return
   }
 
   try {
-    if (editingConfig.value.id === 0) {
-      await aiModelConfigService.create(editingConfig.value)
+    const payload = { ...editingConfig.value }
+    const configId = payload.id
+    delete payload.id
+    delete payload.hasApiKey
+    if (isCreate) {
+      await aiModelConfigService.create(payload)
     } else {
-      await aiModelConfigService.update(editingConfig.value.id, editingConfig.value)
+      await aiModelConfigService.update(configId, payload)
     }
     await loadConfigs()
     showConfigForm.value = false
@@ -453,9 +478,7 @@ const deleteConfig = async (id) => {
 const testConfig = async (config) => {
   try {
     await aiModelConfigService.testConnection({
-      apiKey: config.apiKey,
-      subscribeEndpoint: config.subscribeEndpoint,
-      modelName: config.modelName
+      id: config.id
     })
     alert('连接测试成功！')
   } catch (error) {
@@ -464,17 +487,27 @@ const testConfig = async (config) => {
 }
 
 const testConnection = async () => {
-  if (!editingConfig.value.apiKey || !editingConfig.value.subscribeEndpoint || !editingConfig.value.modelName) {
+  const isCreate = editingConfig.value.id === 0
+  if (!editingConfig.value.subscribeEndpoint
+    || !editingConfig.value.modelName
+    || (isCreate && !editingConfig.value.apiKey)
+    || (!isCreate && !editingConfig.value.hasApiKey && !editingConfig.value.apiKey)) {
     alert('请填写API Key、订阅端点和模型名称')
     return
   }
 
   try {
-    await aiModelConfigService.testConnection({
-      apiKey: editingConfig.value.apiKey,
+    const request = {
       subscribeEndpoint: editingConfig.value.subscribeEndpoint,
       modelName: editingConfig.value.modelName
-    })
+    }
+    if (!isCreate) {
+      request.id = editingConfig.value.id
+    }
+    if (editingConfig.value.apiKey) {
+      request.apiKey = editingConfig.value.apiKey
+    }
+    await aiModelConfigService.testConnection(request)
     alert('连接测试成功！')
   } catch (error) {
     alert('连接测试失败：' + error.message)

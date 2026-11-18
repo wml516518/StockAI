@@ -38,6 +38,25 @@ if (-not (Test-Path "src\StockAnalyse.Api\StockAnalyse.Api.csproj")) {
     exit 1
 }
 
+# 读取根目录 .env 中的访问凭据；已存在的进程环境变量优先
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*([^#=]+)=(.*)$') {
+            $key = $matches[1].Trim()
+            $value = $matches[2].Trim().Trim('"').Trim("'")
+            if (-not [Environment]::GetEnvironmentVariable($key, "Process")) {
+                [Environment]::SetEnvironmentVariable($key, $value, "Process")
+            }
+        }
+    }
+}
+if (-not $env:APP_AUTH_USERNAME -or -not $env:APP_AUTH_PASSWORD) {
+    Write-Error "缺少 APP_AUTH_USERNAME 或 APP_AUTH_PASSWORD，请先在根目录 .env 中配置访问凭据"
+    Read-Host "按Enter键退出"
+    exit 1
+}
+
 $skipPython = $false
 $skipFrontend = $false
 

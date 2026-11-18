@@ -9,7 +9,13 @@
 
 ## 如何配置
 
-打开 `config.ini` 文件，找到 `[TuShare]` 部分：
+先复制配置模板：
+
+```bash
+cp config.example.ini config.ini
+```
+
+打开已被 Git 忽略的 `config.ini` 文件，找到 `[TuShare]` 部分：
 
 ```ini
 [TuShare]
@@ -33,5 +39,6 @@ Token = 1234567890abcdef1234567890abcdef1234567890abcdef
 ## 注意事项
 
 1. Token是免费的，但有调用次数限制
-2. 不要将Token分享给他人
+2. 不要将Token分享给他人，也不要提交到 Git
 3. 如果不配置Token，系统会跳过TuShare数据源，使用其他数据源
+4. 如果 Token 曾经进入 Git 历史或公开仓库，应立即撤销并重新生成

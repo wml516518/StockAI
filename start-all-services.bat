@@ -7,6 +7,24 @@ echo   股票分析系统 - 一键启动所有服务
 echo ========================================
 echo.
 
+REM 读取根目录 .env 中的访问凭据
+if exist "%~dp0.env" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do (
+        if /i "%%A"=="APP_AUTH_USERNAME" if not defined APP_AUTH_USERNAME set "APP_AUTH_USERNAME=%%B"
+        if /i "%%A"=="APP_AUTH_PASSWORD" if not defined APP_AUTH_PASSWORD set "APP_AUTH_PASSWORD=%%B"
+    )
+)
+if not defined APP_AUTH_USERNAME (
+    echo [错误] 缺少 APP_AUTH_USERNAME，请先在根目录 .env 中配置访问凭据
+    pause
+    exit /b 1
+)
+if not defined APP_AUTH_PASSWORD (
+    echo [错误] 缺少 APP_AUTH_PASSWORD，请先在根目录 .env 中配置访问凭据
+    pause
+    exit /b 1
+)
+
 set PYTHON_STARTED=0
 set BACKEND_STARTED=0
 set FRONTEND_STARTED=0

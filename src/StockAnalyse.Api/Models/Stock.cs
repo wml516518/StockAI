@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
 
 namespace StockAnalyse.Api.Models;
 
@@ -153,6 +154,7 @@ public class AIModelConfig
     [Key]
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty; // DeepSeek、OpenAI等
+    [JsonIgnore]
     public string ApiKey { get; set; } = string.Empty;
     public string SubscribeEndpoint { get; set; } = string.Empty;
     public string? ModelName { get; set; }

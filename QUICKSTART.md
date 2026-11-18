@@ -3,7 +3,7 @@
 ## 1. 前置条件
 
 确保已安装以下软件：
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Visual Studio 2022 或 VS Code（可选）
 
 ## 2. 运行步骤

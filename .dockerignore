@@ -51,7 +51,7 @@ yarn-error.log*
 **/*.local
 **/appsettings.Development.json
 **/config.ini
-**/.env
+**/.env*
 **/.env.local
 **/.env.*.local
 

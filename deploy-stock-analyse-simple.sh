@@ -7,6 +7,9 @@
 
 set -Eeuo pipefail
 
+echo "此旧版裸机脚本已停用：未适配 .NET 10 与访问认证。请参阅 DOCKER_DEPLOYMENT.md，运行 bash docker-deploy.sh。" >&2
+exit 1
+
 on_error() {
     local exit_code=$?
     local line_no=${1:-}

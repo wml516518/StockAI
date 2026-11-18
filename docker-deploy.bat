@@ -21,13 +21,21 @@ echo ✓ Docker已安装
 docker --version
 echo.
 
+REM 检查Docker Compose v2
+docker compose version >nul 2>&1
+if errorlevel 1 (
+    echo ❌ 请安装支持 --wait 的 Docker Compose v2
+    pause
+    exit /b 1
+)
+
 REM 检查.env文件
 if not exist .env (
     echo ⚠️  未找到.env文件，正在创建...
     copy .env.example .env
     echo ✓ 已创建.env文件
     echo.
-    echo ⚠️  请编辑.env文件，填写必要的配置（特别是GEMINI_API_KEY）
+    echo ⚠️  请编辑.env文件，设置 APP_AUTH_USERNAME 和 APP_AUTH_PASSWORD
     echo    然后重新运行此脚本
     echo.
     pause
@@ -37,32 +45,49 @@ if not exist .env (
 echo ✓ 找到.env配置文件
 echo.
 
-REM 创建必要的目录
-echo 📁 创建数据目录...
-if not exist data mkdir data
-if not exist logs mkdir logs
-if not exist logs\backend mkdir logs\backend
-if not exist logs\frontend mkdir logs\frontend
-if not exist logs\python mkdir logs\python
-echo ✓ 目录创建完成
+set "APP_AUTH_USERNAME="
+set "APP_AUTH_PASSWORD="
+for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+    if /i "%%A"=="APP_AUTH_USERNAME" if not defined APP_AUTH_USERNAME set "APP_AUTH_USERNAME=%%B"
+    if /i "%%A"=="APP_AUTH_PASSWORD" if not defined APP_AUTH_PASSWORD set "APP_AUTH_PASSWORD=%%B"
+)
+if not defined APP_AUTH_USERNAME (
+    echo ❌ 请先在 .env 中设置 APP_AUTH_USERNAME
+    pause
+    exit /b 1
+)
+if not defined APP_AUTH_PASSWORD (
+    echo ❌ 请先在 .env 中设置 APP_AUTH_PASSWORD
+    pause
+    exit /b 1
+)
+
+if not exist python-data-service\config.ini (
+    copy python-data-service\config.example.ini python-data-service\config.ini >nul
+    echo ✓ 已创建 python-data-service\config.ini（TuShare Token 默认为空）
+)
 echo.
 
 REM 构建并启动服务
 echo 🔨 构建Docker镜像（首次运行可能需要几分钟）...
-docker-compose build
+docker compose config --quiet
+if errorlevel 1 exit /b 1
+docker compose build
+if errorlevel 1 exit /b 1
 
 echo.
 echo 🚀 启动服务...
-docker-compose up -d
-
-echo.
-echo ⏳ 等待服务启动...
-timeout /t 10 /nobreak >nul
+docker compose up -d --wait --wait-timeout 180
+if errorlevel 1 (
+    docker compose logs --tail=100
+    pause
+    exit /b 1
+)
 
 REM 检查服务状态
 echo.
 echo 📊 服务状态:
-docker-compose ps
+docker compose ps
 
 echo.
 echo ======================================
@@ -70,14 +95,14 @@ echo ✅ 部署完成！
 echo ======================================
 echo.
 echo 访问地址:
-echo   🌐 前端: http://localhost
-echo   🔧 后端API: http://localhost/api
+docker compose port frontend 80
+echo   打开页面时请输入 .env 中的 APP_AUTH_USERNAME / APP_AUTH_PASSWORD
 echo.
 echo 常用命令:
-echo   查看日志: docker-compose logs -f
-echo   停止服务: docker-compose stop
-echo   重启服务: docker-compose restart
-echo   完全停止: docker-compose down
+echo   查看日志: docker compose logs -f
+echo   停止服务: docker compose stop
+echo   重启服务: docker compose restart
+echo   完全停止: docker compose down
 echo.
 echo 详细文档请查看: DOCKER_DEPLOYMENT.md
 echo.
