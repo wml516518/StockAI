@@ -172,7 +172,80 @@ proxy_cache off;
 proxy_read_timeout 3600s;
 ```
 
-## 7. 安全
+## 7. 运行时配置
+
+**AI 模型的占位 Key 被误判为“已配置”**
+
+现象：首次部署后，设置页显示 API Key 已保存，但实际没有填写；执行 AI
+分析时请求上游返回 401。
+
+原因：旧版 `DatabaseSeeder` 会写入 `ApiKey = "your-api-key-here"`，设置接口
+只判断 Key 是否非空，因此把占位值当成了真实密钥。
+
+处理：`v1.0.2` 起不再写入占位 Key，启动时会清理数据库中旧的
+`your-api-key-here`，并在返回 `hasApiKey` 时排除该占位值。升级后应在
+“设置 → AI 模型配置”中重新保存真实 Key。不要通过数据库手工写入示例 Key。
+
+**AI 端点必须是 OpenAI Chat Completions 兼容格式**
+
+设置页中的端点必须能够接收 OpenAI 兼容请求，即路径以
+`/v1/chat/completions` 结尾。常见配置：
+
+```text
+DeepSeek
+端点: https://api.deepseek.com/v1/chat/completions
+模型: deepseek-chat
+
+阿里云百炼（DashScope 兼容模式）
+端点: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+模型: qwen-plus 或 qwen-max
+```
+
+不要填写 DashScope 原生接口或只有域名/Base URL 的地址。API Key 保存在
+SQLite 中，接口只返回 `hasApiKey`，不会把密钥原文回传到浏览器。
+
+**TuShare Token 修改后必须重启 Python 服务**
+
+生产配置位于：
+
+```text
+/opt/stockai/python-data-service/config.ini
+```
+
+文件格式：
+
+```ini
+[TuShare]
+Token = 在服务器上填入真实 Token
+```
+
+该文件以只读方式挂载到容器的 `/app/config.ini`，Python 服务在启动时读取，
+因此修改后需要重启：
+
+```bash
+cd /opt/stockai
+sudo docker compose restart python-service
+sudo docker compose logs --tail=100 python-service
+```
+
+不要在终端使用 `echo` 输出 Token，也不要把它提交到 Git 或发到聊天。
+`stock_basic` 等接口通常需要约 2000 积分；积分不足只代表该接口权限不够，
+不代表 Token 格式错误。其他行情与行业数据路径仍可使用 AKShare/EastMoney，
+不要只凭 `stock_basic` 失败就认定 TuShare Token 不可用。
+
+**Basic Auth 不是应用级“记住我”**
+
+默认用户名为 `stockai`，用户名和密码保存在服务器的 `/opt/stockai/.env`：
+
+```bash
+sudo grep -E '^APP_AUTH_(USERNAME|PASSWORD)=' /opt/stockai/.env
+```
+
+浏览器可能按站点缓存 Basic Auth 凭据，但关闭浏览器、使用无痕模式或清理站点
+数据后通常需要重新输入。建议把凭据保存到浏览器密码管理器，不要依赖浏览器
+会话，也不要把用户名和密码写进 URL。公网访问必须使用 HTTPS。
+
+## 8. 安全
 
 - StockAI 前端使用 Basic Auth；公网必须走 HTTPS，禁止把
   `127.0.0.1:18081` 直接暴露到公网。
@@ -186,7 +259,7 @@ proxy_read_timeout 3600s;
   服务器 `/opt/stockai/python-data-service/config.ini`。
 - SQLite 数据卷只在部署脚本中做只读备份，不使用 `docker compose down -v`。
 
-## 8. 验收命令
+## 9. 验收命令
 
 服务器本机：
 
@@ -207,4 +280,4 @@ curl -s https://wml.ailoong.net.cn/apps/stockai/api/aiprompts \
 ```
 
 未认证访问 `/apps/stockai/` 返回 401 是预期行为；`/apps/stockai/health`
-应返回 `{"status":"OK"}`。
+应返回 `{"status":"healthy"}`。
