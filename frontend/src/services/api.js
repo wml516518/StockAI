@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: `${import.meta.env.BASE_URL}api`,
   timeout: 60000, // 增加到60秒，因为批量获取自选股可能需要更长时间
   headers: {
     'Content-Type': 'application/json'

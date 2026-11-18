@@ -1338,7 +1338,9 @@ const connectTradingPlanSSE = () => {
 
   try {
     // 连接到SSE端点
-    const eventSource = new EventSource('/api/watchlist/trading-plan/events')
+    const eventSource = new EventSource(
+      `${import.meta.env.BASE_URL}api/watchlist/trading-plan/events`
+    )
     sseConnection = eventSource
 
     eventSource.onopen = () => {

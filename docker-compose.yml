@@ -58,6 +58,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
     restart: unless-stopped
     ports:
       - "${HTTP_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-18081}:80"

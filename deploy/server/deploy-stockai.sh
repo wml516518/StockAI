@@ -63,6 +63,7 @@ usage() {
   STOCKAI_AUTH_USERNAME     首次安装的登录用户名，默认 stockai
   STOCKAI_AUTH_PASSWORD     首次安装密码；未设置时自动生成
   STOCKAI_RELEASE_ID        CI/CD 发布编号，例如 v1.2.0
+  STOCKAI_BASE_PATH         前端子路径，默认 /；接入个人主页时用 /apps/stockai/
   NUGET_SOURCE              NuGet 源，默认官方源
   APT_MIRROR                Ubuntu 镜像主机，例如 mirrors.aliyun.com
 EOF
@@ -85,6 +86,11 @@ APT_MIRROR="${APT_MIRROR:-}"
 RELEASE_ID="${STOCKAI_RELEASE_ID:-manual-$(date +%Y%m%d-%H%M%S)}"
 [[ "$RELEASE_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
     || die "STOCKAI_RELEASE_ID 格式不正确"
+
+BASE_PATH="${STOCKAI_BASE_PATH:-/}"
+[[ "$BASE_PATH" == "/" || "$BASE_PATH" =~ ^/[A-Za-z0-9._/-]+/$ ]] \
+    || die "STOCKAI_BASE_PATH 必须以 / 开头和结尾，例如 /apps/stockai/"
+[[ "$BASE_PATH" != *".."* ]] || die "STOCKAI_BASE_PATH 不能包含 .."
 
 log "检查服务器"
 case "$(uname -m)" in
@@ -198,6 +204,7 @@ set_env_value APP_AUTH_USERNAME "$AUTH_USERNAME" "$ENV_FILE"
 set_env_value APP_AUTH_PASSWORD "$AUTH_PASSWORD" "$ENV_FILE"
 set_env_value HTTP_BIND_ADDRESS "127.0.0.1" "$ENV_FILE"
 set_env_value HTTP_PORT "$PORT" "$ENV_FILE"
+set_env_value VITE_BASE_PATH "$BASE_PATH" "$ENV_FILE"
 
 CONFIG_FILE="$APP_DIR/python-data-service/config.ini"
 if [[ ! -f "$CONFIG_FILE" ]]; then
