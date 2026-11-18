@@ -66,6 +66,14 @@ grep -q 'id="app"' "$TEMP_DIR/index.html" \
     || fail "首页内容不符合预期"
 echo "✓ 认证后首页"
 
+ASSET_PATH="$(grep -oE '/[A-Za-z0-9._/-]+\.js' "$TEMP_DIR/index.html" | head -1 || true)"
+if [[ -n "$ASSET_PATH" ]]; then
+    ORIGIN="$(printf '%s' "$BASE_URL" | sed -E 's#(https?://[^/]+).*#\1#')"
+    curl_auth -fsS --max-time 20 "${ORIGIN}${ASSET_PATH}" >/dev/null \
+        || fail "前端 JS 资源不可访问: ${ASSET_PATH}"
+    echo "✓ 前端 JS 资源"
+fi
+
 curl_auth -fsS --max-time 15 "$BASE_URL/api/aiprompts" >/dev/null \
     || fail "认证后业务 API 不可访问"
 echo "✓ 业务 API"

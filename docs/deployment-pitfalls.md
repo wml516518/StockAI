@@ -132,11 +132,19 @@ StockAI 不应再申请自己的 80/443 入口，也不应覆盖 `/etc/nginx/con
 现有 server 块。正确做法：
 
 1. StockAI 只监听 `127.0.0.1:18081`；
-2. 在个人主页的 `/etc/nginx/portfolio/routes.conf` 中增加
+2. 在个人主页 `/etc/nginx/conf.d/wml.ailoong.net.cn.conf` 的 443 server
+   块中 include `/etc/nginx/snippets/stockai.conf`，由 snippet 提供
    `location ^~ /apps/stockai/`；
 3. 反向代理到 `http://127.0.0.1:18081/`，由外层 Nginx 负责 TLS。
 
 不要在 `wml.ailoong.net.cn` 上再启动一个占用 80/443 的服务。
+
+仓库文档里的 `/etc/nginx/portfolio/routes.conf` 是合并参考；这台服务器实际
+把 `wml` 的 location 拆在 `/etc/nginx/conf.d/wml.ailoong.net.cn.conf` 和
+`/etc/nginx/snippets/*.conf`，以 `nginx -T` 的实际输出为准。
+
+`systemctl reload nginx` 后旧 worker 仍可能短暂服务请求，紧接着的健康检查
+偶尔会先看到一次 404；重试一次即可，不要据此重复改配置。
 
 ## 6. 子路径部署
 
@@ -170,6 +178,10 @@ proxy_read_timeout 3600s;
   `127.0.0.1:18081` 直接暴露到公网。
 - 部署日志和聊天记录中不要输出 `APP_AUTH_PASSWORD`、TuShare Token、
   SSH 私钥等敏感信息。
+- 不要把 SSH 私钥存到 GitHub Variables；Variables 是明文可读的，必须使用
+  Environment/Repository Secrets。2026-11-18 已删除 StockAI 仓库中 2025 年
+  遗留的 `SERVER_SSH_KEY` 变量；如果服务器 root 的 `authorized_keys` 仍保留
+  对应旧 key，应确认不再使用后移除并轮换。
 - 此前公开过的 TuShare Token 应到 TuShare 控制台撤销并重新生成，只写入
   服务器 `/opt/stockai/python-data-service/config.ini`。
 - SQLite 数据卷只在部署脚本中做只读备份，不使用 `docker compose down -v`。
