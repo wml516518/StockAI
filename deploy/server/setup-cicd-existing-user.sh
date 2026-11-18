@@ -140,7 +140,9 @@ fi
 
 USER_HOME="$(getent passwd "$DEPLOY_USER" | cut -d: -f6)"
 [[ -n "$USER_HOME" ]] || die "无法读取 $DEPLOY_USER 的主目录"
-install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 0700 "$USER_HOME/.ssh"
+USER_GROUP="$(id -gn "$DEPLOY_USER")"
+[[ -n "$USER_GROUP" ]] || die "无法读取 $DEPLOY_USER 的主组"
+install -d -o "$DEPLOY_USER" -g "$USER_GROUP" -m 0700 "$USER_HOME/.ssh"
 AUTHORIZED_KEYS="$USER_HOME/.ssh/authorized_keys"
 
 KEY_BLOB="$(awk '{print $2}' <<< "$PUBLIC_KEY")"
@@ -162,7 +164,7 @@ TEMPORARY_KEY_FILE="$(mktemp "$USER_HOME/.ssh/authorized_keys.XXXXXX")"
     fi
     authorized_keys_line "$DEPLOY_USER" "$SUDO_PATH" "$PUBLIC_KEY"
 } > "$TEMPORARY_KEY_FILE"
-chown "$DEPLOY_USER:$DEPLOY_USER" "$TEMPORARY_KEY_FILE"
+chown "$DEPLOY_USER:$USER_GROUP" "$TEMPORARY_KEY_FILE"
 chmod 0600 "$TEMPORARY_KEY_FILE"
 mv "$TEMPORARY_KEY_FILE" "$AUTHORIZED_KEYS"
 

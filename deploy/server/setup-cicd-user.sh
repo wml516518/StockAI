@@ -123,10 +123,12 @@ fi
 
 USER_HOME="$(getent passwd "$DEPLOY_USER" | cut -d: -f6)"
 [[ -n "$USER_HOME" ]] || die "无法读取 $DEPLOY_USER 的主目录"
-install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 0700 "$USER_HOME/.ssh"
+USER_GROUP="$(id -gn "$DEPLOY_USER")"
+[[ -n "$USER_GROUP" ]] || die "无法读取 $DEPLOY_USER 的主组"
+install -d -o "$DEPLOY_USER" -g "$USER_GROUP" -m 0700 "$USER_HOME/.ssh"
 AUTHORIZED_KEYS="$USER_HOME/.ssh/authorized_keys"
 authorized_keys_line "$SUDO_PATH" "$PUBLIC_KEY" > "$AUTHORIZED_KEYS"
-chown "$DEPLOY_USER:$DEPLOY_USER" "$AUTHORIZED_KEYS"
+chown "$DEPLOY_USER:$USER_GROUP" "$AUTHORIZED_KEYS"
 chmod 0600 "$AUTHORIZED_KEYS"
 
 SUDOERS_FILE="/etc/sudoers.d/stockai-ci-deploy"
