@@ -56,7 +56,14 @@ COPYFILE_DISABLE=1 tar \
     -czf "$OUTPUT" \
     -C "$ROOT_DIR" .
 
-if tar -tzf "$OUTPUT" | grep -Eq '(^|/)\.env$|(^|/)config\.ini$'; then
+ARCHIVE_LIST="$(mktemp "${TMPDIR:-/tmp}/stockai-release-list.XXXXXX")"
+cleanup() {
+    rm -f "$ARCHIVE_LIST"
+}
+trap cleanup EXIT
+tar -tzf "$OUTPUT" > "$ARCHIVE_LIST"
+
+if grep -Eq '(^|/)\.env$|(^|/)config\.ini$' "$ARCHIVE_LIST"; then
     rm -f "$OUTPUT"
     echo "发布包包含敏感配置，已删除。请检查排除规则。" >&2
     exit 1
@@ -68,7 +75,7 @@ for required in \
     frontend/package-lock.json \
     python-data-service/config.example.ini \
     src/StockAnalyse.Api/StockAnalyse.Api.csproj; do
-    if ! tar -tzf "$OUTPUT" | grep -Eq "(^|/)${required//\//\\/}$"; then
+    if ! grep -Eq "(^|/)${required//\//\\/}$" "$ARCHIVE_LIST"; then
         rm -f "$OUTPUT"
         echo "发布包缺少: $required" >&2
         exit 1

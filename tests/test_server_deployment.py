@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -251,6 +252,35 @@ class ServerDeploymentScriptTests(unittest.TestCase):
                         env=environment,
                     )
                     self.assertEqual(result.returncode == 0, expected)
+
+    def test_release_package_rejects_an_unexpected_config_ini(self):
+        with tempfile.TemporaryDirectory(prefix="stockai-release-secret-") as directory:
+            temporary = Path(directory)
+            source = temporary / "src"
+            shutil.copytree(
+                ROOT,
+                source,
+                ignore=shutil.ignore_patterns(
+                    ".git", "node_modules", "dist", "bin", "obj", "__pycache__"
+                ),
+            )
+            forbidden = source / "forbidden"
+            forbidden.mkdir()
+            (forbidden / "config.ini").write_text("secret", encoding="utf-8")
+            archive = temporary / "release.tar.gz"
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(source / "deploy" / "server" / "package-release.sh"),
+                    str(archive),
+                ],
+                cwd=source,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("发布包包含敏感配置", result.stderr)
+            self.assertFalse(archive.exists())
 
 
 if __name__ == "__main__":
