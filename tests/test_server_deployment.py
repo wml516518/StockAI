@@ -76,6 +76,24 @@ class ServerDeploymentScriptTests(unittest.TestCase):
             (ROOT / ".github" / "workflows" / "docker-deploy.yml").exists()
         )
 
+    def test_deployment_uses_fixed_default_login_and_can_override_it(self):
+        script = (SCRIPT_DIR / "deploy-stockai.sh").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'AUTH_USERNAME="${STOCKAI_AUTH_USERNAME:-admin}"', script
+        )
+        self.assertIn(
+            'AUTH_PASSWORD="${STOCKAI_AUTH_PASSWORD:-StockAI@2026}"', script
+        )
+        self.assertIn(
+            'set_env_value APP_AUTH_USERNAME "$AUTH_USERNAME" "$ENV_FILE"',
+            script,
+        )
+        self.assertIn(
+            'set_env_value APP_AUTH_PASSWORD "$AUTH_PASSWORD" "$ENV_FILE"',
+            script,
+        )
+
     def test_forced_command_passes_original_command_as_single_argument(self):
         environment = os.environ.copy()
         environment["STOCKAI_SETUP_LIB_ONLY"] = "1"

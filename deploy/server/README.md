@@ -70,9 +70,9 @@ sudo APP_DIR=/opt/stockai \
   /root/stockai-release.tar.gz
 ```
 
-首次运行默认写入 `admin` / `StockAI@2026`，凭据文件权限为 `600`。
-也可以设置 `STOCKAI_AUTH_USERNAME` / `STOCKAI_AUTH_PASSWORD`，或修改已有
-`/opt/stockai/.env` 覆盖默认值。查看当前用户名和密码：
+部署默认写入 `admin` / `StockAI@2026`，并覆盖服务器 `.env` 中可能遗留的
+临时旧凭据；凭据文件权限为 `600`。也可以设置 `STOCKAI_AUTH_USERNAME` /
+`STOCKAI_AUTH_PASSWORD` 覆盖默认值。查看当前用户名和密码：
 
 ```bash
 sudo grep -E '^APP_AUTH_(USERNAME|PASSWORD)=' /opt/stockai/.env
