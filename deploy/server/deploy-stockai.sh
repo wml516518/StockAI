@@ -60,8 +60,8 @@ usage() {
   APP_DIR                   安装目录，默认 /opt/stockai
   STOCKAI_DOMAIN            域名；未设置时只启动本机服务
   LETSENCRYPT_EMAIL         配置 Let's Encrypt HTTPS 时使用
-  STOCKAI_AUTH_USERNAME     首次安装的登录用户名，默认 admin
-  STOCKAI_AUTH_PASSWORD     首次安装密码，默认 StockAI@2026
+  STOCKAI_AUTH_USERNAME     登录用户名，默认 admin
+  STOCKAI_AUTH_PASSWORD     登录密码，默认 StockAI@2026
   STOCKAI_RELEASE_ID        CI/CD 发布编号，例如 v1.2.0
   STOCKAI_BASE_PATH         前端子路径，默认 /；接入个人主页时用 /apps/stockai/
   NUGET_SOURCE              NuGet 源，默认官方源
@@ -168,29 +168,13 @@ ENV_FILE="$APP_DIR/.env"
 [[ -f "$ENV_FILE" ]] || cp "$APP_DIR/.env.example" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
-EXISTING_USERNAME="$(read_env_value APP_AUTH_USERNAME "$ENV_FILE")"
-if [[ -n "${STOCKAI_AUTH_USERNAME:-}" ]]; then
-    AUTH_USERNAME="$STOCKAI_AUTH_USERNAME"
-elif [[ -n "$EXISTING_USERNAME" ]]; then
-    AUTH_USERNAME="$EXISTING_USERNAME"
-else
-    AUTH_USERNAME="admin"
-fi
+AUTH_USERNAME="${STOCKAI_AUTH_USERNAME:-admin}"
 [[ "$AUTH_USERNAME" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
     || die "登录用户名只能包含字母、数字、点、下划线和连字符"
 
-EXISTING_PASSWORD="$(read_env_value APP_AUTH_PASSWORD "$ENV_FILE")"
-if [[ -n "${STOCKAI_AUTH_PASSWORD:-}" ]]; then
-    AUTH_PASSWORD="$STOCKAI_AUTH_PASSWORD"
-elif [[ -n "$EXISTING_PASSWORD" ]]; then
-    AUTH_PASSWORD="$EXISTING_PASSWORD"
-else
-    AUTH_PASSWORD="StockAI@2026"
-fi
-if [[ -n "${STOCKAI_AUTH_PASSWORD:-}" ]]; then
-    [[ "$AUTH_PASSWORD" =~ ^[A-Za-z0-9._~!@%^*+=-]{12,128}$ ]] \
-        || die "新密码需为 12-128 位，且不能包含空格、引号、反斜杠或 #"
-fi
+AUTH_PASSWORD="${STOCKAI_AUTH_PASSWORD:-StockAI@2026}"
+[[ "$AUTH_PASSWORD" =~ ^[A-Za-z0-9._~!@%^*+=-]{12,128}$ ]] \
+    || die "密码需为 12-128 位，且不能包含空格、引号、反斜杠或 #"
 
 PORT="$(read_env_value HTTP_PORT "$ENV_FILE")"
 PORT="${PORT:-18081}"
