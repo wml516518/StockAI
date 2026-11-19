@@ -50,10 +50,7 @@ fi
 
 if ! grep -Eq '^APP_AUTH_USERNAME=.+' .env \
     || ! grep -Eq '^APP_AUTH_PASSWORD=.+' .env; then
-    echo "❌ 请先在 .env 中设置 APP_AUTH_USERNAME 和 APP_AUTH_PASSWORD"
-    echo "   密码建议使用至少 20 位随机字符，并通过 HTTPS 访问公网入口。"
-    echo "   生成密码: printf 'APP_AUTH_PASSWORD=%s\\n' \"\$(openssl rand -hex 24)\""
-    exit 1
+    echo "⚠️  登录凭据未完整填写，将使用默认账号 admin / StockAI@2026"
 fi
 
 # 构建并启动服务

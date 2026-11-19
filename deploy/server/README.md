@@ -70,8 +70,9 @@ sudo APP_DIR=/opt/stockai \
   /root/stockai-release.tar.gz
 ```
 
-首次运行会自动生成随机密码，写入 `/opt/stockai/.env`，权限为 `600`。
-脚本不会把密码打印到终端或日志。查看用户名和密码：
+首次运行默认写入 `admin` / `StockAI@2026`，凭据文件权限为 `600`。
+也可以设置 `STOCKAI_AUTH_USERNAME` / `STOCKAI_AUTH_PASSWORD`，或修改已有
+`/opt/stockai/.env` 覆盖默认值。查看当前用户名和密码：
 
 ```bash
 sudo grep -E '^APP_AUTH_(USERNAME|PASSWORD)=' /opt/stockai/.env
@@ -128,11 +129,11 @@ SQLite 在线备份 API 把现有数据库写入 `/opt/stockai/backups/`。
 原有的 500 错误，再部署 StockAI。
 
 证书申请要求域名已经解析到服务器，且公网可访问 80/443。未设置
-`LETSENCRYPT_EMAIL` 时只配置 HTTP；Basic Auth 不应通过明文 HTTP 暴露到公网。
+`LETSENCRYPT_EMAIL` 时只配置 HTTP；登录密码不应通过明文 HTTP 暴露到公网。
 
 ## 凭据与数据
 
-- Web 登录凭据：`/opt/stockai/.env`。
+- Web 登录凭据：`/opt/stockai/.env`；未配置时为 `admin` / `StockAI@2026`。
 - Python 数据源配置：`/opt/stockai/python-data-service/config.ini`。
 - SQLite 数据卷：`stockai_stock-data`。
 - 数据库备份：`/opt/stockai/backups/`。

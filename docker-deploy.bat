@@ -35,11 +35,6 @@ if not exist .env (
     copy .env.example .env
     echo ✓ 已创建.env文件
     echo.
-    echo ⚠️  请编辑.env文件，设置 APP_AUTH_USERNAME 和 APP_AUTH_PASSWORD
-    echo    然后重新运行此脚本
-    echo.
-    pause
-    exit /b 0
 )
 
 echo ✓ 找到.env配置文件
@@ -52,14 +47,10 @@ for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
     if /i "%%A"=="APP_AUTH_PASSWORD" if not defined APP_AUTH_PASSWORD set "APP_AUTH_PASSWORD=%%B"
 )
 if not defined APP_AUTH_USERNAME (
-    echo ❌ 请先在 .env 中设置 APP_AUTH_USERNAME
-    pause
-    exit /b 1
+    set "APP_AUTH_USERNAME=admin"
 )
 if not defined APP_AUTH_PASSWORD (
-    echo ❌ 请先在 .env 中设置 APP_AUTH_PASSWORD
-    pause
-    exit /b 1
+    set "APP_AUTH_PASSWORD=StockAI@2026"
 )
 
 if not exist python-data-service\config.ini (
@@ -96,7 +87,7 @@ echo ======================================
 echo.
 echo 访问地址:
 docker compose port frontend 80
-echo   打开页面时请输入 .env 中的 APP_AUTH_USERNAME / APP_AUTH_PASSWORD
+echo   默认登录账号: admin / StockAI@2026
 echo.
 echo 常用命令:
 echo   查看日志: docker compose logs -f

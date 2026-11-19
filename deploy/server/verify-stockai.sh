@@ -40,13 +40,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-AUTH_PAIR="${AUTH_USERNAME}:${AUTH_PASSWORD}"
-curl_auth() {
-    local escaped="$AUTH_PAIR"
-    escaped="${escaped//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
-    printf 'user = "%s"\n' "$escaped" | curl --config - "$@"
-}
+COOKIE_JAR="$TEMP_DIR/cookies.txt"
+LOGIN_BODY="$TEMP_DIR/login.json"
+python3 - "$AUTH_USERNAME" "$AUTH_PASSWORD" "$LOGIN_BODY" <<'PY'
+import json
+import sys
+
+with open(sys.argv[3], "w", encoding="utf-8") as output:
+    json.dump({"username": sys.argv[1], "password": sys.argv[2]}, output)
+PY
+chmod 600 "$LOGIN_BODY"
 
 echo "检查入口: $BASE_URL"
 
@@ -57,28 +60,45 @@ grep -q '"status":"healthy"' <<<"$HEALTH" \
 echo "✓ 健康检查"
 
 STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$BASE_URL/")"
-[[ "$STATUS" == "401" ]] || fail "未登录访问首页应返回 401，实际 $STATUS"
-echo "✓ 首页要求认证"
+[[ "$STATUS" == "200" ]] || fail "未登录访问登录页应返回 200，实际 $STATUS"
+echo "✓ 登录页公开可访问"
 
-curl_auth -fsS --max-time 15 "$BASE_URL/" > "$TEMP_DIR/index.html" \
-    || fail "认证后首页不可访问"
+curl -fsS --max-time 15 "$BASE_URL/" > "$TEMP_DIR/index.html" \
+    || fail "登录页不可访问"
 grep -q 'id="app"' "$TEMP_DIR/index.html" \
     || fail "首页内容不符合预期"
-echo "✓ 认证后首页"
+echo "✓ 前端入口"
 
 ASSET_PATH="$(grep -oE '/[A-Za-z0-9._/-]+\.js' "$TEMP_DIR/index.html" | head -1 || true)"
 if [[ -n "$ASSET_PATH" ]]; then
     ORIGIN="$(printf '%s' "$BASE_URL" | sed -E 's#(https?://[^/]+).*#\1#')"
-    curl_auth -fsS --max-time 20 "${ORIGIN}${ASSET_PATH}" >/dev/null \
+    curl -fsS --max-time 20 "${ORIGIN}${ASSET_PATH}" >/dev/null \
         || fail "前端 JS 资源不可访问: ${ASSET_PATH}"
     echo "✓ 前端 JS 资源"
 fi
 
-curl_auth -fsS --max-time 15 "$BASE_URL/api/aiprompts" >/dev/null \
+STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    "$BASE_URL/api/aiprompts")"
+[[ "$STATUS" == "401" ]] || fail "未登录访问业务 API 应返回 401，实际 $STATUS"
+echo "✓ 业务 API 要求登录"
+
+LOGIN_RESPONSE="$(curl -fsS --max-time 15 \
+    -c "$COOKIE_JAR" \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$LOGIN_BODY" \
+    "$BASE_URL/api/auth/login")" \
+    || fail "登录请求失败"
+grep -q '"authenticated":true' <<<"$LOGIN_RESPONSE" \
+    || fail "登录接口未返回已认证状态"
+rm -f "$LOGIN_BODY"
+echo "✓ 账号密码登录"
+
+curl -fsS --max-time 15 -b "$COOKIE_JAR" \
+    "$BASE_URL/api/aiprompts" >/dev/null \
     || fail "认证后业务 API 不可访问"
 echo "✓ 业务 API"
 
-curl_auth -sS --max-time 10 -D "$TEMP_DIR/headers" \
+curl -sS --max-time 10 -b "$COOKIE_JAR" -D "$TEMP_DIR/headers" \
     -o /dev/null "$BASE_URL/"
 grep -qi '^x-content-type-options: *nosniff' "$TEMP_DIR/headers" \
     || fail "缺少 X-Content-Type-Options"
@@ -88,7 +108,7 @@ grep -qi '^referrer-policy: *same-origin' "$TEMP_DIR/headers" \
     || fail "缺少 Referrer-Policy"
 echo "✓ 安全响应头"
 
-curl_auth -sS -N --max-time 5 \
+curl -sS -N --max-time 5 -b "$COOKIE_JAR" \
     -D "$TEMP_DIR/sse-headers" \
     -o "$TEMP_DIR/sse-body" \
     "$BASE_URL/api/watchlist/trading-plan/events" 2>/dev/null || true
@@ -100,6 +120,14 @@ fi
 grep -q '"type":"connected"' "$TEMP_DIR/sse-body" \
     || fail "SSE 首包中没有 connected 事件"
 echo "✓ SSE 未被缓冲或压缩"
+
+curl -fsS --max-time 10 -b "$COOKIE_JAR" -X POST \
+    -o /dev/null "$BASE_URL/api/auth/logout" \
+    || fail "退出登录失败"
+STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -b "$COOKIE_JAR" "$BASE_URL/api/aiprompts")"
+[[ "$STATUS" == "401" ]] || fail "退出登录后业务 API 仍可访问，实际 $STATUS"
+echo "✓ 退出登录清除会话"
 
 if [[ "$BASE_URL" == https://* ]]; then
     grep -qi '^strict-transport-security:' "$TEMP_DIR/headers" \

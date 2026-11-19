@@ -242,8 +242,6 @@ start-all-services.bat
 # 启动后端API服务
 start-backend.bat
 # 或
-export APP_AUTH_USERNAME=stockai
-export APP_AUTH_PASSWORD='替换为至少20位随机密码'
 cd src/StockAnalyse.Api
 dotnet run
 
@@ -264,8 +262,9 @@ python stock_data_service.py
 - API文档：http://localhost:5000/swagger
 - Python数据服务：http://localhost:5001（如果已启动）
 
-后端未配置 `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD` 时会拒绝启动。
-Windows 启动脚本会自动读取根目录 `.env`；Docker 部署方式见 `DOCKER_DEPLOYMENT.md`。
+未配置登录凭据时，默认账号为 `admin`，默认密码为 `StockAI@2026`。
+可以通过 `APP_AUTH_USERNAME` / `APP_AUTH_PASSWORD` 覆盖。Windows 启动脚本会
+自动读取根目录 `.env`；Docker 部署方式见 `DOCKER_DEPLOYMENT.md`。
 
 ### 脚本说明
 
@@ -385,8 +384,10 @@ StockAnalyse/
 3. 通过数据库：直接操作 `AIModelConfigs` 表
 
 配置接口不会返回 API Key 原文。页面编辑时留空表示保留已保存的密钥；
-连接测试可以只传配置 ID，由后端读取已保存的密钥。部署时 `.env` 必须配置
-`APP_AUTH_USERNAME` 和 `APP_AUTH_PASSWORD`，整站使用 Basic Auth 保护并通过 HTTPS 访问。
+连接测试可以只传配置 ID，由后端读取已保存的密钥。应用默认使用
+`admin` / `StockAI@2026` 登录，也可以通过 `APP_AUTH_USERNAME` 和
+`APP_AUTH_PASSWORD` 覆盖，并通过 HTTPS 访问。默认密码公开写在仓库中，
+只作为当前的临时访问门槛。
 
 ### 自动刷新配置
 - **自选股刷新间隔：** 默认3秒，可在设置中配置（0.5-60秒）

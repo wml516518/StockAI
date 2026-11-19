@@ -1,13 +1,13 @@
-import base64
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
 import unittest
+import http.cookiejar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 import uuid
 
 
@@ -36,11 +36,6 @@ AUTH_USERNAME = os.environ.get(
 AUTH_PASSWORD = os.environ.get(
     "STOCKAI_TEST_PASSWORD", LOCAL_ENV.get("APP_AUTH_PASSWORD", "")
 )
-AUTH_HEADER = "Basic " + base64.b64encode(
-    f"{AUTH_USERNAME}:{AUTH_PASSWORD}".encode()
-).decode()
-
-
 class ComposeDeploymentTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -51,28 +46,50 @@ class ComposeDeploymentTests(unittest.TestCase):
                 "Set APP_AUTH_USERNAME and APP_AUTH_PASSWORD in .env "
                 "or STOCKAI_TEST_USERNAME/STOCKAI_TEST_PASSWORD"
             )
+        cls.cookie_jar = http.cookiejar.CookieJar()
+        cls.opener = build_opener(HTTPCookieProcessor(cls.cookie_jar))
+        cls.login()
 
-    def request(self, path, body=None, method=None, authorized=True):
+    def request(self, path, body=None, method=None):
         headers = {"Content-Type": "application/json"}
-        if authorized:
-            headers["Authorization"] = AUTH_HEADER
         request = Request(
             BASE_URL + path,
             data=json.dumps(body).encode() if body is not None else None,
             headers=headers, method=method,
         )
-        with urlopen(request, timeout=5) as response:
+        with self.opener.open(request, timeout=5) as response:
             return response.status, response.read()
 
-    def test_frontend_and_api_require_authentication(self):
-        for path in ("/", "/api/aiprompts"):
-            with self.subTest(path=path):
-                with self.assertRaises(HTTPError) as raised:
-                    self.request(path, authorized=False)
-                self.assertEqual(raised.exception.code, 401)
-                self.assertIn(
-                    "Basic", raised.exception.headers.get("WWW-Authenticate", "")
-                )
+    @classmethod
+    def login(cls):
+        request = Request(
+            BASE_URL + "/api/auth/login",
+            data=json.dumps({
+                "username": AUTH_USERNAME,
+                "password": AUTH_PASSWORD,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with cls.opener.open(request, timeout=5) as response:
+            if response.status != 200:
+                raise AssertionError(f"Login returned {response.status}")
+            payload = json.loads(response.read())
+            if not payload["authenticated"]:
+                raise AssertionError(f"Login was not authenticated: {payload}")
+
+    def test_frontend_is_public_and_api_requires_login(self):
+        status, body = self.request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="app"', body)
+
+        anonymous_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        with self.assertRaises(HTTPError) as raised:
+            anonymous_opener.open(BASE_URL + "/api/aiprompts", timeout=5)
+        self.assertEqual(raised.exception.code, 401)
+        self.assertNotIn(
+            "Basic", raised.exception.headers.get("WWW-Authenticate", "")
+        )
 
     def test_frontend_and_history_route_load(self):
         for path in ("/", "/watchlist"):
@@ -82,7 +99,7 @@ class ComposeDeploymentTests(unittest.TestCase):
                 self.assertIn(b'id="app"', body)
 
     def test_health_checks_the_backend(self):
-        status, body = self.request("/health", authorized=False)
+        status, body = self.request("/health")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["status"], "healthy")
 
@@ -97,9 +114,8 @@ class ComposeDeploymentTests(unittest.TestCase):
     def test_sse_delivers_a_connection_event_without_buffering(self):
         request = Request(
             BASE_URL + "/api/watchlist/trading-plan/events",
-            headers={"Authorization": AUTH_HEADER},
         )
-        with urlopen(request, timeout=3) as response:
+        with self.opener.open(request, timeout=3) as response:
             self.assertIn("text/event-stream", response.headers["Content-Type"])
             self.assertIsNone(response.headers.get("Content-Encoding"))
             first_event = response.readline().decode()

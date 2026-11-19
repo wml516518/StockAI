@@ -69,7 +69,7 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Authorization \$http_authorization;
+        proxy_set_header Cookie \$http_cookie;
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
@@ -85,7 +85,7 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Authorization \$http_authorization;
+        proxy_set_header Cookie \$http_cookie;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
     }
@@ -113,7 +113,7 @@ curl -fsS --max-time 10 -H "Host: ${DOMAIN}" \
 echo "HTTP 入口已配置: http://${DOMAIN}/"
 
 if [[ -z "$EMAIL" ]]; then
-    echo "未设置 LETSENCRYPT_EMAIL，已跳过 HTTPS。Basic Auth 不应通过公网 HTTP 使用。"
+    echo "未设置 LETSENCRYPT_EMAIL，已跳过 HTTPS。登录密码不应通过公网 HTTP 使用。"
     exit 0
 fi
 

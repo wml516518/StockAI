@@ -33,14 +33,10 @@ if exist "%~dp0.env" (
     )
 )
 if not defined APP_AUTH_USERNAME (
-    echo [错误] 缺少 APP_AUTH_USERNAME，请先在根目录 .env 中配置访问凭据
-    pause
-    exit /b 1
+    set "APP_AUTH_USERNAME=admin"
 )
 if not defined APP_AUTH_PASSWORD (
-    echo [错误] 缺少 APP_AUTH_PASSWORD，请先在根目录 .env 中配置访问凭据
-    pause
-    exit /b 1
+    set "APP_AUTH_PASSWORD=StockAI@2026"
 )
 
 echo [2/2] 启动后端API服务...

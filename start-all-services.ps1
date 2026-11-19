@@ -52,9 +52,12 @@ if (Test-Path $envFile) {
     }
 }
 if (-not $env:APP_AUTH_USERNAME -or -not $env:APP_AUTH_PASSWORD) {
-    Write-Error "缺少 APP_AUTH_USERNAME 或 APP_AUTH_PASSWORD，请先在根目录 .env 中配置访问凭据"
-    Read-Host "按Enter键退出"
-    exit 1
+    if (-not $env:APP_AUTH_USERNAME) {
+        $env:APP_AUTH_USERNAME = "admin"
+    }
+    if (-not $env:APP_AUTH_PASSWORD) {
+        $env:APP_AUTH_PASSWORD = "StockAI@2026"
+    }
 }
 
 $skipPython = $false
