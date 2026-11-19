@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 from pathlib import Path
@@ -8,9 +7,10 @@ import tempfile
 from threading import Thread
 import time
 import unittest
+import http.cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,11 +20,6 @@ API_DLL = Path(os.environ.get(
 )).resolve()
 USERNAME = "stockai-security-test"
 PASSWORD = "local-security-test-password"
-
-
-def basic_auth(username=USERNAME, password=PASSWORD):
-    token = base64.b64encode(f"{username}:{password}".encode()).decode()
-    return {"Authorization": f"Basic {token}"}
 
 
 class FakeOpenAIServer:
@@ -79,11 +74,14 @@ class ApiSecurityTests(unittest.TestCase):
             self.port = listener.getsockname()[1]
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.process = None
+        self.logged_in = False
+        self.cookie_jar = http.cookiejar.CookieJar()
+        self.opener = build_opener(HTTPCookieProcessor(self.cookie_jar))
         self.log = (self.root / "api.log").open("w+")
         self.addCleanup(self.log.close)
         self.addCleanup(self.stop_api)
 
-    def start_api(self):
+    def start_api(self, use_configured_credentials=True):
         workdir = self.root / "work"
         workdir.mkdir()
         environment = os.environ | {
@@ -93,6 +91,9 @@ class ApiSecurityTests(unittest.TestCase):
             "APP_AUTH_USERNAME": USERNAME,
             "APP_AUTH_PASSWORD": PASSWORD,
         }
+        if not use_configured_credentials:
+            environment.pop("APP_AUTH_USERNAME", None)
+            environment.pop("APP_AUTH_PASSWORD", None)
         self.process = subprocess.Popen(
             ["dotnet", str(API_DLL)], cwd=workdir, env=environment,
             stdout=self.log, stderr=subprocess.STDOUT,
@@ -121,9 +122,12 @@ class ApiSecurityTests(unittest.TestCase):
                 self.process.wait(timeout=10)
 
     def request(self, path, body=None, authorized=True, headers=None, method=None):
+        if authorized and path != "/api/auth/login" and not self.logged_in:
+            login_status, login_body, _ = self.login()
+            if login_status != 200:
+                raise AssertionError(f"Test login failed: {login_status} {login_body!r}")
+
         request_headers = {"Content-Type": "application/json"}
-        if authorized:
-            request_headers.update(basic_auth())
         if headers:
             request_headers.update(headers)
         request = Request(
@@ -133,10 +137,19 @@ class ApiSecurityTests(unittest.TestCase):
             method=method,
         )
         try:
-            with urlopen(request, timeout=5) as response:
+            with self.opener.open(request, timeout=5) as response:
                 return response.status, response.read(), response.headers
         except HTTPError as error:
             return error.code, error.read(), error.headers
+
+    def login(self, username=USERNAME, password=PASSWORD):
+        status, body, headers = self.request(
+            "/api/auth/login",
+            {"username": username, "password": password},
+            authorized=False,
+        )
+        self.logged_in = status == 200
+        return status, body, headers
 
     def create_config(self, api_key, endpoint="http://127.0.0.1:1/v1/chat/completions"):
         status, body, _ = self.request("/api/aimodelconfig", {
@@ -155,12 +168,38 @@ class ApiSecurityTests(unittest.TestCase):
 
         status, _, headers = self.request("/api/aiprompts", authorized=False)
         self.assertEqual(status, 401)
-        self.assertIn("Basic", headers.get("WWW-Authenticate", ""))
+        self.assertFalse(headers.get("WWW-Authenticate", "").startswith("Basic"))
 
-        status, _, _ = self.request(
-            "/api/aiprompts", headers=basic_auth(password="wrong-password")
-        )
+        status, _, _ = self.login(password="wrong-password")
         self.assertEqual(status, 401)
+
+        secure_jar = http.cookiejar.CookieJar()
+        secure_opener = build_opener(HTTPCookieProcessor(secure_jar))
+        secure_request = Request(
+            self.base_url + "/api/auth/login",
+            data=json.dumps({
+                "username": USERNAME,
+                "password": PASSWORD,
+            }).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "X-Forwarded-Proto": "https",
+            },
+            method="POST",
+        )
+        with secure_opener.open(secure_request, timeout=5) as response:
+            secure_cookie = response.headers.get("Set-Cookie", "")
+        self.assertIn("secure", secure_cookie.lower())
+
+        status, body, headers = self.login()
+        self.assertEqual(status, 200, body)
+        set_cookie = headers.get("Set-Cookie", "")
+        self.assertIn("httponly", set_cookie.lower())
+        self.assertIn("samesite=strict", set_cookie.lower())
+
+        status, body, _ = self.request("/api/auth/session", authorized=False)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["authenticated"])
 
         status, _, _ = self.request("/api/aiprompts")
         self.assertEqual(status, 200)
@@ -169,28 +208,21 @@ class ApiSecurityTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["status"], "healthy")
 
-    def test_api_refuses_to_start_without_auth_configuration(self):
-        workdir = self.root / "unconfigured"
-        workdir.mkdir()
-        environment = os.environ | {
-            "ASPNETCORE_URLS": self.base_url,
-            "ASPNETCORE_ENVIRONMENT": "Production",
-            "ConnectionStrings__DefaultConnection": f"Data Source={self.database}",
-        }
-        environment.pop("APP_AUTH_USERNAME", None)
-        environment.pop("APP_AUTH_PASSWORD", None)
+        status, _, _ = self.request("/api/auth/logout", authorized=False, method="POST")
+        self.assertEqual(status, 204)
+        self.logged_in = False
+        status, _, _ = self.request("/api/aiprompts", authorized=False)
+        self.assertEqual(status, 401)
 
-        result = subprocess.run(
-            ["dotnet", str(API_DLL)],
-            cwd=workdir,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+    def test_api_uses_default_admin_credentials_without_configuration(self):
+        self.start_api(use_configured_credentials=False)
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("APP_AUTH_USERNAME", result.stdout + result.stderr)
+        status, body, _ = self.login("admin", "StockAI@2026")
+        self.assertEqual(status, 200, body)
+        self.assertTrue(json.loads(body)["authenticated"])
+
+        status, _, _ = self.request("/api/aiprompts")
+        self.assertEqual(status, 200)
 
     def test_model_config_responses_never_expose_the_api_key(self):
         self.start_api()

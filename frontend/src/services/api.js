@@ -27,6 +27,17 @@ api.interceptors.response.use(
     return response.data
   },
   error => {
+    const requestUrl = String(error.config?.url || '')
+    if (requestUrl.includes('/auth/login')) {
+      return Promise.reject(error)
+    }
+
+    if (error.response?.status === 401) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('stockai:unauthorized'))
+      }
+    }
+
     // 如果是400错误且返回的是字符串，保持原始格式以便前端解析
     if (error.response?.status === 400 && typeof error.response.data === 'string') {
       // 保持原始错误格式，让前端可以访问error.response.data

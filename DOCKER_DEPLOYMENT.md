@@ -2,7 +2,7 @@
 
 保留 Vue + ASP.NET Core + Python 的架构。当前配置供本机验收或服务器内部运行，
 默认只发布 `127.0.0.1:18081`，后端和 Python 不发布宿主机端口。
-整站已启用 Basic Auth，模型 API Key 不再返回浏览器；公网入口仍必须配置 HTTPS。
+StockAI 使用应用内账号密码登录，模型 API Key 不再返回浏览器；公网入口仍必须配置 HTTPS。
 这份指南不代表已经部署到服务器或集成个人主页。
 
 服务器由你本人操作时，可直接使用 `deploy/server/` 下的发布、部署、Nginx 和验收脚本；
@@ -17,13 +17,8 @@ GitHub Actions 的测试、审批和自动发布流程见
 - Docker Compose 2.18 或更高版本，支持 `up --wait --wait-timeout`。
 - `python-data-service/config.ini` 必须是实际文件。首次使用时从模板复制，
   TuShare Token 可留空；部分数据需要数据源权限。
-- `.env` 必须设置非空的 `APP_AUTH_USERNAME` 和 `APP_AUTH_PASSWORD`。
-
-可用下面的命令生成随机密码，再把输出写入 `.env`：
-
-```bash
-printf 'APP_AUTH_PASSWORD=%s\n' "$(openssl rand -hex 24)"
-```
+- 未配置登录凭据时使用临时默认账号 `admin` / `StockAI@2026`。
+  `APP_AUTH_USERNAME` 和 `APP_AUTH_PASSWORD` 可以覆盖默认值。
 
 在仓库根目录执行：
 
@@ -31,7 +26,6 @@ printf 'APP_AUTH_PASSWORD=%s\n' "$(openssl rand -hex 24)"
 test -f .env || cp .env.example .env
 test -f python-data-service/config.ini \
   || cp python-data-service/config.example.ini python-data-service/config.ini
-# 编辑 .env，设置至少 20 位的随机 APP_AUTH_PASSWORD
 docker compose config --quiet
 docker compose up -d --build --wait --wait-timeout 180
 docker compose ps
@@ -46,16 +40,20 @@ docker compose ps
 - 应用健康检查：`http://127.0.0.1:18081/health`
 - 业务 API：`http://127.0.0.1:18081/api/`
 
-打开前端或业务 API 时会要求输入 `.env` 中的用户名和密码。健康检查不加认证，
-只返回数据库连接状态，供容器和反向代理探活。
+打开前端会显示登录页。默认账号为 `admin`，默认密码为
+`StockAI@2026`；也可以通过 `.env` 中的 `APP_AUTH_USERNAME` 和
+`APP_AUTH_PASSWORD` 覆盖。业务 API 需要登录后的 HttpOnly 会话 Cookie。
+健康检查保持公开，只返回数据库连接状态，供容器和反向代理探活。
 
 ## 访问保护与凭据
 
-- 前端 Nginx 和后端都会校验同一组 Basic Auth 凭据，静态页面、API 和 SSE 均受保护。
-- Basic Auth 只能通过 HTTPS 暴露到公网；明文 HTTP 会传输可直接复用的凭据。
-- 外层宝塔/Nginx 必须保留 `Authorization` 和 `Host` 请求头，并设置正确的
-  `X-Forwarded-Proto`；不能缓存带认证的响应。后端用 `Host` 校验写请求的
-  `Origin`，防止跨站利用浏览器缓存的 Basic Auth 凭据。
+- 前端登录页公开，业务 API 和 SSE 由后端统一校验会话 Cookie。
+- 默认密码写在本项目源码和 `.env.example` 中，属于公开的临时访问门槛。
+  开放给更多访客前，应在服务器 `.env` 中改成非公开密码。
+- 登录请求必须通过 HTTPS 暴露到公网；明文 HTTP 会传输账号密码。
+- 外层宝塔/Nginx 必须保留 `Cookie` 和 `Host` 请求头，并设置正确的
+  `X-Forwarded-Proto`；不能缓存登录后的响应。后端用 `Host` 校验写请求的
+  `Origin`，防止跨站利用浏览器会话。
 - `/api/aimodelconfig` 只返回 `hasApiKey`，不返回密钥原文。编辑时密钥留空表示保留服务端旧值；
   “测试”按钮通过配置 ID 使用服务端密钥，不需要把密钥回传到浏览器。
 - 模型密钥仍保存在 SQLite 数据库中，数据库卷和备份都应按敏感数据处理。

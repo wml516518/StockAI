@@ -10,8 +10,8 @@ services:
       - ASPNETCORE_URLS=http://+:5000
       - ConnectionStrings__DefaultConnection=Data Source=/app/data/stockanalyse.db
       - PYTHON_DATA_SERVICE_URL=http://python-service:5001
-      - APP_AUTH_USERNAME=${APP_AUTH_USERNAME:?Set APP_AUTH_USERNAME in .env}
-      - APP_AUTH_PASSWORD=${APP_AUTH_PASSWORD:?Set APP_AUTH_PASSWORD in .env}
+      - APP_AUTH_USERNAME=${APP_AUTH_USERNAME:-admin}
+      - APP_AUTH_PASSWORD=${APP_AUTH_PASSWORD:-StockAI@2026}
       - TZ=Asia/Shanghai
     volumes:
       - stock-data:/app/data
@@ -65,8 +65,6 @@ services:
       - "${HTTP_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-18081}:80"
     environment:
       - TZ=Asia/Shanghai
-      - APP_AUTH_USERNAME=${APP_AUTH_USERNAME:?Set APP_AUTH_USERNAME in .env}
-      - APP_AUTH_PASSWORD=${APP_AUTH_PASSWORD:?Set APP_AUTH_PASSWORD in .env}
     networks:
       - stock-network
     healthcheck:

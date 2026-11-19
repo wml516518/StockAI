@@ -1,12 +1,18 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
 using Microsoft.OpenApi;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using StockAnalyse.Api.Data;
 using StockAnalyse.Api.Security;
 using StockAnalyse.Api.Services;
 using StockAnalyse.Api.Services.Interfaces;
 using StockAnalyse.Api.Services.AITools;
 using System.Text;
+using System.Threading.RateLimiting;
 
 // 注册CodePages编码提供程序，支持GBK等中文编码
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -59,6 +65,42 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(optio
     
 // 添加内存缓存服务（用于缓存选股结果）
 builder.Services.AddMemoryCache();
+
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = "StockAI.Auth";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.ExpireTimeSpan = TimeSpan.FromHours(12);
+        options.SlidingExpiration = true;
+        options.Events.OnRedirectToLogin = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
+        };
+    });
+builder.Services.AddAuthorization();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(AuthController.LoginRateLimitPolicy, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
     
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -74,12 +116,21 @@ builder.Services.AddSwaggerGen(c =>
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? "Data Source=stockanalyse.db";
 var sqliteOptions = new SqliteConnectionStringBuilder(connectionString);
+var authDataPath = builder.Configuration["APP_AUTH_DATA_PROTECTION_PATH"];
 if (sqliteOptions.Mode != SqliteOpenMode.Memory &&
     !string.IsNullOrWhiteSpace(sqliteOptions.DataSource) &&
     sqliteOptions.DataSource != ":memory:")
 {
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(sqliteOptions.DataSource))!);
+    authDataPath ??= Path.Combine(
+        Path.GetDirectoryName(Path.GetFullPath(sqliteOptions.DataSource))!,
+        "auth-keys");
 }
+var resolvedAuthDataPath =
+    authDataPath ?? Path.Combine(builder.Environment.ContentRootPath, "auth-keys");
+Directory.CreateDirectory(resolvedAuthDataPath);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(resolvedAuthDataPath));
 
 // 配置数据库
 builder.Services.AddDbContext<StockDbContext>(options =>
@@ -150,12 +201,20 @@ builder.Services.AddHttpClient("AIService", client =>
 // 默认HttpClient（用于其他服务）
 builder.Services.AddHttpClient();
 
-var authSettings = new BasicAuthSettings(
+var authSettings = new AppAuthSettings(
     builder.Configuration["APP_AUTH_USERNAME"],
     builder.Configuration["APP_AUTH_PASSWORD"]);
 builder.Services.AddSingleton(authSettings);
 
 var app = builder.Build();
+
+var forwardedHeaders = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+forwardedHeaders.KnownIPNetworks.Clear();
+forwardedHeaders.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeaders);
 
 using (var scope = app.Services.CreateScope())
 {
@@ -173,18 +232,22 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseMiddleware<BasicAuthMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseResponseCompression(); // 启用响应压缩（支持大响应）
 app.UseStaticFiles();
 app.UseRouting();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapGet("/health", async (StockDbContext context, CancellationToken cancellationToken) =>
     await context.Database.CanConnectAsync(cancellationToken)
         ? Results.Ok(new { status = "healthy" })
-        : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
-app.MapControllers();
+        : Results.StatusCode(StatusCodes.Status503ServiceUnavailable))
+    .AllowAnonymous();
+app.MapControllers().RequireAuthorization();
 
 // 默认页面重定向到index.html
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html").AllowAnonymous();
 
 // 定时任务：每分钟检查一次自选股建议价格提醒
 var timer = new System.Timers.Timer(60000); // 60秒

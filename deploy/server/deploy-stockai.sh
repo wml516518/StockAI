@@ -60,8 +60,8 @@ usage() {
   APP_DIR                   安装目录，默认 /opt/stockai
   STOCKAI_DOMAIN            域名；未设置时只启动本机服务
   LETSENCRYPT_EMAIL         配置 Let's Encrypt HTTPS 时使用
-  STOCKAI_AUTH_USERNAME     首次安装的登录用户名，默认 stockai
-  STOCKAI_AUTH_PASSWORD     首次安装密码；未设置时自动生成
+  STOCKAI_AUTH_USERNAME     首次安装的登录用户名，默认 admin
+  STOCKAI_AUTH_PASSWORD     首次安装密码，默认 StockAI@2026
   STOCKAI_RELEASE_ID        CI/CD 发布编号，例如 v1.2.0
   STOCKAI_BASE_PATH         前端子路径，默认 /；接入个人主页时用 /apps/stockai/
   NUGET_SOURCE              NuGet 源，默认官方源
@@ -174,7 +174,7 @@ if [[ -n "${STOCKAI_AUTH_USERNAME:-}" ]]; then
 elif [[ -n "$EXISTING_USERNAME" ]]; then
     AUTH_USERNAME="$EXISTING_USERNAME"
 else
-    AUTH_USERNAME="stockai"
+    AUTH_USERNAME="admin"
 fi
 [[ "$AUTH_USERNAME" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
     || die "登录用户名只能包含字母、数字、点、下划线和连字符"
@@ -184,14 +184,12 @@ if [[ -n "${STOCKAI_AUTH_PASSWORD:-}" ]]; then
     AUTH_PASSWORD="$STOCKAI_AUTH_PASSWORD"
 elif [[ -n "$EXISTING_PASSWORD" ]]; then
     AUTH_PASSWORD="$EXISTING_PASSWORD"
-elif command -v openssl >/dev/null 2>&1; then
-    AUTH_PASSWORD="$(openssl rand -hex 24)"
 else
-    AUTH_PASSWORD="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    AUTH_PASSWORD="StockAI@2026"
 fi
 if [[ -n "${STOCKAI_AUTH_PASSWORD:-}" ]]; then
-    [[ "$AUTH_PASSWORD" =~ ^[A-Za-z0-9._~!@%^*+=-]{20,128}$ ]] \
-        || die "新密码需为 20-128 位，且不能包含空格、引号、反斜杠或 #"
+    [[ "$AUTH_PASSWORD" =~ ^[A-Za-z0-9._~!@%^*+=-]{12,128}$ ]] \
+        || die "新密码需为 12-128 位，且不能包含空格、引号、反斜杠或 #"
 fi
 
 PORT="$(read_env_value HTTP_PORT "$ENV_FILE")"

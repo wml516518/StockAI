@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 from pathlib import Path
@@ -7,8 +6,9 @@ import subprocess
 import tempfile
 import time
 import unittest
+import http.cookiejar
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +31,8 @@ class ApiDeploymentTests(unittest.TestCase):
             self.port = listener.getsockname()[1]
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.process = None
+        self.cookie_jar = http.cookiejar.CookieJar()
+        self.opener = build_opener(HTTPCookieProcessor(self.cookie_jar))
         self.log = (self.root / "api.log").open("w+")
         self.addCleanup(self.log.close)
         self.addCleanup(self.stop_api)
@@ -40,6 +42,8 @@ class ApiDeploymentTests(unittest.TestCase):
         environment = os.environ | {
             "ASPNETCORE_URLS": self.base_url,
             "ASPNETCORE_ENVIRONMENT": "Production",
+            "ASPNETCORE_CONTENTROOT": str(ROOT / "src/StockAnalyse.Api"),
+            "ASPNETCORE_WEBROOT": str(ROOT / "src/StockAnalyse.Api/wwwroot"),
             "ConnectionStrings__DefaultConnection": f"Data Source={self.database}",
             "APP_AUTH_USERNAME": USERNAME,
             "APP_AUTH_PASSWORD": PASSWORD,
@@ -54,10 +58,17 @@ class ApiDeploymentTests(unittest.TestCase):
                 self.log.seek(0)
                 self.fail(f"API exited during startup:\n{self.log.read()}")
             try:
-                self.request("/api/aiprompts")
-                return
+                status, _ = self.request("/health")
+                if status == 200:
+                    status, body = self.request(
+                        "/api/auth/login",
+                        {"username": USERNAME, "password": PASSWORD},
+                    )
+                    if status == 200:
+                        return
             except (URLError, TimeoutError):
-                time.sleep(0.1)
+                pass
+            time.sleep(0.1)
         self.fail("API did not start within 30 seconds")
 
     def stop_api(self):
@@ -70,19 +81,13 @@ class ApiDeploymentTests(unittest.TestCase):
                 self.process.wait(timeout=10)
 
     def request(self, path, body=None):
-        credentials = base64.b64encode(
-            f"{USERNAME}:{PASSWORD}".encode()
-        ).decode()
         request = Request(
             self.base_url + path,
             data=json.dumps(body).encode() if body is not None else None,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Basic {credentials}",
-            },
+            headers={"Content-Type": "application/json"},
         )
         try:
-            with urlopen(request, timeout=3) as response:
+            with self.opener.open(request, timeout=3) as response:
                 return response.status, response.read()
         except HTTPError as error:
             return error.code, error.read()
@@ -92,6 +97,23 @@ class ApiDeploymentTests(unittest.TestCase):
         status, body = self.request("/health")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["status"], "healthy")
+
+    def test_anonymous_page_session_is_reported(self):
+        self.start_api(self.root / "work")
+        anonymous_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        request = Request(self.base_url + "/api/auth/session")
+        with anonymous_opener.open(request, timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            self.assertFalse(json.loads(response.read())["authenticated"])
+
+        status, body = self.request("/api/aiprompts")
+        self.assertEqual(status, 200, body)
+
+    def test_frontend_login_page_is_public(self):
+        self.start_api(self.root / "work")
+        status, body = self.request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="app"', body)
 
     def test_database_path_and_data_survive_a_new_working_directory(self):
         self.start_api(self.root / "first")

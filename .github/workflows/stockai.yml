@@ -80,7 +80,6 @@ jobs:
       - name: 部署脚本与发布包回归
         run: |
           cp .env.example .env
-          sed -i 's/^APP_AUTH_PASSWORD=$/APP_AUTH_PASSWORD=ci-placeholder-password-123456/' .env
           cp python-data-service/config.example.ini python-data-service/config.ini
           docker compose config --quiet
           python3 tests/test_server_deployment.py
@@ -99,7 +98,6 @@ jobs:
       - name: 构建三个服务镜像
         run: |
           cp .env.example .env
-          sed -i 's/^APP_AUTH_PASSWORD=$/APP_AUTH_PASSWORD=ci-placeholder-password-123456/' .env
           cp python-data-service/config.example.ini python-data-service/config.ini
           docker compose build
 

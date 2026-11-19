@@ -233,22 +233,26 @@ sudo docker compose logs --tail=100 python-service
 不代表 Token 格式错误。其他行情与行业数据路径仍可使用 AKShare/EastMoney，
 不要只凭 `stock_basic` 失败就认定 TuShare Token 不可用。
 
-**Basic Auth 不是应用级“记住我”**
+**登录会话与代理头**
 
-默认用户名为 `stockai`，用户名和密码保存在服务器的 `/opt/stockai/.env`：
+当前临时默认账号为 `admin` / `StockAI@2026`。首次部署和未配置环境变量时
+使用这组值；已有 `/opt/stockai/.env` 或显式环境变量仍优先：
 
 ```bash
 sudo grep -E '^APP_AUTH_(USERNAME|PASSWORD)=' /opt/stockai/.env
 ```
 
-浏览器可能按站点缓存 Basic Auth 凭据，但关闭浏览器、使用无痕模式或清理站点
-数据后通常需要重新输入。建议把凭据保存到浏览器密码管理器，不要依赖浏览器
-会话，也不要把用户名和密码写进 URL。公网访问必须使用 HTTPS。
+登录页通过后端签发的 HttpOnly 会话 Cookie 保持登录状态。外层 Nginx 必须
+转发 `Cookie` 和 `X-Forwarded-Proto`，否则登录成功后 API 仍会返回 401，
+或在 HTTPS 下生成不正确的 Cookie。会话签名密钥保存在数据卷的 `auth-keys`
+目录，后端容器重建后仍可继续使用现有会话。公网访问必须使用 HTTPS。
 
 ## 8. 安全
 
-- StockAI 前端使用 Basic Auth；公网必须走 HTTPS，禁止把
-  `127.0.0.1:18081` 直接暴露到公网。
+- StockAI 前端登录页公开，业务 API 使用会话 Cookie；公网必须走 HTTPS，
+  禁止把 `127.0.0.1:18081` 直接暴露到公网。
+- `admin` / `StockAI@2026` 写在公开仓库中，只能作为当前阶段的基础访问门槛。
+  网站受众扩大前，应修改服务器 `.env` 中的凭据并重新启动后端。
 - 部署日志和聊天记录中不要输出 `APP_AUTH_PASSWORD`、TuShare Token、
   SSH 私钥等敏感信息。
 - 不要把 SSH 私钥存到 GitHub Variables；Variables 是明文可读的，必须使用
@@ -275,9 +279,11 @@ sudo APP_DIR=/opt/stockai BASE_URL=http://127.0.0.1:18081 \
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://wml.ailoong.net.cn/apps/stockai/
 curl -fsS https://wml.ailoong.net.cn/apps/stockai/health
-curl -s https://wml.ailoong.net.cn/apps/stockai/api/aiprompts \
-  -u "$APP_AUTH_USERNAME:$APP_AUTH_PASSWORD"
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://wml.ailoong.net.cn/apps/stockai/api/aiprompts
 ```
 
-未认证访问 `/apps/stockai/` 返回 401 是预期行为；`/apps/stockai/health`
-应返回 `{"status":"healthy"}`。
+未登录访问 `/apps/stockai/` 返回 200 并显示登录页；未登录访问业务 API
+返回 401。`/apps/stockai/health` 应返回 `{"status":"healthy"}`。完整登录、
+SSE 和退出检查使用 `deploy/server/verify-stockai.sh`，避免在命令行或聊天中
+输出密码。
